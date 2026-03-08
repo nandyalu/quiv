@@ -34,7 +34,7 @@ site_url = "https://nandyalu.github.io/quiv"
 #
 # Read more: https://zensical.org/docs/setup/basics/#copyright
 copyright = """
-Copyright &copy; 2026 The authors
+Copyright &copy; 2026 nandyalu
 """
 
 # Zensical supports both implicit navigation and explicitly defined navigation.
