@@ -1,0 +1,17 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hexagon shell with bottom-right cutout for arrows -->
+  <polygon points="
+      256,10 56,141 56,373 256,502 355,441 311,407 283,426 
+      232,425 108,345 108,168 256,72 407,169 407,336 450,375 
+      457,368 457,139 256,10
+    " fill="#097c81"/>
+  <!-- center arrow -->
+  <polygon points="283,426 283,237 330,255 256,135 184,254 232,239 232,425" fill="#097c81"/>
+  <!-- center inner arrow -->
+  <polygon points="257,163 257,371 270,220 298,229" fill="#06bbfa"/>
+  <g fill="#06bbfa">
+    <polygon points="300,355 300,378 427,469"/>
+    <polygon points="300,312 300,337 488,476"/>
+    <polygon points="300,269 300,296 473,421"/>
+  </g>
+</svg>

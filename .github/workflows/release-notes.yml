@@ -1,0 +1,63 @@
+name: Update Release Notes
+
+on:
+  release:
+    types: [published, edited, deleted]
+
+permissions:
+  contents: write
+
+jobs:
+  update-release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Generate release notes from GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "# Release Notes" > docs/release-notes.md
+          echo "" >> docs/release-notes.md
+
+          gh release list --limit 100 --json tagName,publishedAt,name --jq '.[].tagName' | while read -r tag; do
+            # Get release details
+            release_json=$(gh release view "$tag" --json tagName,name,body,publishedAt)
+            tag_name=$(echo "$release_json" | jq -r '.tagName')
+            name=$(echo "$release_json" | jq -r '.name')
+            body=$(echo "$release_json" | jq -r '.body')
+            date=$(echo "$release_json" | jq -r '.publishedAt' | cut -d'T' -f1)
+
+            # Use tag as heading if name is empty or same as tag
+            if [ "$name" = "$tag_name" ] || [ -z "$name" ]; then
+              echo "## \`$tag_name\` - $date" >> docs/release-notes.md
+            else
+              echo "## \`$tag_name\` — $name - $date" >> docs/release-notes.md
+            fi
+
+            echo "" >> docs/release-notes.md
+
+            if [ -n "$body" ] && [ "$body" != "null" ]; then
+              echo "$body" >> docs/release-notes.md
+            else
+              echo "No release notes provided." >> docs/release-notes.md
+            fi
+
+            echo "" >> docs/release-notes.md
+            echo "---" >> docs/release-notes.md
+            echo "" >> docs/release-notes.md
+          done
+
+          # Remove trailing separator
+          sed -i '$ { /^$/d }' docs/release-notes.md
+          sed -i '$ { /^---$/d }' docs/release-notes.md
+          sed -i '$ { /^$/d }' docs/release-notes.md
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/release-notes.md
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "docs: update release notes from GitHub releases"
+          git push

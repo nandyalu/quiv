@@ -119,9 +119,17 @@ class QuivBase(ABC):
         self._db_path = os.path.join(temp_dir, db_name)
         self._engine = create_engine(
             f"sqlite:///{self._db_path}",
-            connect_args={"check_same_thread": False},
+            connect_args={"check_same_thread": False, "timeout": 10},
             pool_pre_ping=True,
         )
+
+        from sqlalchemy import event
+
+        @event.listens_for(self._engine, "connect")
+        def _set_sqlite_wal(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
 
         try:
             quiv_registry.metadata.create_all(self._engine)
@@ -219,6 +227,12 @@ class QuivBase(ABC):
             raise HandlerRegistrationError("task name must not be empty")
         if not callable(func):
             raise HandlerRegistrationError("func must be callable")
+        # if name in self.registry:
+        #     if self.registry[name] is not None and self.registry[name] != func:
+        #         raise HandlerRegistrationError(
+        #             f"Handler name '{name}' is already registered with "
+        #             "a different function."
+        #         )
         self.registry[name] = func
 
     def register_progress_callback(
@@ -242,6 +256,15 @@ class QuivBase(ABC):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
             )
+        # if name in self.progress_callbacks:
+        #     if (
+        #         self.progress_callbacks[name] is not None
+        #         and self.progress_callbacks[name] != callback
+        #     ):
+        #         raise HandlerRegistrationError(
+        #             f"Progress callback for task '{name}' is already"
+        #             " registered with a different function."
+        #         )
         self.progress_callbacks[name] = callback
 
     def run_progress_callback(
@@ -352,14 +375,15 @@ class QuivBase(ABC):
 
         self.persistence.pause_task(task_id)
 
-    def resume_task(self, task_id: str) -> None:
+    def resume_task(self, task_id: str, delay: int=0) -> None:
         """Resume a paused task by id.
 
         Args:
             task_id (str): Task identifier.
+            delay (int, Optional=0): Seconds to delay before next run.
         """
 
-        self.persistence.resume_task(task_id)
+        self.persistence.resume_task(task_id, delay=delay)
 
     def cancel_job(self, job_id: int) -> bool:
         """Signal cancellation for a running job.

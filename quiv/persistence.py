@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -33,6 +34,7 @@ class PersistenceLayer:
 
         self._engine = engine
         self._now_utc = now_utc
+        self._lock = threading.Lock()
 
     def upsert_task(
         self,
@@ -57,7 +59,7 @@ class PersistenceLayer:
                 else ``None``.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             task = Task(
                 task_name=task_name,
                 interval_seconds=interval,
@@ -85,7 +87,7 @@ class PersistenceLayer:
         statement = select(Task)
         if not include_run_once:
             statement = statement.where(Task.run_once == False)
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks
 
@@ -99,7 +101,7 @@ class PersistenceLayer:
             list[Job]: A list of job records.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             statement = select(Job)
             if status:
                 statement = statement.where(Job.status == status)
@@ -118,7 +120,7 @@ class PersistenceLayer:
             TaskNotScheduledError: If no scheduled task exists for the name.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             tasks = session.exec(
                 select(Task).where(Task.task_name == task_name)
             ).all()
@@ -144,29 +146,30 @@ class PersistenceLayer:
             TaskNotFoundError: If task does not exist.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             task = session.get(Task, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.PAUSED
             session.commit()
 
-    def resume_task(self, task_id: str) -> None:
+    def resume_task(self, task_id: str, delay: int = 0) -> None:
         """Resume a paused task and schedule it to run immediately.
 
         Args:
             task_id (str): Task identifier.
+            delay (int, Optional=0): Seconds to delay before next run.
 
         Raises:
             TaskNotFoundError: If task does not exist.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             task = session.get(Task, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.ACTIVE
-            task.next_run_at = self._now_utc()
+            task.next_run_at = self._now_utc() + timedelta(seconds=delay)
             session.commit()
 
     def cleanup_history(
@@ -180,7 +183,7 @@ class PersistenceLayer:
         """
 
         cutoff = self._now_utc().timestamp() - history_limit_seconds
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             for job in all_jobs:
                 if job.ended_at and job.ended_at.timestamp() < cutoff:
                     existing = session.get(Job, job.id)
@@ -198,7 +201,7 @@ class PersistenceLayer:
             list[Task]: A list of active due tasks.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             statement = select(Task).where(Task.next_run_at <= now)
             statement = statement.where(Task.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
@@ -216,7 +219,7 @@ class PersistenceLayer:
             JobNotFoundError: If a job id could not be assigned.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             job = Job(task_id=task_id, status=JobStatus.SCHEDULED)
             session.add(job)
             session.commit()
@@ -239,7 +242,7 @@ class PersistenceLayer:
             TaskNotFoundError: If task does not exist.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             existing = session.get(Task, task_id)
             if existing is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -265,7 +268,7 @@ class PersistenceLayer:
             JobNotFoundError: If job does not exist.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
                 raise JobNotFoundError(f"Job '{job_id}' should exist")
@@ -284,7 +287,7 @@ class PersistenceLayer:
             JobNotFoundError: If job does not exist.
         """
 
-        with Session(self._engine) as session:
+        with self._lock, Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
                 raise JobNotFoundError(f"Job '{job_id}' should exist")
