@@ -1,0 +1,24 @@
+name: Build
+
+on:
+  push:
+    paths:
+      - "quiv/**"
+      - "tests/**"
+  pull_request:
+    paths:
+      - "quiv/**"
+      - "tests/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build package
+        run: uv build
