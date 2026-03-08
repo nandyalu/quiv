@@ -9,6 +9,7 @@ on:
     paths:
       - "quiv/**"
       - "tests/**"
+  workflow_dispatch:
 
 jobs:
   test:

@@ -4,6 +4,10 @@ on:
     branches:
       - master
       - main
+    paths:
+      - "docs/**"
+      - zensical.toml
+  workflow_dispatch:
 permissions:
   contents: read
   pages: write
