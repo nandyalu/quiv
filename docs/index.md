@@ -1,8 +1,8 @@
-<p align="center">
-  <img src="assets/quiv-logo-text-full-minified.svg" alt="quiv" width="100%">
-</p>
+# 
 
-# quiv
+![quiv Logo](https://raw.githubusercontent.com/nandyalu/quiv/main/assets/quiv-logo-text-full-minified.png)
+
+<hr>
 
 `quiv` is a lightweight background task scheduler for Python applications.
 
@@ -29,14 +29,23 @@ for example:
 - one-shot delayed jobs
 - progress-aware long-running workloads
 
+## Install
+
+```bash
+pip install quiv
+```
+
 ## Quick example
 
 ```python
-import asyncio
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 
 from quiv import Quiv
 
 scheduler = Quiv(timezone_name="UTC")
+
 
 def ping(_progress_hook=None):
     for i in range(30):
@@ -44,21 +53,32 @@ def ping(_progress_hook=None):
         if _progress_hook:
             _progress_hook(message="ping", progress=i, total=30)
 
-async def on_progress(**payload):
-    print(payload)
 
-async def main() -> None:
+async def on_progress(**payload):
+    # Replace with websocket broadcast, logging, metrics, etc.
+    print("progress", payload)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    scheduler.start()
+    yield
+    # Shutdown
+    scheduler.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/start-heartbeat")
+def start_heartbeat():
     scheduler.add_task(
         task_name="heartbeat",
         func=ping,
         interval=30,
         progress_callback=on_progress,
     )
-    scheduler.start()
-    await asyncio.sleep(35)
-    scheduler.shutdown()
-
-asyncio.run(main())
+    return {"message": "Heartbeat stated successfully!"}
 ```
 
 Async handlers work the same way:
