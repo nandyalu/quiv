@@ -110,22 +110,22 @@ Raises:
 
 Returns number of task rows queued.
 
-### `pause_task(task_id)` 
+### `pause_task(task_name)`
 
-Pause blocks future runs of the task. 
+Pause blocks future runs of the task.
 
 Raises:
 
-- `TaskNotFoundError` if task ID is missing.
+- `TaskNotFoundError` if no task with that name exists.
 
-### `resume_task(task_id, delay)`
+### `resume_task(task_name, delay)`
 
 Resume re-activates and sets next run with an optional `delay` (in seconds, default=0).
 
 
 Raises:
 
-- `TaskNotFoundError` if task ID is missing.
+- `TaskNotFoundError` if no task with that name exists.
 
 !!! info 
     
@@ -139,6 +139,30 @@ Returns `True` if the stop event was found and set, `False` otherwise.
 
 Cancellation is cooperative: the handler must check `_stop_event.is_set()` to
 actually stop.
+
+### `get_task(task_name)`
+
+Returns a single [`Task`](#task) by name.
+
+Raises:
+
+- `TaskNotFoundError` if no task with that name exists.
+
+### `get_task_by_id(task_id)`
+
+Returns a single [`Task`](#task) by its UUID string.
+
+Raises:
+
+- `TaskNotFoundError` if no task with that ID exists.
+
+### `get_job(job_id)`
+
+Returns a single [`Job`](#job) by its integer ID.
+
+Raises:
+
+- `JobNotFoundError` if no job with that ID exists.
 
 ### `get_all_tasks(include_run_once=False)`
 
@@ -154,14 +178,16 @@ Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`,
 
 ### `remove_task(task_name)`
 
-Removes a scheduled task, its registered handler, and progress callback.
+Removes a scheduled task, its registered handler, and progress callback. If the
+task has a running job, its stop event is set to signal cancellation.
 
 Raises:
 
 - `TaskNotFoundError` if no task with that name exists.
 
-Use this to replace a task: remove the existing one, then call `add_task()`
-again with new parameters.
+After removal, the same `task_name` can be re-registered immediately with
+`add_task()`. Any previously running job will finish on its own and clean up
+normally.
 
 ## Hooks and callback injection
 
@@ -280,9 +306,12 @@ workers were busy, a warning is logged with the delay.
 - `start()` — start the scheduler loop
 - `shutdown()` — stop scheduler and clean up resources
 - `run_task_immediately(task_name)` — trigger a scheduled task now
-- `pause_task(task_id)` — pause a task
-- `resume_task(task_id)` — resume a paused task
+- `pause_task(task_name)` — pause a task
+- `resume_task(task_name)` — resume a paused task
 - `cancel_job(job_id)` — signal cancellation for a running job
 - `remove_task(task_name)` — remove a task and its registrations
+- `get_task(task_name)` — get a single task by name
+- `get_task_by_id(task_id)` — get a single task by UUID
+- `get_job(job_id)` — get a single job by ID
 - `get_all_tasks(...)` — list persisted tasks
 - `get_all_jobs(...)` — list persisted jobs

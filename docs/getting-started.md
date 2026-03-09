@@ -165,8 +165,8 @@ Always call `shutdown()` when your app exits.
 
 ```python
 scheduler.run_task_immediately("demo-task")
-scheduler.pause_task(task_id)
-scheduler.resume_task(task_id)
+scheduler.pause_task("demo-task")
+scheduler.resume_task("demo-task")
 ```
 
 ## 6) Cancel a running job

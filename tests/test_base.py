@@ -14,7 +14,10 @@ from quiv.exceptions import (
     DatabaseInitializationError,
     HandlerRegistrationError,
     InvalidTimezoneError,
+    JobNotFoundError,
+    TaskNotFoundError,
 )
+from quiv.models import JobStatus
 
 
 def test_quiv_base_validates_pool_size_and_history(
@@ -187,8 +190,8 @@ def test_pause_and_resume_wrappers_hit_base_methods(
     try:
         task_id = scheduler.add_task("pause-resume", lambda: None, interval=60)
         assert task_id is not None
-        scheduler.pause_task(task_id)
-        scheduler.resume_task(task_id)
+        scheduler.pause_task("pause-resume")
+        scheduler.resume_task("pause-resume")
     finally:
         scheduler.shutdown()
 
@@ -268,5 +271,118 @@ def test_async_progress_callback_skipped_without_event_loop(
             "skipped" in r.message and "no event loop" in r.message
             for r in caplog.records
         ), "Expected a warning about skipped async callback"
+    finally:
+        scheduler.shutdown()
+
+
+def test_sync_progress_callback_error_without_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv()  # No main_loop
+
+    def bad_callback(*_args, **_kwargs) -> None:
+        raise RuntimeError("sync boom")
+
+    try:
+        scheduler._register_progress_callback("bad-sync", bad_callback)
+        with caplog.at_level("ERROR", logger="Quiv"):
+            scheduler.run_progress_callback("bad-sync", 1)
+        assert any(
+            "sync boom" in r.message for r in caplog.records
+        ), "Expected error log from failing sync callback without event loop"
+    finally:
+        scheduler.shutdown()
+
+
+def test_cancel_job_returns_true_when_stop_event_exists(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        stop_event = threading.Event()
+        scheduler.stop_events[42] = stop_event
+        assert scheduler.cancel_job(42) is True
+        assert stop_event.is_set()
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_task_returns_task_by_name(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task("lookup-task", lambda: None, interval=60)
+        task = scheduler.get_task("lookup-task")
+        assert task.task_name == "lookup-task"
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_task_raises_for_missing_name(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(TaskNotFoundError):
+            scheduler.get_task("no-such-task")
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_task_by_id_returns_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("id-lookup", lambda: None, interval=60)
+        task = scheduler.get_task_by_id(task_id)
+        assert task.task_name == "id-lookup"
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_task_by_id_raises_for_missing_id(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(TaskNotFoundError):
+            scheduler.get_task_by_id("nonexistent-uuid")
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_job_returns_job_by_id(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    finished = threading.Event()
+
+    def handler() -> None:
+        finished.set()
+
+    try:
+        scheduler.add_task(
+            "job-lookup", func=handler, interval=60, run_once=True, delay=0
+        )
+        scheduler.start()
+        assert finished.wait(timeout=3)
+        time.sleep(0.3)
+        jobs = scheduler.get_all_jobs()
+        assert len(jobs) >= 1
+        job = scheduler.get_job(jobs[0].id)
+        assert job.status == JobStatus.COMPLETED
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_job_raises_for_missing_id(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(JobNotFoundError):
+            scheduler.get_job(999999)
     finally:
         scheduler.shutdown()

@@ -6,9 +6,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .exceptions import InvalidTimezoneError
 
-TimezoneInput = str | tzinfo
-
-
 @dataclass(frozen=True)
 class QuivConfig:
     """Immutable scheduler configuration.
