@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from .base import QuivBase
 from .config import QuivConfig
-from .exceptions import ConfigurationError, HandlerNotRegisteredError
+from .exceptions import ConfigurationError
 from .models import JobStatus, Task
 
 
@@ -33,7 +33,7 @@ class Quiv(QuivBase):
             config (QuivConfig, Optional=None): Optional grouped scheduler configuration.
             pool_size (int, Optional=10): Thread-pool size when ``config`` is not provided.
             history_retention_seconds (int, Optional=86400): Job retention period when ``config`` is not provided.
-            timezone (TimezoneInput, Optional="UTC"):
+            timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
             logger (logging.Logger, Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None): Optional main event loop for progress callbacks.
@@ -58,7 +58,7 @@ class Quiv(QuivBase):
         args: list[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
-    ) -> str | None:
+    ) -> str:
         """Schedule a callable to run at a fixed interval.
 
         Args:
@@ -72,10 +72,11 @@ class Quiv(QuivBase):
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
 
         Raises:
-            ConfigurationError: If scheduling parameters are invalid.
-            HandlerNotRegisteredError: If handler registry insertion unexpectedly fails.
+            ConfigurationError: If scheduling parameters are invalid or
+                a task with the same name is already registered.
+
         Returns:
-            str | None: Task id string (UUID) if scheduling succeeded, else ``None``.
+            str: Task id string (UUID).
         """
 
         if not task_name.strip():
@@ -114,12 +115,29 @@ class Quiv(QuivBase):
     def remove_task(self, task_name: str) -> None:
         """Remove a scheduled task and its handler/callback registrations.
 
+        If the task has a running job, its stop event is set to signal
+        cancellation. The running job will finish on its own and clean
+        up via ``_run_job``'s finally block.
+
+        After removal, the same ``task_name`` can be re-registered
+        immediately with ``add_task()``.
+
         Args:
             task_name (str): Task name to remove.
 
         Raises:
             TaskNotFoundError: If no task with that name exists.
         """
+
+        # Cancel any running job for this task before deleting
+        running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
+        task_id = self.persistence.get_task_id_by_name(task_name)
+        for job in running_jobs:
+            if job.task_id == task_id and job.id in self.stop_events:
+                self.stop_events[job.id].set()
+                self._logger.info(
+                    f"Cancelled running job {job.id} for task '{task_name}'"
+                )
 
         self.persistence.delete_task(task_name)
         self.registry.pop(task_name, None)
@@ -142,10 +160,10 @@ class Quiv(QuivBase):
                     ticks_since_cleanup = 0
 
                 now = self._now_utc()
-                if self._active_job_count < self.executor._max_workers:
+                if self._active_job_count < self._pool_size:
                     due_tasks = self.persistence.get_due_tasks(now)
                     for task in due_tasks:
-                        if self._active_job_count >= self.executor._max_workers:
+                        if self._active_job_count >= self._pool_size:
                             break
                         self._dispatch_due_task(task, now)
 

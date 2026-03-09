@@ -71,6 +71,29 @@ class PersistenceLayer:
             session.commit()
             return task.id
 
+    def get_task_id_by_name(self, task_name: str) -> str:
+        """Look up a task ID by name.
+
+        Args:
+            task_name (str): Task name to look up.
+
+        Returns:
+            str: Task ID (UUID string).
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            task = session.exec(
+                select(Task).where(Task.task_name == task_name)
+            ).first()
+            if task is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_name}' was not found"
+                )
+            return task.id
+
     def delete_task(self, task_name: str) -> None:
         """Delete a task by name.
 
@@ -109,6 +132,71 @@ class PersistenceLayer:
         with self._lock, Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks
+
+    def get_task_by_name(self, task_name: str) -> Task:
+        """Fetch a single task by name.
+
+        Args:
+            task_name (str): Task name to look up.
+
+        Returns:
+            Task: The task record.
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            task = session.exec(
+                select(Task).where(Task.task_name == task_name)
+            ).first()
+            if task is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_name}' was not found"
+                )
+            return task
+
+    def get_task_by_id(self, task_id: str) -> Task:
+        """Fetch a single task by ID.
+
+        Args:
+            task_id (str): Task UUID to look up.
+
+        Returns:
+            Task: The task record.
+
+        Raises:
+            TaskNotFoundError: If no task with that ID exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            task = session.get(Task, task_id)
+            if task is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_id}' was not found"
+                )
+            return task
+
+    def get_job(self, job_id: int) -> Job:
+        """Fetch a single job by ID.
+
+        Args:
+            job_id (int): Job identifier.
+
+        Returns:
+            Job: The job record.
+
+        Raises:
+            JobNotFoundError: If no job with that ID exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise JobNotFoundError(
+                    f"Job '{job_id}' was not found"
+                )
+            return job
 
     def get_all_jobs(self, status: str | None = None) -> list[Job]:
         """Fetch job records, optionally filtered by status.

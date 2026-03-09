@@ -15,21 +15,21 @@ def run_task_now(task_name: str):
     return {"queued": count}
 
 
-@router.post("/{task_id}/pause")
-def pause_task(task_id: str):
-    """Pause a task by ID."""
+@router.post("/{task_name}/pause")
+def pause_task(task_name: str):
+    """Pause a task by name."""
     try:
-        scheduler.pause_task(task_id)
+        scheduler.pause_task(task_name)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "paused"}
 
 
-@router.post("/{task_id}/resume")
-def resume_task(task_id: str, delay: int = 0):
+@router.post("/{task_name}/resume")
+def resume_task(task_name: str, delay: int = 0):
     """Resume a paused task, optionally with a delay."""
     try:
-        scheduler.resume_task(task_id, delay=delay)
+        scheduler.resume_task(task_name, delay=delay)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "resumed"}

@@ -16,7 +16,7 @@ from typing import Any, Callable, cast
 
 from sqlmodel import Session, create_engine, select
 
-from .config import QuivConfig, TimezoneInput, resolve_timezone
+from .config import QuivConfig, resolve_timezone
 from .exceptions import (
     ConfigurationError,
     DatabaseInitializationError,
@@ -58,7 +58,7 @@ class QuivBase(ABC):
         config: QuivConfig | None = None,
         pool_size: int = 10,
         history_retention_seconds: int = 86400,
-        timezone: TimezoneInput = "UTC",
+        timezone: str | tzinfo = "UTC",
         *,
         logger: logging.Logger | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
@@ -71,7 +71,7 @@ class QuivBase(ABC):
                 Thread-pool size when ``config`` is not provided.
             history_retention_seconds (int, Optional=86400):
                 Job retention period when ``config`` is not provided.
-            timezone (TimezoneInput, Optional="UTC"):
+            timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
             logger (logging.Logger, Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None):
@@ -142,6 +142,7 @@ class QuivBase(ABC):
                 "Failed to initialize scheduler database"
             ) from e
 
+        self._pool_size = pool_size
         self.executor = ThreadPoolExecutor(max_workers=pool_size)
         self.history_limit = history_retention_seconds
         self.registry: dict[str, Callable[..., Any]] = {}
@@ -386,23 +387,31 @@ class QuivBase(ABC):
         except Exception as e:
             self._logger.warning(f"Could not cleanup database file: {e}")
 
-    def pause_task(self, task_id: str) -> None:
-        """Pause a task by id.
+    def pause_task(self, task_name: str) -> None:
+        """Pause a task by name.
 
         Args:
-            task_id (str): Task identifier.
+            task_name (str): Task name.
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
         """
 
+        task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.pause_task(task_id)
 
-    def resume_task(self, task_id: str, delay: int=0) -> None:
-        """Resume a paused task by id.
+    def resume_task(self, task_name: str, delay: int = 0) -> None:
+        """Resume a paused task by name.
 
         Args:
-            task_id (str): Task identifier.
+            task_name (str): Task name.
             delay (int, Optional=0): Seconds to delay before next run.
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
         """
 
+        task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.resume_task(task_id, delay=delay)
 
     def cancel_job(self, job_id: int) -> bool:
@@ -420,6 +429,51 @@ class QuivBase(ABC):
             self.stop_events[job_id].set()
             return True
         return False
+
+    def get_task(self, task_name: str) -> Task:
+        """Retrieve a single task by name.
+
+        Args:
+            task_name (str): Task name.
+
+        Returns:
+            Task: The task record.
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
+        """
+
+        return self.persistence.get_task_by_name(task_name)
+
+    def get_task_by_id(self, task_id: str) -> Task:
+        """Retrieve a single task by ID.
+
+        Args:
+            task_id (str): Task UUID.
+
+        Returns:
+            Task: The task record.
+
+        Raises:
+            TaskNotFoundError: If no task with that ID exists.
+        """
+
+        return self.persistence.get_task_by_id(task_id)
+
+    def get_job(self, job_id: int) -> Job:
+        """Retrieve a single job by ID.
+
+        Args:
+            job_id (int): Job identifier.
+
+        Returns:
+            Job: The job record.
+
+        Raises:
+            JobNotFoundError: If no job with that ID exists.
+        """
+
+        return self.persistence.get_job(job_id)
 
     def get_all_tasks(self, include_run_once: bool = False) -> list[Task]:
         """Retrieve persisted task records.

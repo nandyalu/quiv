@@ -323,7 +323,7 @@ def test_loop_handles_exceptions_and_retries_sleep(
     scheduler = Quiv(main_loop=running_main_loop)
     call_count = {"sleep": 0}
 
-    def fake_get_all_jobs(*_args, **_kwargs):
+    def fake_cleanup_history(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     def fake_sleep(seconds: float) -> None:
@@ -336,7 +336,7 @@ def test_loop_handles_exceptions_and_retries_sleep(
     try:
         scheduler._initialized = False
         monkeypatch.setattr(
-            scheduler.persistence, "get_all_jobs", fake_get_all_jobs
+            scheduler.persistence, "cleanup_history", fake_cleanup_history
         )
         monkeypatch.setattr("quiv.scheduler.time.sleep", fake_sleep)
         scheduler._loop()
@@ -369,7 +369,7 @@ def test_backpressure_skips_dispatch_when_pool_full(
         assert started.wait(timeout=3)
 
         # Add another task that is immediately due
-        scheduler.add_task(
+        deferred_id = scheduler.add_task(
             task_name="deferred",
             func=lambda: None,
             interval=60,
@@ -380,16 +380,10 @@ def test_backpressure_skips_dispatch_when_pool_full(
 
         # deferred task should still be pending — pool is full
         assert scheduler._active_job_count >= 1
-        jobs = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
-        deferred_completed = [
-            j for j in jobs
-            if any(
-                t.task_name == "deferred"
-                for t in scheduler.get_all_tasks(include_run_once=True)
-                if t.id == j.task_id
-            )
-        ]
-        assert len(deferred_completed) == 0
+        completed_jobs = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+        assert not any(j.task_id == deferred_id for j in completed_jobs), (
+            "Deferred task should not have completed while pool is full"
+        )
 
         # Release blocker — deferred should now run
         blocker.set()
@@ -499,6 +493,41 @@ def test_remove_task(
         with pytest.raises(TaskNotFoundError):
             scheduler.remove_task("non-existent-task")
     finally:
+        scheduler.shutdown()
+
+
+def test_remove_task_cancels_running_job(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    blocker = threading.Event()
+    started = threading.Event()
+
+    def blocking_handler(_stop_event=None) -> None:
+        started.set()
+        while not (_stop_event and _stop_event.is_set()):
+            blocker.wait(timeout=0.1)
+
+    try:
+        scheduler.add_task(
+            task_name="remove-while-running",
+            func=blocking_handler,
+            interval=60,
+            run_once=False,
+            delay=0,
+        )
+        scheduler.start()
+        assert started.wait(timeout=3)
+
+        # Task is running — remove should cancel the running job
+        scheduler.remove_task("remove-while-running")
+
+        # Wait for job to finalize after stop event is set
+        time.sleep(1)
+        jobs = scheduler.get_all_jobs(status=JobStatus.CANCELLED)
+        assert any(j.status == JobStatus.CANCELLED for j in jobs)
+    finally:
+        blocker.set()
         scheduler.shutdown()
 
 
