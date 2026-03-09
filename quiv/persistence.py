@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from sqlmodel import Session, select, col
 
@@ -23,7 +23,7 @@ class PersistenceLayer:
             Callable that returns current UTC datetime.
     """
 
-    def __init__(self, engine, now_utc: Callable[[], datetime]):
+    def __init__(self, engine: Any, now_utc: Callable[[], datetime]):
         """Initialize the persistence layer.
 
         Args:

@@ -123,7 +123,7 @@ class QuivBase(ABC):
         from sqlalchemy import event
 
         @event.listens_for(self._engine, "connect")
-        def _set_sqlite_wal(dbapi_conn, connection_record):
+        def _set_sqlite_wal(dbapi_conn: Any, connection_record: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.close()
@@ -192,8 +192,8 @@ class QuivBase(ABC):
     def run_async(
         self,
         task: Callable[..., Awaitable[Any]],
-        args: list | None = None,
-        kwargs: dict | None = None,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Run an async callable in a thread-local event loop.
 
