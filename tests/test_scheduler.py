@@ -12,7 +12,7 @@ from quiv.exceptions import (
     HandlerNotRegisteredError,
     TaskNotScheduledError,
 )
-from quiv.models import Task
+from quiv.models import JobStatus, Task
 
 
 def test_quiv_config_conflict_raises(
@@ -59,7 +59,7 @@ def test_run_task_immediately_requires_scheduled_task(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        scheduler.register_handler("demo", lambda: None)
+        scheduler._register_handler("demo", lambda: None)
         with pytest.raises(TaskNotScheduledError):
             scheduler.run_task_immediately("demo")
     finally:
@@ -82,7 +82,7 @@ def test_get_all_tasks_returns_utc_aware_next_run(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(
-        timezone_name="America/New_York", main_loop=running_main_loop
+        timezone="America/New_York", main_loop=running_main_loop
     )
     try:
         scheduler.add_task(
@@ -122,7 +122,7 @@ def test_run_once_sync_task_executes_and_creates_completed_job(
         assert finished.wait(timeout=3)
         time.sleep(0.2)
         jobs = scheduler.get_all_jobs()
-        assert any(job.status == "completed" for job in jobs)
+        assert any(job.status == JobStatus.COMPLETED for job in jobs)
     finally:
         scheduler.shutdown()
 
@@ -224,7 +224,7 @@ def test_run_once_sync_task_with_stop_event_cancels_job(
         assert finished.wait(timeout=3)
         time.sleep(0.2)
         jobs = scheduler.get_all_jobs()
-        assert any(job.status == "cancelled" for job in jobs)
+        assert any(job.status == JobStatus.CANCELLED for job in jobs)
     finally:
         scheduler.shutdown()
 
@@ -276,22 +276,19 @@ def test_failed_job_sets_failed_status(
         scheduler.start()
         time.sleep(1.5)
         jobs = scheduler.get_all_jobs()
-        assert any(job.status == "failed" for job in jobs)
+        assert any(job.status == JobStatus.FAILED for job in jobs)
     finally:
         scheduler.shutdown()
 
 
-def test_add_task_raises_when_handler_not_registered_post_registration_call(
-    monkeypatch: pytest.MonkeyPatch,
+def test_add_task_raises_on_duplicate_task_name(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        monkeypatch.setattr(
-            scheduler, "register_handler", lambda *_a, **_k: None
-        )
-        with pytest.raises(HandlerNotRegisteredError):
-            scheduler.add_task("no-reg", lambda: None, interval=1)
+        scheduler.add_task("dup", lambda: None, interval=60)
+        with pytest.raises(ConfigurationError):
+            scheduler.add_task("dup", lambda: None, interval=60)
     finally:
         scheduler.shutdown()
 
@@ -346,4 +343,205 @@ def test_loop_handles_exceptions_and_retries_sleep(
         assert call_count["sleep"] >= 3
     finally:
         monkeypatch.undo()
+        scheduler.shutdown()
+
+
+def test_backpressure_skips_dispatch_when_pool_full(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(pool_size=1, main_loop=running_main_loop)
+    blocker = threading.Event()
+    started = threading.Event()
+
+    def blocking_handler() -> None:
+        started.set()
+        blocker.wait(timeout=5)
+
+    try:
+        # Fill the single-worker pool
+        scheduler.add_task(
+            task_name="blocker",
+            func=blocking_handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert started.wait(timeout=3)
+
+        # Add another task that is immediately due
+        scheduler.add_task(
+            task_name="deferred",
+            func=lambda: None,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.run_task_immediately("deferred")
+        time.sleep(1.5)
+
+        # deferred task should still be pending — pool is full
+        assert scheduler._active_job_count >= 1
+        jobs = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+        deferred_completed = [
+            j for j in jobs
+            if any(
+                t.task_name == "deferred"
+                for t in scheduler.get_all_tasks(include_run_once=True)
+                if t.id == j.task_id
+            )
+        ]
+        assert len(deferred_completed) == 0
+
+        # Release blocker — deferred should now run
+        blocker.set()
+        time.sleep(2)
+        assert scheduler._active_job_count == 0
+    finally:
+        blocker.set()
+        scheduler.shutdown()
+
+
+def test_late_start_warning_logged_when_pool_busy(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv(pool_size=1, main_loop=running_main_loop)
+
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        scheduler.add_task(
+            task_name="late-task",
+            func=lambda: None,
+            interval=60,
+            run_once=True,
+        )
+        task = scheduler.get_all_tasks(include_run_once=True)[0]
+        scheduled_at = scheduler._now_utc() - timedelta(seconds=5)
+
+        with caplog.at_level("WARNING", logger="Quiv"):
+            scheduler._run_job(
+                job_id=scheduler.persistence.create_job(task.id),
+                task_id=task.id,
+                task_name="late-task",
+                run_once=True,
+                scheduled_at=scheduled_at,
+                func=lambda: None,
+                args=[],
+                kwargs={},
+            )
+
+        assert any("threadpool was busy" in r.message for r in caplog.records)
+    finally:
+        scheduler.shutdown()
+
+
+def test_active_job_count_decrements_after_completion(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    finished = threading.Event()
+
+    def handler() -> None:
+        finished.set()
+
+    try:
+        scheduler.add_task(
+            task_name="count-check",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert finished.wait(timeout=3)
+        time.sleep(0.5)
+        assert scheduler._active_job_count == 0
+    finally:
+        scheduler.shutdown()
+
+
+def test_remove_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.exceptions import TaskNotFoundError
+
+    scheduler = Quiv(main_loop=running_main_loop)
+
+    def my_handler() -> None:
+        pass
+
+    def my_progress(step: int) -> None:
+        pass
+
+    try:
+        scheduler.add_task(
+            task_name="removable",
+            func=my_handler,
+            interval=60,
+            progress_callback=my_progress,
+        )
+
+        # Verify the task, handler, and callback are present
+        tasks = scheduler.get_all_tasks(include_run_once=True)
+        assert any(t.task_name == "removable" for t in tasks)
+        assert "removable" in scheduler.registry
+        assert "removable" in scheduler.progress_callbacks
+
+        # Remove the task
+        scheduler.remove_task("removable")
+
+        # Verify the task, handler, and callback are gone
+        tasks = scheduler.get_all_tasks(include_run_once=True)
+        assert all(t.task_name != "removable" for t in tasks)
+        assert "removable" not in scheduler.registry
+        assert "removable" not in scheduler.progress_callbacks
+
+        # Removing a non-existent task should raise TaskNotFoundError
+        with pytest.raises(TaskNotFoundError):
+            scheduler.remove_task("non-existent-task")
+    finally:
+        scheduler.shutdown()
+
+
+def test_concurrent_runs_prevented(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(pool_size=2, main_loop=running_main_loop)
+    enter_count = 0
+    max_concurrent = 0
+    current_concurrent = 0
+    lock = threading.Lock()
+    blocker = threading.Event()
+
+    def slow_handler() -> None:
+        nonlocal enter_count, max_concurrent, current_concurrent
+        with lock:
+            enter_count += 1
+            current_concurrent += 1
+            if current_concurrent > max_concurrent:
+                max_concurrent = current_concurrent
+        blocker.wait(timeout=4)
+        with lock:
+            current_concurrent -= 1
+
+    try:
+        scheduler.add_task(
+            task_name="slow-task",
+            func=slow_handler,
+            interval=2,
+            delay=0,
+            run_once=False,
+        )
+        scheduler.start()
+        # Wait long enough for the task to potentially be dispatched
+        # multiple times if concurrent runs were allowed
+        time.sleep(6)
+        blocker.set()
+        time.sleep(1)
+
+        with lock:
+            assert max_concurrent == 1, (
+                f"Expected max concurrent to be 1, got {max_concurrent}"
+            )
+    finally:
+        blocker.set()
         scheduler.shutdown()

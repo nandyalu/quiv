@@ -31,9 +31,17 @@ for example:
 
 ## Install
 
-```bash
-pip install quiv
-```
+=== "uv"
+
+    ```bash
+    uv add quiv
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install quiv
+    ```
 
 ## Quick example
 
@@ -44,7 +52,7 @@ from fastapi import FastAPI
 
 from quiv import Quiv
 
-scheduler = Quiv(timezone_name="UTC")
+scheduler = Quiv(timezone="UTC")
 
 
 def ping(_progress_hook=None):
@@ -78,7 +86,7 @@ def start_heartbeat():
         interval=30,
         progress_callback=on_progress,
     )
-    return {"message": "Heartbeat stated successfully!"}
+    return {"message": "Heartbeat started successfully!"}
 ```
 
 Async handlers work the same way:
@@ -101,7 +109,7 @@ For a full FastAPI integration example (startup/shutdown lifecycle plus
 
 - **Task**: scheduling definition (`interval`, `run_once`, args/kwargs, status)
 - **Job**: one execution record of a task
-- **Task statuses**: `active`, `paused`
+- **Task statuses**: `active`, `running`, `paused`
 - **Job statuses**: `scheduled`, `running`, `completed`, `cancelled`, `failed`
 
 ## Why quiv?

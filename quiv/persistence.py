@@ -4,7 +4,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, col
 
 from .exceptions import (
     JobNotFoundError,
@@ -36,7 +36,7 @@ class PersistenceLayer:
         self._now_utc = now_utc
         self._lock = threading.Lock()
 
-    def upsert_task(
+    def create_task(
         self,
         task_name: str,
         interval: float,
@@ -44,8 +44,8 @@ class PersistenceLayer:
         next_run_at: datetime,
         args_json: str,
         kwargs_json: str,
-    ) -> str | None:
-        """Insert or update a scheduled task.
+    ) -> str:
+        """Insert a new scheduled task.
 
         Args:
             task_name (str): Unique task name.
@@ -55,8 +55,7 @@ class PersistenceLayer:
             args_json (str): JSON-encoded positional args.
             kwargs_json (str): JSON-encoded keyword args.
         Returns:
-            str: Task id string (UUID) if created/updated successfully,
-                else ``None``.
+            str: Task id string (UUID).
         """
 
         with self._lock, Session(self._engine) as session:
@@ -68,10 +67,30 @@ class PersistenceLayer:
                 args=args_json,
                 kwargs=kwargs_json,
             )
-            session.merge(task)
+            session.add(task)
             session.commit()
             return task.id
-        return None  # pragma: no cover
+
+    def delete_task(self, task_name: str) -> None:
+        """Delete a task by name.
+
+        Args:
+            task_name (str): Task name to delete.
+
+        Raises:
+            TaskNotFoundError: If no task with that name exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            task = session.exec(
+                select(Task).where(Task.task_name == task_name)
+            ).first()
+            if task is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_name}' was not found"
+                )
+            session.delete(task)
+            session.commit()
 
     def get_all_tasks(self, include_run_once: bool = False) -> list[Task]:
         """Fetch all persisted tasks.
@@ -172,23 +191,24 @@ class PersistenceLayer:
             task.next_run_at = self._now_utc() + timedelta(seconds=delay)
             session.commit()
 
-    def cleanup_history(
-        self, history_limit_seconds: int, all_jobs: list[Job]
-    ) -> None:
+    def cleanup_history(self, history_limit_seconds: int) -> None:
         """Delete old finished jobs based on retention configuration.
 
         Args:
             history_limit_seconds (int): Retention window in seconds.
-            all_jobs (list[Job]): Candidate jobs to evaluate for deletion.
         """
 
-        cutoff = self._now_utc().timestamp() - history_limit_seconds
+        cutoff = self._now_utc() - timedelta(seconds=history_limit_seconds)
+        terminal = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
         with self._lock, Session(self._engine) as session:
-            for job in all_jobs:
-                if job.ended_at and job.ended_at.timestamp() < cutoff:
-                    existing = session.get(Job, job.id)
-                    if existing is not None:
-                        session.delete(existing)
+            statement = (
+                select(Job)
+                .where(col(Job.ended_at).is_not(None))
+                .where(col(Job.ended_at) < cutoff)
+                .where(col(Job.status).in_(terminal))
+            )
+            for job in session.exec(statement).all():
+                session.delete(job)
             session.commit()
 
     def get_due_tasks(self, now: datetime) -> list[Task]:
@@ -229,14 +249,11 @@ class PersistenceLayer:
                 )  # pragma: no cover
             return job.id
 
-    def finalize_task_after_schedule(
-        self, task_id: str, now: datetime
-    ) -> None:
-        """Update task scheduling state after dispatch.
+    def mark_task_running(self, task_id: str) -> None:
+        """Mark a task as running when dispatched to the executor.
 
         Args:
             task_id (str): Task identifier.
-            now (datetime): Current UTC timestamp.
 
         Raises:
             TaskNotFoundError: If task does not exist.
@@ -246,14 +263,28 @@ class PersistenceLayer:
             existing = session.get(Task, task_id)
             if existing is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            existing.status = TaskStatus.RUNNING
+            session.commit()
+
+    def finalize_task_after_job(self, task_id: str) -> None:
+        """Update task state after job completion.
+
+        For run-once tasks, deletes the task row. For recurring tasks,
+        sets status back to active and schedules the next run.
+
+        Args:
+            task_id (str): Task identifier.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            existing = session.get(Task, task_id)
+            if existing is None:
+                return  # run-once task already deleted, or task was removed
             if existing.run_once:
-                existing.status = TaskStatus.PAUSED
-                existing.next_run_at = datetime.max.replace(
-                    tzinfo=timezone.utc
-                )
                 session.delete(existing)
             else:
-                existing.next_run_at = now + timedelta(
+                existing.status = TaskStatus.ACTIVE
+                existing.next_run_at = self._now_utc() + timedelta(
                     seconds=existing.interval_seconds
                 )
             session.commit()

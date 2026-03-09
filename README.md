@@ -32,6 +32,8 @@ for example:
 ## Install
 
 ```bash
+uv add quiv
+# or
 pip install quiv
 ```
 
@@ -44,7 +46,7 @@ from fastapi import FastAPI
 
 from quiv import Quiv
 
-scheduler = Quiv(timezone_name="UTC")
+scheduler = Quiv(timezone="UTC")
 
 
 def ping(_progress_hook=None):
@@ -78,7 +80,7 @@ def start_heartbeat():
         interval=30,
         progress_callback=on_progress,
     )
-    return {"message": "Heartbeat stated successfully!"}
+    return {"message": "Heartbeat started successfully!"}
 ```
 
 ## Documentation
@@ -87,8 +89,11 @@ Full documentation is available at
 **[nandyalu.github.io/quiv](https://nandyalu.github.io/quiv/)**.
 
 - [Getting Started](https://nandyalu.github.io/quiv/getting-started/)
+- [Bigger Applications](https://nandyalu.github.io/quiv/bigger-applications/)
 - [API Reference](https://nandyalu.github.io/quiv/api/)
 - [Architecture](https://nandyalu.github.io/quiv/architecture/)
+- [Progress Callbacks](https://nandyalu.github.io/quiv/progress-callbacks/)
+- [Cancellation](https://nandyalu.github.io/quiv/cancellation/)
 - [Exceptions](https://nandyalu.github.io/quiv/exceptions/)
 
 ## License

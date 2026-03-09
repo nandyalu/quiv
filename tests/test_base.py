@@ -32,9 +32,9 @@ def test_register_handler_validation(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(HandlerRegistrationError):
-            scheduler.register_handler("", lambda: None)
+            scheduler._register_handler("", lambda: None)
         with pytest.raises(HandlerRegistrationError):
-            scheduler.register_handler("x", None)  # type: ignore[arg-type]
+            scheduler._register_handler("x", None)  # type: ignore[arg-type]
     finally:
         scheduler.shutdown()
 
@@ -49,18 +49,18 @@ def test_register_progress_callback_validation_and_clear(
         called.set()
 
     try:
-        scheduler.register_progress_callback("a", callback)
+        scheduler._register_progress_callback("a", callback)
         scheduler.run_progress_callback("a")
         assert called.wait(timeout=2)
 
-        scheduler.register_progress_callback("a", None)
+        scheduler._register_progress_callback("a", None)
         called.clear()
         scheduler.run_progress_callback("a")
         time.sleep(0.1)
         assert not called.is_set()
 
         with pytest.raises(HandlerRegistrationError):
-            scheduler.register_progress_callback("a", "not-callable")  # type: ignore[arg-type]
+            scheduler._register_progress_callback("a", "not-callable")  # type: ignore[arg-type]
     finally:
         scheduler.shutdown()
 
@@ -71,7 +71,7 @@ def test_run_progress_callback_with_closed_main_loop_is_safe() -> None:
 
     scheduler = Quiv(main_loop=closed_loop)
     try:
-        scheduler.register_progress_callback("t", lambda *_a, **_k: None)
+        scheduler._register_progress_callback("t", lambda *_a, **_k: None)
         scheduler.run_progress_callback("t", 1)
     finally:
         scheduler.shutdown()
@@ -95,11 +95,11 @@ def test_run_progress_callback_handles_async_and_sync_returning_coroutine(
         return sync_result_coroutine()
 
     try:
-        scheduler.register_progress_callback("async-task", async_progress)
+        scheduler._register_progress_callback("async-task", async_progress)
         scheduler.run_progress_callback("async-task", 1)
         assert async_done.wait(timeout=2)
 
-        scheduler.register_progress_callback("sync-task", sync_progress)
+        scheduler._register_progress_callback("sync-task", sync_progress)
         scheduler.run_progress_callback("sync-task", 2)
         assert sync_done.wait(timeout=2)
     finally:
@@ -140,18 +140,12 @@ def test_quiv_init_uses_config_without_conflict(
         scheduler.shutdown()
 
 
-def test_quiv_init_uses_default_main_loop_when_not_provided() -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def test_quiv_init_defers_main_loop_resolution() -> None:
+    scheduler = Quiv()
     try:
-        scheduler = Quiv()
-        try:
-            assert scheduler._main_loop is loop
-        finally:
-            scheduler.shutdown()
+        assert scheduler._main_loop is None
     finally:
-        asyncio.set_event_loop(None)
-        loop.close()
+        scheduler.shutdown()
 
 
 def test_run_progress_callback_logs_when_callback_fails(
@@ -163,7 +157,7 @@ def test_run_progress_callback_logs_when_callback_fails(
         raise RuntimeError("sync callback failed")
 
     try:
-        scheduler.register_progress_callback("bad", bad_callback)
+        scheduler._register_progress_callback("bad", bad_callback)
         scheduler.run_progress_callback("bad", 1)
         time.sleep(0.2)
     finally:
@@ -179,7 +173,7 @@ def test_run_progress_callback_logs_when_async_callback_fails(
         raise RuntimeError("async callback failed")
 
     try:
-        scheduler.register_progress_callback("bad-async", bad_async_callback)
+        scheduler._register_progress_callback("bad-async", bad_async_callback)
         scheduler.run_progress_callback("bad-async", 1)
         time.sleep(0.2)
     finally:
@@ -230,3 +224,49 @@ def test_database_initialization_error_raised(
     )
     with pytest.raises(DatabaseInitializationError):
         Quiv(main_loop=running_main_loop)
+
+
+def test_sync_progress_callback_without_event_loop() -> None:
+    scheduler = Quiv()  # No main_loop
+    called = threading.Event()
+
+    def sync_callback(*args, **kwargs) -> None:
+        called.set()
+
+    try:
+        scheduler._register_progress_callback("sync-no-loop", sync_callback)
+        scheduler.run_progress_callback("sync-no-loop", 1)
+        assert called.wait(timeout=2), (
+            "Sync progress callback should have been called directly"
+            " when no event loop is available"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_async_progress_callback_skipped_without_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv()  # No main_loop
+    called = threading.Event()
+
+    async def async_callback(*args, **kwargs) -> None:
+        called.set()
+
+    try:
+        scheduler._register_progress_callback(
+            "async-no-loop", async_callback
+        )
+        with caplog.at_level("WARNING", logger="Quiv"):
+            scheduler.run_progress_callback("async-no-loop", 1)
+        time.sleep(0.2)
+        assert not called.is_set(), (
+            "Async progress callback should NOT have been called"
+            " when no event loop is available"
+        )
+        assert any(
+            "skipped" in r.message and "no event loop" in r.message
+            for r in caplog.records
+        ), "Expected a warning about skipped async callback"
+    finally:
+        scheduler.shutdown()

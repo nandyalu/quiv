@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - "quiv/**"
+      - "pyproject.toml"
   pull_request:
     paths:
       - "quiv/**"
+      - "pyproject.toml"
   workflow_dispatch:
 
 jobs:

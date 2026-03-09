@@ -39,15 +39,13 @@ def test_pause_and_resume_missing_task_raise(
         scheduler.shutdown()
 
 
-def test_finalize_task_after_schedule_missing_task_raises(
+def test_mark_task_running_missing_task_raises(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(TaskNotFoundError):
-            scheduler.persistence.finalize_task_after_schedule(
-                "missing", scheduler._now_utc()
-            )
+            scheduler.persistence.mark_task_running("missing")
     finally:
         scheduler.shutdown()
 
@@ -65,7 +63,7 @@ def test_mark_and_finalize_missing_job_raise(
         scheduler.shutdown()
 
 
-def test_finalize_task_after_schedule_run_once_removes_task(
+def test_finalize_task_after_job_run_once_removes_task(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
@@ -77,9 +75,7 @@ def test_finalize_task_after_schedule_run_once_removes_task(
             run_once=True,
         )
         assert task_id is not None
-        scheduler.persistence.finalize_task_after_schedule(
-            task_id, scheduler._now_utc()
-        )
+        scheduler.persistence.finalize_task_after_job(task_id)
         tasks = scheduler.get_all_tasks(include_run_once=True)
         assert all(task.id != task_id for task in tasks)
     finally:
@@ -110,8 +106,7 @@ def test_cleanup_history_deletes_old_finished_jobs(
             old_job.ended_at = scheduler._now_utc() - timedelta(days=2)
             session.commit()
 
-        all_jobs = scheduler.persistence.get_all_jobs()
-        scheduler.persistence.cleanup_history(60, all_jobs)
+        scheduler.persistence.cleanup_history(60)
         remaining = scheduler.persistence.get_all_jobs()
         remaining_ids = {job.id for job in remaining}
         assert old_job_id not in remaining_ids
@@ -208,7 +203,7 @@ def test_pause_resume_and_due_task_filtering_success_paths(
         scheduler.shutdown()
 
 
-def test_finalize_task_after_schedule_updates_recurring_next_run(
+def test_finalize_task_after_job_updates_recurring_next_run(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
@@ -222,7 +217,7 @@ def test_finalize_task_after_schedule_updates_recurring_next_run(
         )
         assert task_id is not None
         now = scheduler._now_utc()
-        scheduler.persistence.finalize_task_after_schedule(task_id, now)
+        scheduler.persistence.finalize_task_after_job(task_id)
         tasks = scheduler.get_all_tasks(include_run_once=True)
         task = next(item for item in tasks if item.id == task_id)
         task_next = (
@@ -232,5 +227,65 @@ def test_finalize_task_after_schedule_updates_recurring_next_run(
         )
         now_naive = now.replace(tzinfo=None)
         assert task_next >= now_naive
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_task_after_job_sets_active_and_schedules_from_completion(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import TaskStatus
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        interval = 60
+        task_id = scheduler.add_task(
+            task_name="recurring-completion-schedule",
+            func=lambda: None,
+            interval=interval,
+            run_once=False,
+            delay=0,
+        )
+        assert task_id is not None
+
+        # Set the task to RUNNING (simulating dispatch)
+        scheduler.persistence.mark_task_running(task_id)
+        task_before = next(
+            t for t in scheduler.get_all_tasks(include_run_once=True)
+            if t.id == task_id
+        )
+        assert task_before.status == TaskStatus.RUNNING
+
+        # Finalize the task after job completion
+        now_before = scheduler._now_utc()
+        scheduler.persistence.finalize_task_after_job(task_id)
+        now_after = scheduler._now_utc()
+
+        # Verify the task is back to ACTIVE
+        task_after = next(
+            t for t in scheduler.get_all_tasks(include_run_once=True)
+            if t.id == task_id
+        )
+        assert task_after.status == TaskStatus.ACTIVE
+
+        # next_run_at should be approximately now + interval
+        # (calculated from completion time, not from when originally due)
+        next_run = task_after.next_run_at.replace(tzinfo=None)
+        expected_lower = (
+            now_before.replace(tzinfo=None) + timedelta(seconds=interval)
+        )
+        expected_upper = (
+            now_after.replace(tzinfo=None)
+            + timedelta(seconds=interval)
+            + timedelta(seconds=1)
+        )
+        assert next_run >= expected_lower, (
+            f"next_run_at {next_run} is before expected lower bound"
+            f" {expected_lower}"
+        )
+        assert next_run <= expected_upper, (
+            f"next_run_at {next_run} is after expected upper bound"
+            f" {expected_upper}"
+        )
     finally:
         scheduler.shutdown()

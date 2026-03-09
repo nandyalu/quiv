@@ -28,6 +28,9 @@ site_author = "Uma Nandyala"
 # documentation you should set this.
 # Read more: https://zensical.org/docs/setup/basics/#site_url
 site_url = "https://nandyalu.github.io/quiv"
+repo_url = "https://github.com/nandyalu/quiv"
+repo_name = "nandyalu/quiv"
+edit_uri = "edit/main/docs/"
 
 # The copyright notice appears in the page footer and can contain an HTML
 # fragment.
@@ -47,8 +50,11 @@ Copyright &copy; 2026 nandyalu
 nav = [
   { "Home" = "index.md" },
   { "Getting Started" = "getting-started.md" },
+  { "Bigger Applications" = "bigger-applications.md" },
   { "API" = "api.md" },
   { "Architecture" = "architecture.md" },
+  { "Progress Callbacks" = "progress-callbacks.md" },
+  { "Cancellation" = "cancellation.md" },
   { "Exceptions" = "exceptions.md" },
   { "Release Notes" = "release-notes.md" }
 ]
@@ -320,4 +326,11 @@ link = "https://github.com/nandyalu/quiv"
 
 [project.markdown_extensions.admonition]
 [project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
 [project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
