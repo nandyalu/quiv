@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 import uuid
 import logging
 
@@ -69,19 +70,21 @@ def id_generator() -> str:
     return str(uuid.uuid4())
 
 
-class TaskStatus(str):
+class TaskStatus(str, Enum):
     """Task status constants.
 
     Attributes:
         ACTIVE (str): Task is eligible for scheduling.
+        RUNNING (str): Task is currently executing.
         PAUSED (str): Task is temporarily disabled.
     """
 
     ACTIVE = "active"
+    RUNNING = "running"
     PAUSED = "paused"
 
 
-class JobStatus(str):
+class JobStatus(str, Enum):
     """Job lifecycle status constants.
 
     Attributes:

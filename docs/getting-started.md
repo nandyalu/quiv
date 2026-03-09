@@ -5,15 +5,35 @@ and clean shutdown behavior.
 
 ## Install
 
-```bash
-pip install quiv
-```
+=== "uv"
+
+    ```bash
+    uv add quiv
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install quiv
+    ```
 
 For local development:
 
-```bash
-pip install -e .
-```
+=== "uv"
+
+    ```bash
+    git clone https://github.com/nandyalu/quiv.git
+    cd quiv
+    uv pip install -e ".[dev]"
+    ```
+
+=== "pip"
+
+    ```bash
+    git clone https://github.com/nandyalu/quiv.git
+    cd quiv
+    pip install -e ".[dev]"
+    ```
 
 ## 1) Create a scheduler
 
@@ -39,14 +59,11 @@ from quiv import Quiv
 scheduler = Quiv(
     pool_size=8,                    # default is 10
     history_retention_seconds=3600, # default is 86400 (1 day)
-    timezone_name="UTC",            # default is UTC
+    timezone="UTC",            # default is UTC
 )
 ```
 
 Do not mix `config=...` with direct constructor config args. See [Quiv API](./api.md#quiv) for full configuration options.
-
-Note the naming difference: `QuivConfig` uses `timezone` while the `Quiv`
-constructor uses `timezone_name`.
 
 ## 2) Add a task
 
@@ -105,12 +122,17 @@ scheduler.add_task(
 
 `_stop_event` and `_progress_hook` are injected only if your handler accepts
 those keyword parameters. If your handler signature does not include them
-(and does not use `**kwargs`), they are not injected.
+(and does not use `**kwargs`), they are not injected. See
+[Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md)
+for in-depth guides.
 
 ## 3) Add progress callback (optional)
 
-Progress callbacks can be sync or async. They run on the scheduler's main
-async loop.
+Progress callbacks can be sync or async. When an asyncio event loop is
+available, async callbacks run via `run_coroutine_threadsafe` and sync
+callbacks run via `call_soon_threadsafe` on the main loop. If no event loop
+is available (e.g. in a plain script without asyncio), sync callbacks run
+directly on the worker thread and async callbacks are skipped with a warning.
 
 ```python
 async def on_progress(**payload):
@@ -178,7 +200,7 @@ from fastapi import FastAPI
 
 from quiv import Quiv
 
-scheduler = Quiv(timezone_name="UTC")
+scheduler = Quiv(timezone="UTC")
 
 
 def reindex_documents(_stop_event=None, _progress_hook=None) -> None:
@@ -264,7 +286,7 @@ The library logs at these levels:
 |---------|--------------------------------------------------------------|
 | DEBUG   | Database table creation, datetime normalization              |
 | INFO    | Task added, scheduler loop start, job start/completion, cleanup |
-| WARNING | Progress callback skipped (main loop closed)                 |
+| WARNING | Progress callback skipped (no event loop or main loop closed) |
 | ERROR   | Job failures, scheduler loop errors, progress callback errors |
 
 A separate `"quiv.models"` logger emits DEBUG-level messages for datetime

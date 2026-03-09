@@ -9,7 +9,7 @@ Quiv(
     config: QuivConfig | None = None,
     pool_size: int = 10,
     history_retention_seconds: int = 86400,
-    timezone_name: str | tzinfo = "UTC",
+    timezone: str | tzinfo = "UTC",
     *,
     logger: logging.Logger | None = None,
     main_loop: asyncio.AbstractEventLoop | None = None,
@@ -17,16 +17,28 @@ Quiv(
 ```
 
 If `config` is provided, do not also pass explicit
-`pool_size/history_retention_seconds/timezone_name`.
+`pool_size/history_retention_seconds/timezone`.
 
 Parameters:
 
 - `config`: grouped configuration object (see [`QuivConfig`](#quivconfig))
-- `pool_size`: maximum worker threads (default 10)
+- `pool_size`: maximum number of tasks that can run concurrently (default 10). See [Choosing a pool size](#choosing-a-pool-size) below
 - `history_retention_seconds`: how long finished job records are kept (default 86400 = 24 hours)
-- `timezone_name`: [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) or `tzinfo` for display formatting (default `"UTC"`)
-- `logger`: optional custom logger instance; if not provided, a logger named `"Quiv"` is created with DEBUG level (see [Logging](getting-started.md#logging))
-- `main_loop`: optional asyncio event loop for progress callbacks; defaults to `asyncio.get_event_loop()`
+- `timezone`: [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) or `tzinfo` for display formatting (default `"UTC"`)
+
+!!! note "Timezone is for display only"
+
+    `timezone` is only used to format datetime values in quiv's log output.
+    All internal datetime handling (scheduling, persistence, job lifecycle) uses
+    UTC regardless of this setting.
+- `logger`: optional custom logger instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
+
+!!! note "Logger scope"
+
+    The `logger` is only used for quiv's own internal logs (scheduler loop events,
+    job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed
+    through this logger — use your own loggers inside your task handlers as usual.
+- `main_loop`: optional asyncio event loop for progress callbacks; if not provided, the loop is lazily resolved on first progress callback dispatch via `asyncio.get_running_loop()`. This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). If no event loop is available when a progress callback fires, sync callbacks run directly on the worker thread and async callbacks are skipped with a warning.
 
 ### `add_task(...)`
 
@@ -54,14 +66,17 @@ Validation:
 - `interval > 0`
 - `delay >= 0`
 
+Raises `ConfigurationError` if a task with the same `task_name` is already
+registered. Call [`remove_task()`](#remove_tasktask_name) first to replace it.
+
 Behavior:
 
 - `func` may be sync or async
 - `args`/`kwargs` are JSON-serialized and persisted — only pass
   JSON-compatible values
 - if `run_once=True`, task is executed once and then removed from storage
-- if `progress_callback` is provided, it runs on the main loop
-- calling `add_task()` with an existing `task_name` upserts the task row
+- if `progress_callback` is provided, it runs on the main loop when available,
+  or directly on the worker thread otherwise
 
 !!! info "`interval`"
 
@@ -137,22 +152,16 @@ Returns persisted task rows.
 Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`,
 `"running"`).
 
-## Advanced: manual handler registration
+### `remove_task(task_name)`
 
-`add_task()` is the primary way to register handlers. If you need to register
-a handler or progress callback separately (for example, to swap a handler at
-runtime without re-adding the task), you can use these methods directly:
+Removes a scheduled task, its registered handler, and progress callback.
 
-### `register_handler(name, func)`
+Raises:
 
-Registers a callable as the handler for `name`. Raises
-`HandlerRegistrationError` if the name is empty or `func` is not callable.
+- `TaskNotFoundError` if no task with that name exists.
 
-### `register_progress_callback(name, callback)`
-
-Registers or clears a progress callback for `name`. Pass `None` to clear an
-existing callback. Raises `HandlerRegistrationError` if `callback` is not
-callable.
+Use this to replace a task: remove the existing one, then call `add_task()`
+again with new parameters.
 
 ## Hooks and callback injection
 
@@ -179,7 +188,7 @@ Key fields:
 - `kwargs: str` — JSON-encoded keyword arguments
 - `interval_seconds: float` — seconds between runs
 - `run_once: bool` — if `True`, task runs once then is removed
-- `status: str` — `"active"` or `"paused"`
+- `status: str` — `"active"`, `"running"`, or `"paused"`
 - `next_run_at: datetime` — next scheduled run (UTC-aware)
 
 !!! abstract "datetime objects are in UTC"
@@ -199,7 +208,7 @@ Key fields:
 - `ended_at: datetime | None` — UTC-aware end timestamp
 
 !!! abstract "datetime objects are in UTC"
-    The datetime values (`started_at`, `endd_at`) is always returned as a UTC-aware datetime. 
+    The datetime values (`started_at`, `ended_at`) are always returned as UTC-aware datetimes. 
     
     - You can safely return this from fastapi endpoints which will have a `Z` at the end to indicate UTC datetime.
     - This is the golden-standard for Browsers as they can easily parse it and display in user's timezone.
@@ -209,6 +218,7 @@ Key fields:
 ### `TaskStatus`
 
 - `active` — task is eligible for scheduling
+- `running` — task is currently executing
 - `paused` — task is temporarily disabled
 
 ### `JobStatus`
@@ -229,8 +239,39 @@ QuivConfig(
 )
 ```
 
-Frozen dataclass. Note that `QuivConfig` uses `timezone` while the `Quiv`
-constructor uses `timezone_name`.
+Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display
+timezone parameter.
+
+## Choosing a pool size
+
+`pool_size` controls the maximum number of tasks that can run concurrently.
+It is **not** tied to CPU cores — quiv uses threads, not processes, so the
+deciding factor is your workload, not hardware.
+
+**What to consider:**
+
+- **How many tasks might overlap?** If you have 5 recurring tasks and at most
+  3 could run at the same time, `pool_size=4` is sufficient.
+- **Are tasks I/O-bound or CPU-bound?** I/O-bound tasks (API calls, database
+  queries, file downloads) spend most of their time waiting, so many threads
+  work fine. CPU-bound tasks contend for Python's GIL — more threads won't
+  help and can hurt. For CPU-heavy work, offload to a process pool from within
+  the handler rather than increasing `pool_size`.
+- **Do tasks hold external resources?** Database connections, API rate limits,
+  and file handles create practical caps regardless of thread count.
+
+**Rules of thumb:**
+
+- Start with the default (`10`) and only adjust if you see the
+  `threadpool was busy` warning in your logs.
+- For mostly I/O-bound workloads, set `pool_size` to 2–3x your expected max
+  concurrent tasks.
+- If the warning appears frequently, increase `pool_size` or check whether
+  tasks are taking longer than expected.
+
+When the pool is full, quiv defers due tasks to the next scheduler tick
+rather than queuing them unboundedly. If a job starts late because all
+workers were busy, a warning is logged with the delay.
 
 ## Public methods summary
 
@@ -242,8 +283,6 @@ constructor uses `timezone_name`.
 - `pause_task(task_id)` — pause a task
 - `resume_task(task_id)` — resume a paused task
 - `cancel_job(job_id)` — signal cancellation for a running job
+- `remove_task(task_name)` — remove a task and its registrations
 - `get_all_tasks(...)` — list persisted tasks
 - `get_all_jobs(...)` — list persisted jobs
-- `register_handler(name, func)` — manually register a handler (advanced)
-- `register_progress_callback(name, callback)` — manually register/clear a
-  progress callback (advanced)

@@ -58,7 +58,7 @@ class QuivBase(ABC):
         config: QuivConfig | None = None,
         pool_size: int = 10,
         history_retention_seconds: int = 86400,
-        timezone_name: TimezoneInput = "UTC",
+        timezone: TimezoneInput = "UTC",
         *,
         logger: logging.Logger | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
@@ -71,7 +71,7 @@ class QuivBase(ABC):
                 Thread-pool size when ``config`` is not provided.
             history_retention_seconds (int, Optional=86400):
                 Job retention period when ``config`` is not provided.
-            timezone_name (TimezoneInput, Optional="UTC"):
+            timezone (TimezoneInput, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
             logger (logging.Logger, Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None):
@@ -86,16 +86,16 @@ class QuivBase(ABC):
             if (
                 pool_size != 10
                 or history_retention_seconds != 86400
-                or timezone_name != "UTC"
+                or timezone != "UTC"
             ):
                 raise ConfigurationError(
                     "When 'config' is provided, do not pass"
-                    " pool_size/history_retention_seconds/timezone_name"
+                    " pool_size/history_retention_seconds/timezone"
                     " explicitly."
                 )
             pool_size = config.pool_size
             history_retention_seconds = config.history_retention_seconds
-            timezone_name = config.timezone
+            timezone = config.timezone
 
         if pool_size <= 0:
             raise ConfigurationError("pool_size must be greater than 0")
@@ -106,12 +106,9 @@ class QuivBase(ABC):
 
         if not logger:
             logger = logging.getLogger("Quiv")
-            logger.setLevel(logging.DEBUG)
         self._logger = logger
-        self._timezone: tzinfo = resolve_timezone(timezone_name)
+        self._timezone: tzinfo = resolve_timezone(timezone)
 
-        if not main_loop:
-            main_loop = asyncio.get_event_loop()
         self._main_loop = main_loop
 
         temp_dir = tempfile.gettempdir()
@@ -150,6 +147,8 @@ class QuivBase(ABC):
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[int, threading.Event] = {}
+        self._active_job_count = 0
+        self._job_count_lock = threading.Lock()
 
         self.persistence = PersistenceLayer(self._engine, self._now_utc)
         self.execution = ExecutionLayer(
@@ -212,7 +211,7 @@ class QuivBase(ABC):
             asyncio.set_event_loop(None)
             new_loop.close()
 
-    def register_handler(self, name: str, func: Callable[..., Any]) -> None:
+    def _register_handler(self, name: str, func: Callable[..., Any]) -> None:
         """Register a task handler callable.
 
         Args:
@@ -227,15 +226,9 @@ class QuivBase(ABC):
             raise HandlerRegistrationError("task name must not be empty")
         if not callable(func):
             raise HandlerRegistrationError("func must be callable")
-        # if name in self.registry:
-        #     if self.registry[name] is not None and self.registry[name] != func:
-        #         raise HandlerRegistrationError(
-        #             f"Handler name '{name}' is already registered with "
-        #             "a different function."
-        #         )
         self.registry[name] = func
 
-    def register_progress_callback(
+    def _register_progress_callback(
         self, name: str, callback: Callable[..., Any] | None
     ) -> None:
         """Register or clear a progress callback for a task.
@@ -256,21 +249,37 @@ class QuivBase(ABC):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
             )
-        # if name in self.progress_callbacks:
-        #     if (
-        #         self.progress_callbacks[name] is not None
-        #         and self.progress_callbacks[name] != callback
-        #     ):
-        #         raise HandlerRegistrationError(
-        #             f"Progress callback for task '{name}' is already"
-        #             " registered with a different function."
-        #         )
         self.progress_callbacks[name] = callback
+
+    def _resolve_main_loop(self) -> asyncio.AbstractEventLoop | None:
+        """Lazily resolve the main event loop.
+
+        Returns:
+            asyncio.AbstractEventLoop | None: The running event loop,
+                or ``None`` if unavailable.
+        """
+
+        if self._main_loop is not None:
+            if self._main_loop.is_closed():
+                return None
+            return self._main_loop
+        try:
+            loop = asyncio.get_running_loop()
+            self._main_loop = loop
+            return loop
+        except RuntimeError:
+            return None
 
     def run_progress_callback(
         self, task_name: str, *args: Any, **kwargs: Any
     ) -> None:
-        """Dispatch a progress callback on the main async loop.
+        """Dispatch a progress callback, adapting to async availability.
+
+        When a main event loop is available, async callbacks are dispatched
+        via ``run_coroutine_threadsafe`` and sync callbacks via
+        ``call_soon_threadsafe``. Without an event loop, sync callbacks
+        run directly on the calling thread and async callbacks are skipped
+        with a warning.
 
         Args:
             task_name (str): Task name whose callback should be invoked.
@@ -281,12 +290,8 @@ class QuivBase(ABC):
         callback = self.progress_callbacks.get(task_name)
         if callback is None:
             return
-        if self._main_loop.is_closed():
-            self._logger.warning(
-                f"Progress callback for task '{task_name}' skipped because"
-                " main loop is closed."
-            )
-            return
+
+        loop = self._resolve_main_loop()
 
         def _on_progress_done(fut: Future[Any]) -> None:
             exc = fut.exception()
@@ -296,26 +301,39 @@ class QuivBase(ABC):
                 )
 
         if inspect.iscoroutinefunction(callback):
+            if loop is None:
+                self._logger.warning(
+                    f"Async progress callback for task '{task_name}' skipped"
+                    " because no event loop is available."
+                )
+                return
             coroutine = cast(
                 Coroutine[Any, Any, Any], callback(*args, **kwargs)
             )
-            future = asyncio.run_coroutine_threadsafe(
-                coroutine, self._main_loop
-            )
+            future = asyncio.run_coroutine_threadsafe(coroutine, loop)
             future.add_done_callback(_on_progress_done)
+            return
+
+        if loop is None:
+            try:
+                callback(*args, **kwargs)
+            except Exception as e:
+                self._logger.error(
+                    f"Progress callback for task '{task_name}' failed: {e}"
+                )
             return
 
         def _call_sync_callback() -> None:
             try:
                 result = callback(*args, **kwargs)
                 if asyncio.iscoroutine(result):
-                    asyncio.ensure_future(result, loop=self._main_loop)
+                    asyncio.ensure_future(result, loop=loop)
             except Exception as e:
                 self._logger.error(
                     f"Progress callback for task '{task_name}' failed: {e}"
                 )
 
-        self._main_loop.call_soon_threadsafe(partial(_call_sync_callback))
+        loop.call_soon_threadsafe(partial(_call_sync_callback))
 
     def run_task_immediately(self, task_name: str) -> int:
         """Queue an existing scheduled task for immediate run.
@@ -360,9 +378,11 @@ class QuivBase(ABC):
 
         try:
             self._engine.dispose()
-            if os.path.exists(self._db_path):
-                os.remove(self._db_path)
-                self._logger.info(f"Cleaned up database file: {self._db_path}")
+            for suffix in ("", "-wal", "-shm"):
+                path = self._db_path + suffix
+                if os.path.exists(path):
+                    os.remove(path)
+            self._logger.info(f"Cleaned up database file: {self._db_path}")
         except Exception as e:
             self._logger.warning(f"Could not cleanup database file: {e}")
 

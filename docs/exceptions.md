@@ -65,7 +65,7 @@ from quiv import Quiv
 from quiv.exceptions import QuivError, ConfigurationError
 
 try:
-    scheduler = Quiv(pool_size=4, timezone_name="UTC")
+    scheduler = Quiv(pool_size=4, timezone="UTC")
 except ConfigurationError as exc:
     print("bad config", exc)
 except QuivError as exc:

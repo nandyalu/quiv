@@ -5,10 +5,12 @@ on:
     paths:
       - "quiv/**"
       - "tests/**"
+      - "pyproject.toml"
   pull_request:
     paths:
       - "quiv/**"
       - "tests/**"
+      - "pyproject.toml"
   workflow_dispatch:
 
 jobs:
