@@ -20,7 +20,7 @@ class ExecutionLayer:
     def __init__(
         self,
         run_async: Callable[
-            [Callable[..., Awaitable[Any]], list | None, dict | None], None
+            [Callable[..., Awaitable[Any]], list[Any] | None, dict[str, Any] | None], None
         ],
         run_progress_callback: Callable[..., None],
     ):
@@ -68,8 +68,8 @@ class ExecutionLayer:
         func: Callable[..., Any],
         args_json: str,
         kwargs_json: str,
-        stop_event,
-    ) -> tuple[list, dict]:
+        stop_event: Any,
+    ) -> tuple[list[Any], dict[str, Any]]:
         """Prepare runtime invocation arguments for a task handler.
 
         Args:
@@ -91,7 +91,7 @@ class ExecutionLayer:
 
         if self._accepts_keyword_arg(func, "_progress_hook"):
 
-            def _progress_hook(*progress_args, **progress_kwargs):
+            def _progress_hook(*progress_args: Any, **progress_kwargs: Any) -> None:
                 self._run_progress_callback(
                     task_name, *progress_args, **progress_kwargs
                 )
@@ -101,7 +101,7 @@ class ExecutionLayer:
         return f_args, f_kwargs
 
     def run_callable(
-        self, func: Callable[..., Any], args: list, kwargs: dict
+        self, func: Callable[..., Any], args: list[Any], kwargs: dict[str, Any]
     ) -> None:
         """Run a handler function, supporting sync and async callables.
 

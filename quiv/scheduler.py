@@ -55,8 +55,8 @@ class Quiv(QuivBase):
         interval: float,
         delay: float = 0,
         run_once: bool = False,
-        args: list | None = None,
-        kwargs: dict | None = None,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
     ) -> str | None:
         """Schedule a callable to run at a fixed interval.
@@ -195,8 +195,8 @@ class Quiv(QuivBase):
         run_once: bool,
         scheduled_at: datetime,
         func: Callable[..., Any],
-        args: list,
-        kwargs: dict,
+        args: list[Any],
+        kwargs: dict[str, Any],
     ) -> None:
         """Execute a single job and persist terminal status.
 

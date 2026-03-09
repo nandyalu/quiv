@@ -160,6 +160,6 @@ class Job(QuivModelBase, table=True):
     # Ensure started_at and ended_at are timezone-aware UTC on load from DB
     @model_validator(mode="before")
     def force_utc_on_load(self) -> Job:
-        self.started_at = self.set_timezone_to_utc(self.started_at)  # type: ignore
-        self.ended_at = self.set_timezone_to_utc(self.ended_at)  # type: ignore
+        self.started_at = self.set_timezone_to_utc(self.started_at)  # type: ignore[assignment]
+        self.ended_at = self.set_timezone_to_utc(self.ended_at)
         return self
