@@ -20,5 +20,7 @@ jobs:
         uses: rhysd/changelog-from-release/action@v3
         with:
           file: docs/release-notes.md
-          pull_request: true
+          # pull_request: true
+          push: false
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
