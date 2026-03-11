@@ -1,11 +1,7 @@
-name: Documentation
+name: Docs-Release Notes
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "docs/**"
-      - "zensical.toml"
+  release:
+    types: [published]
   workflow_dispatch:
 permissions:
   contents: read
