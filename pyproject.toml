@@ -39,15 +39,12 @@ Homepage = "https://github.com/nandyalu/quiv"
 Documentation = "https://nandyalu.github.io/quiv"
 Repository = "https://github.com/nandyalu/quiv"
 
-[project.scripts]
-quiv = "main:main"
-
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build]
-include = ["quiv/py.typed"]
+[tool.hatch.build.targets.sdist]
+include = ["quiv"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["quiv"]
