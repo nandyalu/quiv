@@ -24,6 +24,7 @@ jobs:
         uses: rhysd/changelog-from-release/action@v3
         with:
           file: docs/release-notes.md
+          push: false
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - run: zensical build --clean
       - uses: actions/upload-pages-artifact@v4
