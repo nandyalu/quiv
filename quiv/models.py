@@ -23,7 +23,7 @@ class QuivModelBase(SQLModel, registry=quiv_registry):
         metadata (Any): Registry metadata used for Quiv model table creation.
     """
 
-    metadata = quiv_registry.metadata
+    # metadata = quiv_registry.metadata
 
     @classmethod
     def set_timezone_to_utc(cls, value: datetime | None) -> datetime | None:
