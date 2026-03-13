@@ -223,7 +223,7 @@ def test_database_initialization_error_raised(
         raise RuntimeError("db init failed")
 
     monkeypatch.setattr(
-        "quiv.base.quiv_registry.metadata.create_all", fail_create_all
+        "quiv.base.QuivModelBase.metadata.create_all", fail_create_all
     )
     with pytest.raises(DatabaseInitializationError):
         Quiv(main_loop=running_main_loop)
@@ -257,9 +257,7 @@ def test_async_progress_callback_skipped_without_event_loop(
         called.set()
 
     try:
-        scheduler._register_progress_callback(
-            "async-no-loop", async_callback
-        )
+        scheduler._register_progress_callback("async-no-loop", async_callback)
         with caplog.at_level("WARNING", logger="Quiv"):
             scheduler.run_progress_callback("async-no-loop", 1)
         time.sleep(0.2)
@@ -384,5 +382,28 @@ def test_get_job_raises_for_missing_id(
     try:
         with pytest.raises(JobNotFoundError):
             scheduler.get_job(999999)
+    finally:
+        scheduler.shutdown()
+
+
+def test_quiv_database_does_not_create_user_sqlmodel_tables(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from sqlalchemy import inspect
+    from sqlmodel import SQLModel, Field
+
+    # Define a user model on the default SQLModel metadata
+    class UserWidget(SQLModel, table=True):
+        __tablename__: str = "user_widget"  # type: ignore
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = "widget"
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    scheduler.start()
+    try:
+        table_names = inspect(scheduler._engine).get_table_names()
+        assert "quiv_task" in table_names
+        assert "quiv_job" in table_names
+        assert "user_widget" not in table_names
     finally:
         scheduler.shutdown()
