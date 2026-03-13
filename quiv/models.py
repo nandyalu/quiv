@@ -16,7 +16,7 @@ quiv_registry = registry()
 Keeps Quiv's internal SQLAlchemy metadata separate from user models"""
 
 
-class QuivModelBase(SQLModel):
+class QuivModelBase(SQLModel, registry=quiv_registry):
     """Base SQLModel class bound to Quiv's private SQLAlchemy registry.
 
     Attributes:
