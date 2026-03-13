@@ -24,7 +24,7 @@ from .exceptions import (
     HandlerRegistrationError,
 )
 from .execution import ExecutionLayer
-from .models import Job, Task, quiv_registry
+from .models import Job, QuivModelBase, Task
 from .persistence import PersistenceLayer
 
 
@@ -129,7 +129,7 @@ class QuivBase(ABC):
             cursor.close()
 
         try:
-            quiv_registry.metadata.create_all(self._engine)
+            QuivModelBase.metadata.create_all(self._engine)
             with Session(self._engine) as session:
                 session.exec(select(Task).limit(1)).all()
                 session.exec(select(Job).limit(1)).all()
