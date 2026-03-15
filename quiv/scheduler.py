@@ -201,8 +201,15 @@ class Quiv(QuivBase):
         with self._job_count_lock:
             self._active_job_count += 1
         self.executor.submit(
-            self._run_job, job_id, task.id, task.task_name, task.run_once,
-            now, func, f_args, f_kwargs,
+            self._run_job,
+            job_id,
+            task.id,
+            task.task_name,
+            task.run_once,
+            now,
+            func,
+            f_args,
+            f_kwargs,
         )
 
     def _run_job(
@@ -233,11 +240,11 @@ class Quiv(QuivBase):
         delay = start_time - scheduled_at
         if delay.total_seconds() > 2:
             self._logger.warning(
-                f"Job {job_id} ('{task_name}') started {delay} after scheduled"
+                f"'{task_name}' (Job {job_id}) started {delay} after scheduled"
                 " time — threadpool was busy. Consider increasing pool_size."
             )
         self._logger.info(
-            f"Job {job_id} started at"
+            f"'{task_name}' (Job {job_id}) started at"
             f" {self._to_display_timezone(start_time)}"
         )
         self.persistence.mark_job_running(job_id)
@@ -247,12 +254,12 @@ class Quiv(QuivBase):
             self.execution.run_callable(func, args, kwargs)
             end_time = self._now_utc()
             self._logger.info(
-                f"Job {job_id} completed successfully at"
+                f"'{task_name}' (Job {job_id}) completed successfully at"
                 f" {self._to_display_timezone(end_time)}"
                 f" (Duration: {end_time - start_time})"
             )
         except Exception as e:
-            self._logger.error(f"Job {job_id} failed: {e}")
+            self._logger.error(f"'{task_name}' (Job {job_id}) failed: {e}")
             status = JobStatus.FAILED
         finally:
             stop_event = self.stop_events.pop(job_id, None)

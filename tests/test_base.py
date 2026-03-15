@@ -369,6 +369,7 @@ def test_get_job_returns_job_by_id(
         time.sleep(0.3)
         jobs = scheduler.get_all_jobs()
         assert len(jobs) >= 1
+        assert jobs[0].id is not None
         job = scheduler.get_job(jobs[0].id)
         assert job.status == JobStatus.COMPLETED
     finally:
