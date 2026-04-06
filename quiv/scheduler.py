@@ -263,7 +263,7 @@ class Quiv(QuivBase):
             time_took = end_time - start_time
             self._logger.exception(
                 f"'{task_name}' (Job {job_id}) raised an exception at"
-                f" {self._to_display_timezone(end_time)} "
+                f" {self._to_display_timezone(end_time)}"
                 f" [runtime: {time_took}]: {e}"
             )
             status = JobStatus.FAILED
