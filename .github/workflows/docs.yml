@@ -9,6 +9,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  metadata: read
   pages: write
   id-token: write
 jobs:
