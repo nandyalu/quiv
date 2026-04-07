@@ -39,7 +39,7 @@ Parameters:
         job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed
         through this logger — use your own loggers inside your task handlers as usual.
 
-- `main_loop`: optional asyncio event loop for progress callbacks and event listeners. If not provided, resolution is attempted at `start()` time via `asyncio.get_running_loop()`, and lazily on first callback dispatch if still unset. This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). If no event loop is available when a callback fires, sync callbacks run directly on the worker thread and async callbacks are skipped with a warning.
+- `main_loop`: optional asyncio event loop for progress callbacks and event listeners. If not provided, resolution is attempted at `start()` time via `asyncio.get_running_loop()`, and lazily on first callback dispatch if still unset. This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). If no event loop is available when a callback fires, async callbacks run in a temporary event loop on the worker thread, and sync callbacks run directly.
 
 ### `add_task(...)`
 
