@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-import json
+import pickle
 from collections.abc import Awaitable
 from typing import Any, Callable
 
@@ -66,8 +66,8 @@ class ExecutionLayer:
         self,
         task_name: str,
         func: Callable[..., Any],
-        args_json: str,
-        kwargs_json: str,
+        args_pickled: bytes,
+        kwargs_pickled: bytes,
         stop_event: Any,
     ) -> tuple[tuple[Any, ...], dict[str, Any]]:
         """Prepare runtime invocation arguments for a task handler.
@@ -75,16 +75,16 @@ class ExecutionLayer:
         Args:
             task_name (str): Scheduled task name.
             func (Callable[..., Any]): Registered handler.
-            args_json (str): JSON-encoded positional arguments.
-            kwargs_json (str): JSON-encoded keyword arguments.
+            args_pickled (bytes): Pickle-encoded positional arguments.
+            kwargs_pickled (bytes): Pickle-encoded keyword arguments.
             stop_event (Any): Cancellation event to inject when supported.
 
         Returns:
             tuple[tuple, dict]: A tuple with decoded positional args and kwargs.
         """
 
-        f_args = tuple(json.loads(args_json))
-        f_kwargs = json.loads(kwargs_json)
+        f_args = tuple(pickle.loads(args_pickled))
+        f_kwargs = pickle.loads(kwargs_pickled)
 
         if self._accepts_keyword_arg(func, "_stop_event"):
             f_kwargs["_stop_event"] = stop_event

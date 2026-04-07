@@ -42,8 +42,8 @@ class PersistenceLayer:
         interval: float,
         run_once: bool,
         next_run_at: datetime,
-        args_json: str,
-        kwargs_json: str,
+        args_pickled: bytes,
+        kwargs_pickled: bytes,
     ) -> str:
         """Insert a new scheduled task.
 
@@ -52,8 +52,8 @@ class PersistenceLayer:
             interval (float): Seconds between task runs.
             run_once (bool): Whether task should be single-run.
             next_run_at (datetime): Next UTC run timestamp.
-            args_json (str): JSON-encoded positional args.
-            kwargs_json (str): JSON-encoded keyword args.
+            args_pickled (bytes): Pickle-encoded positional args.
+            kwargs_pickled (bytes): Pickle-encoded keyword args.
         Returns:
             str: Task id string (UUID).
         """
@@ -64,8 +64,8 @@ class PersistenceLayer:
                 interval_seconds=interval,
                 next_run_at=next_run_at,
                 run_once=run_once,
-                args=args_json,
-                kwargs=kwargs_json,
+                args=args_pickled,
+                kwargs=kwargs_pickled,
             )
             session.add(task)
             session.commit()

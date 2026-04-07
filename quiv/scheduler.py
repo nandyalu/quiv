@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta, datetime, tzinfo
-import json
 import logging
+import pickle
 import threading
 import time
 from typing import Any, Callable
@@ -102,8 +102,8 @@ class Quiv(QuivBase):
             interval=interval,
             run_once=run_once,
             next_run_at=next_run,
-            args_json=json.dumps(args or ()),
-            kwargs_json=json.dumps(kwargs or {}),
+            args_pickled=pickle.dumps(args or ()),
+            kwargs_pickled=pickle.dumps(kwargs or {}),
         )
         next_run_user_tz = self._to_display_timezone(next_run)
         self._logger.info(
@@ -189,8 +189,8 @@ class Quiv(QuivBase):
         f_args, f_kwargs = self.execution.prepare_invocation(
             task_name=task.task_name,
             func=func,
-            args_json=task.args,
-            kwargs_json=task.kwargs,
+            args_pickled=task.args,
+            kwargs_pickled=task.kwargs,
             stop_event=stop_event,
         )
 
