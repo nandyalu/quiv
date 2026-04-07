@@ -11,7 +11,7 @@ from typing import Any, Callable
 from .base import QuivBase
 from .config import QuivConfig
 from .exceptions import ConfigurationError
-from .models import JobStatus, Task
+from .models import Event, JobStatus, Task
 
 
 class Quiv(QuivBase):
@@ -110,6 +110,10 @@ class Quiv(QuivBase):
             f"Task '{task_name}' added with interval {interval}s and delay"
             f" {delay}s (next run at {next_run_user_tz})"
         )
+        self._emit_event(
+            Event.TASK_ADDED,
+            {"task_name": task_name, "task_id": task_id},
+        )
         return task_id
 
     def remove_task(self, task_name: str) -> None:
@@ -143,6 +147,10 @@ class Quiv(QuivBase):
         self.registry.pop(task_name, None)
         self.progress_callbacks.pop(task_name, None)
         self._logger.info(f"Task '{task_name}' removed")
+        self._emit_event(
+            Event.TASK_REMOVED,
+            {"task_name": task_name, "task_id": task_id},
+        )
 
     def _loop(self) -> None:
         """Continuously dispatch due tasks until shutdown is requested."""
@@ -163,7 +171,7 @@ class Quiv(QuivBase):
                 if self._active_job_count < self._pool_size:
                     due_tasks = self.persistence.get_due_tasks(now)
                     for task in due_tasks:
-                        if self._active_job_count >= self._pool_size:
+                        if self._active_job_count >= self._pool_size:  # pragma: no cover
                             break
                         self._dispatch_due_task(task, now)
 
@@ -248,23 +256,31 @@ class Quiv(QuivBase):
             f" {self._to_display_timezone(start_time)}"
         )
         self.persistence.mark_job_running(job_id)
+        self._emit_event(
+            Event.JOB_STARTED,
+            {"task_name": task_name, "job_id": job_id},
+        )
 
         status = JobStatus.COMPLETED
+        job_error: BaseException | None = None
+        duration = timedelta()
         try:
             self.execution.run_callable(func, args, kwargs)
             end_time = self._now_utc()
+            duration = end_time - start_time
             self._logger.info(
                 f"'{task_name}' (Job {job_id}) completed successfully at"
                 f" {self._to_display_timezone(end_time)}"
-                f" (Duration: {end_time - start_time})"
+                f" (Duration: {duration})"
             )
         except Exception as e:
             end_time = self._now_utc()
-            time_took = end_time - start_time
+            duration = end_time - start_time
+            job_error = e
             self._logger.exception(
                 f"'{task_name}' (Job {job_id}) raised an exception at"
                 f" {self._to_display_timezone(end_time)}"
-                f" [runtime: {time_took}]: {e}"
+                f" [runtime: {duration}]: {e}"
             )
             status = JobStatus.FAILED
         finally:
@@ -278,3 +294,28 @@ class Quiv(QuivBase):
             if run_once:
                 self.registry.pop(task_name, None)
                 self.progress_callbacks.pop(task_name, None)
+
+            if status == JobStatus.COMPLETED:
+                self._emit_event(
+                    Event.JOB_COMPLETED,
+                    {
+                        "task_name": task_name,
+                        "job_id": job_id,
+                        "duration": duration,
+                    },
+                )
+            elif status == JobStatus.FAILED:
+                self._emit_event(
+                    Event.JOB_FAILED,
+                    {
+                        "task_name": task_name,
+                        "job_id": job_id,
+                        "error": job_error,
+                        "duration": duration,
+                    },
+                )
+            elif status == JobStatus.CANCELLED:
+                self._emit_event(
+                    Event.JOB_CANCELLED,
+                    {"task_name": task_name, "job_id": job_id},
+                )

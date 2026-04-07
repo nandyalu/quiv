@@ -33,6 +33,7 @@ It provides:
 - support for sync and async task handlers
 - cooperative cancellation (`_stop_event`)
 - progress callbacks routed to your main async loop (`_progress_hook`)
+- event listeners for task and job lifecycle events
 - persistent task/job state via SQLModel + SQLite
 
 ## When to use quiv
@@ -156,8 +157,9 @@ If your app needs either of these patterns, `quiv` might be a good fit.
   restarts.
 - **Single-process**: the scheduler runs in-process. It is not designed for
   distributed or multi-process deployments.
-- **JSON-serializable args**: `args` and `kwargs` passed to `add_task()` are
-  JSON-serialized for persistence. Only pass JSON-compatible values.
+- **Picklable args**: `args` and `kwargs` passed to `add_task()` are
+  pickle-serialized for persistence. Most Python objects are supported,
+  but lambdas and inner functions are not picklable.
 
 
 ## Next pages
@@ -165,4 +167,5 @@ If your app needs either of these patterns, `quiv` might be a good fit.
 - [Getting Started](getting-started.md)
 - [API](api.md)
 - [Architecture](architecture.md)
+- [Event Listeners](event-listeners.md)
 - [Exceptions](exceptions.md)

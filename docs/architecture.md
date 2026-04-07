@@ -100,6 +100,24 @@ logic, see [Cancellation](cancellation.md).
 For dispatch flow details, async/sync examples, and error handling, see
 [Progress Callbacks](progress-callbacks.md).
 
+## Event listener model
+
+- listeners are registered globally via `add_listener(event, callback)`
+- multiple listeners per event are supported, called in registration order
+- dispatch uses the same mechanism as progress callbacks:
+  - async listeners dispatched via `run_coroutine_threadsafe` on the main loop
+  - sync listeners dispatched via `call_soon_threadsafe` on the main loop
+  - without a loop: sync listeners run directly, async listeners are skipped
+- listener exceptions are logged and swallowed — they never block the
+  scheduler or fail a job
+- task events (`TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`)
+  fire on the calling thread (whoever called `add_task()`, etc.)
+- job events (`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`)
+  fire from the worker thread executing the job
+
+For event types, data payloads, and examples, see
+[Event Listeners](event-listeners.md).
+
 ## Async execution model
 
 Async task handlers do not run on the main application event loop. Instead,

@@ -72,8 +72,8 @@ registered. Call [`remove_task()`](#remove_tasktask_name) first to replace it.
 Behavior:
 
 - `func` may be sync or async
-- `args`/`kwargs` are JSON-serialized and persisted — only pass
-  JSON-compatible values
+- `args`/`kwargs` are pickle-serialized and persisted — most Python objects
+  are supported, but lambdas and inner functions are not picklable
 - if `run_once=True`, task is executed once and then removed from storage
 - if `progress_callback` is provided, it runs on the main loop when available,
   or directly on the worker thread otherwise
@@ -86,11 +86,14 @@ Behavior:
 
     It might not exactly run once an hour as the task itself might take some time to finish.
 
-### `start()`
+### `start()` / `startup()`
 
 Starts scheduler background loop thread. Safe to call multiple times.
 
-### `shutdown()`
+`startup()` is an alias for `start()` — use whichever reads better in your
+code. `startup()` pairs naturally with `shutdown()`.
+
+### `shutdown()` / `stop()`
 
 - Stops scheduler loop and worker threads
 - Cancels running jobs via stop events
@@ -98,6 +101,9 @@ Starts scheduler background loop thread. Safe to call multiple times.
 - And removes temporary scheduler SQLite file.
 
 Always call this during app teardown.
+
+`stop()` is an alias for `shutdown()` — use whichever reads better in your
+code. `stop()` pairs naturally with `start()`.
 
 ### `run_task_immediately(task_name)`
 
@@ -189,6 +195,30 @@ After removal, the same `task_name` can be re-registered immediately with
 `add_task()`. Any previously running job will finish on its own and clean up
 normally.
 
+### `add_listener(event, callback)`
+
+Register an event listener for a scheduler lifecycle event. Multiple listeners
+can be registered for the same event. Both sync and async callbacks are
+supported.
+
+The callback receives two arguments:
+
+- `event` (`Event`) — the event type that was emitted
+- `data` (`dict[str, Any]`) — context data (keys depend on the event type)
+
+Raises:
+
+- `ConfigurationError` if `event` is not an `Event` enum member or `callback`
+  is not callable.
+
+See [Event Listeners](event-listeners.md) for the full event list, data keys,
+and dispatch details.
+
+### `remove_listener(event, callback)`
+
+Remove a previously registered event listener. If the callback is not found,
+the call is silently ignored.
+
 ## Hooks and callback injection
 
 When a task is dispatched, `quiv` inspects handler signatures:
@@ -210,8 +240,8 @@ Key fields:
 
 - `id: str` — UUID identifier
 - `task_name: str` — unique name mapped to a registered handler
-- `args: str` — JSON-encoded positional arguments
-- `kwargs: str` — JSON-encoded keyword arguments
+- `args: bytes` — pickle-encoded positional arguments
+- `kwargs: bytes` — pickle-encoded keyword arguments
 - `interval_seconds: float` — seconds between runs
 - `run_once: bool` — if `True`, task runs once then is removed
 - `status: str` — `"active"`, `"running"`, or `"paused"`
@@ -238,6 +268,21 @@ Key fields:
     
     - You can safely return this from fastapi endpoints which will have a `Z` at the end to indicate UTC datetime.
     - This is the golden-standard for Browsers as they can easily parse it and display in user's timezone.
+
+## Event types
+
+### `Event`
+
+- `task_added` — fired after a task is registered
+- `task_removed` — fired after a task is removed
+- `task_paused` — fired after a task is paused
+- `task_resumed` — fired after a task is resumed
+- `job_started` — fired when a job begins execution
+- `job_completed` — fired when a job finishes successfully
+- `job_failed` — fired when a job ends with an exception
+- `job_cancelled` — fired when a job is cancelled
+
+See [Event Listeners](event-listeners.md) for the data each event carries.
 
 ## Status constants
 
@@ -303,13 +348,15 @@ workers were busy, a warning is logged with the delay.
 
 - `Quiv(...)` — create scheduler instance
 - `add_task(...)` — schedule a task (primary entry point)
-- `start()` — start the scheduler loop
-- `shutdown()` — stop scheduler and clean up resources
+- `start()` / `startup()` — start the scheduler loop
+- `shutdown()` / `stop()` — stop scheduler and clean up resources
 - `run_task_immediately(task_name)` — trigger a scheduled task now
 - `pause_task(task_name)` — pause a task
 - `resume_task(task_name)` — resume a paused task
 - `cancel_job(job_id)` — signal cancellation for a running job
 - `remove_task(task_name)` — remove a task and its registrations
+- `add_listener(event, callback)` — register an event listener
+- `remove_listener(event, callback)` — remove an event listener
 - `get_task(task_name)` — get a single task by name
 - `get_task_by_id(task_id)` — get a single task by UUID
 - `get_job(job_id)` — get a single job by ID

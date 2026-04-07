@@ -146,22 +146,49 @@ scheduler.add_task(
 )
 ```
 
-## 4) Start and stop
+## 4) Listen for events (optional)
+
+Event listeners let you react to task and job lifecycle events. Register a
+callback with `add_listener()`:
+
+```python
+from quiv import Event
+
+def on_job_completed(event, data):
+    print(f"Job {data['job_id']} for '{data['task_name']}' completed in {data['duration']}")
+
+def on_job_failed(event, data):
+    print(f"Job {data['job_id']} for '{data['task_name']}' failed: {data['error']}")
+
+scheduler.add_listener(Event.JOB_COMPLETED, on_job_completed)
+scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
+```
+
+Listeners follow the same dispatch model as progress callbacks: async listeners
+run on the main loop, sync listeners run via `call_soon_threadsafe` (or
+directly on the calling thread when no loop is available). Exceptions in
+listeners are logged and swallowed. See [Event Listeners](event-listeners.md)
+for the full list of events and data keys.
+
+## 5) Start and stop
 
 ```python
 import asyncio
 
 async def main() -> None:
-    scheduler.start()
+    scheduler.startup()
     await asyncio.sleep(25)
     scheduler.shutdown()
 
 asyncio.run(main())
 ```
 
-Always call `shutdown()` when your app exits.
+Always call `shutdown()` (or `stop()`) when your app exits.
 
-## 5) Operate tasks at runtime
+`startup()` / `shutdown()` is the recommended pair, but `start()` / `stop()`
+works identically — they are aliases.
+
+## 6) Operate tasks at runtime
 
 ```python
 scheduler.run_task_immediately("demo-task")
@@ -169,7 +196,7 @@ scheduler.pause_task("demo-task")
 scheduler.resume_task("demo-task")
 ```
 
-## 6) Cancel a running job
+## 7) Cancel a running job
 
 ```python
 jobs = scheduler.get_all_jobs(status="running")
@@ -180,7 +207,7 @@ for job in jobs:
 Cancellation is cooperative: it sets the job's stop event. The handler must
 check `_stop_event.is_set()` to actually stop.
 
-## 7) Inspect state
+## 8) Inspect state
 
 ```python
 tasks = scheduler.get_all_tasks(include_run_once=True)
@@ -304,5 +331,6 @@ standard Python logging configuration.
 - **`TaskNotScheduledError`**: the task handler exists, but no scheduled task
   row exists yet.
 - **No log output**: configure Python logging (see [Logging](#logging) above).
-- **Args/kwargs errors**: ensure all values passed via `args` and `kwargs` are
-  JSON-serializable (no custom objects, datetime instances, etc.).
+- **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most
+  Python objects are supported. If you encounter errors, ensure the objects
+  are picklable (e.g. lambdas and inner functions are not).

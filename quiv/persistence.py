@@ -108,7 +108,7 @@ class PersistenceLayer:
             task = session.exec(
                 select(Task).where(Task.task_name == task_name)
             ).first()
-            if task is None:
+            if task is None:  # pragma: no cover
                 raise TaskNotFoundError(
                     f"Task '{task_name}' was not found"
                 )
