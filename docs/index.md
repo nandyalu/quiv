@@ -159,7 +159,10 @@ If your app needs either of these patterns, `quiv` might be a good fit.
   distributed or multi-process deployments.
 - **Picklable args**: `args` and `kwargs` passed to `add_task()` are
   pickle-serialized for persistence. Most Python objects are supported,
-  but lambdas and inner functions are not picklable.
+  but lambdas and inner functions are not picklable. The temporary SQLite
+  database is trusted internal state — only your application code writes to
+  it, and it is deleted on `shutdown()`. Do not expose the database file to
+  untrusted input.
 
 
 ## Next pages

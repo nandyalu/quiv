@@ -44,6 +44,45 @@ def test_add_task_validates_inputs(
         scheduler.shutdown()
 
 
+def test_add_task_validates_args_type(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError, match="args must be a tuple"):
+            scheduler.add_task(
+                task_name="bad-args",
+                func=lambda: None,
+                interval=1,
+                args=[1, 2, 3],  # type: ignore[arg-type]
+            )
+        with pytest.raises(ConfigurationError, match="kwargs must be a dict"):
+            scheduler.add_task(
+                task_name="bad-kwargs",
+                func=lambda: None,
+                interval=1,
+                kwargs="not a dict",  # type: ignore[arg-type]
+            )
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_validates_unpicklable_args(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError, match="Failed to serialize task args"):
+            scheduler.add_task(
+                task_name="unpicklable",
+                func=lambda: None,
+                interval=1,
+                args=(lambda: None,),
+            )
+    finally:
+        scheduler.shutdown()
+
+
 def test_run_task_immediately_requires_registered_handler(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
