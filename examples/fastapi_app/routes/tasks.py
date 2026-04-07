@@ -52,5 +52,7 @@ def cancel_job(job_id: str):
     """Cancel a running job."""
     cancelled = scheduler.cancel_job(job_id)
     if not cancelled:
-        raise HTTPException(status_code=404, detail="Job not found or not running")
+        raise HTTPException(
+            status_code=404, detail="Job not found or not running"
+        )
     return {"status": "cancelled"}

@@ -7,7 +7,7 @@ import uuid
 import logging
 from typing import Any
 
-from pydantic import field_serializer, model_validator
+from pydantic import BaseModel, field_serializer, model_validator
 from sqlalchemy.orm import registry
 from sqlmodel import Field, SQLModel
 
@@ -128,8 +128,11 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
-class Task(QuivModelBase, table=True):
-    """Scheduled task persisted in the Quiv database.
+class TaskDB(QuivModelBase, table=True):
+    """Internal database model for scheduled tasks.
+
+    This is an internal model used for persistence. Use :class:`Task` for
+    public API interactions.
 
     Attributes:
         __tablename__ (str): Database table name for tasks.
@@ -158,15 +161,104 @@ class Task(QuivModelBase, table=True):
     @field_serializer("args", "kwargs")
     @classmethod
     def _unpickle_for_serialization(cls, value: bytes) -> Any:
-        """Unpickle bytes to Python objects for JSON serialization."""
-        return pickle.loads(value)
+        """Unpickle bytes to Python objects for model_dump() and JSON serialization. \n
+        Falls back to a placeholder string if unpickling fails (e.g., corrupt data).
+        """
+        try:
+            return pickle.loads(value)
+        except Exception:
+            return f"<unserializable: {len(value)} bytes>"
 
     # On load from DB, ensure next_run_at is timezone-aware UTC
     # Only model_validator in before mode works, as it runs on model instantiation
     @model_validator(mode="before")
-    def force_utc_on_load(self) -> Task:
+    def force_utc_on_load(self) -> TaskDB:
         self.next_run_at = self.set_timezone_to_utc(self.next_run_at)  # type: ignore
         return self
+
+
+class Task(BaseModel):
+    """Scheduled task model returned by public API methods.
+
+    The public API methods ``get_task()``, ``get_task_by_id()``, and
+    ``get_all_tasks()`` return ``Task`` objects directly.
+
+    Example::
+
+        task = scheduler.get_task("my-task")  # Returns Task
+        tasks = scheduler.get_all_tasks()     # Returns list[Task]
+
+    Attributes:
+        id (str): UUID task identifier string.
+        task_name (str): User-facing task key.
+        args (tuple[Any, ...]): Positional arguments.
+        kwargs (dict[str, Any]): Keyword arguments.
+        interval_seconds (float): Interval between consecutive task runs.
+        run_once (bool): Whether task executes only once.
+        status (str): Task status string.
+        next_run_at (datetime): Next scheduled UTC run timestamp.
+    """
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    task_name: str
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+    interval_seconds: float
+    run_once: bool
+    status: str
+    next_run_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _convert_from_task_db(cls, data: Any) -> Any:
+        """Convert TaskDB object to dict, unpickling args/kwargs."""
+        # If it's already a dict, check if args/kwargs need unpickling
+        if isinstance(data, dict):
+            for field, default in (("args", ()), ("kwargs", {})):
+                if field in data and isinstance(data[field], bytes):
+                    try:
+                        data[field] = pickle.loads(data[field])
+                    except Exception:
+                        logger.warning(
+                            f"Failed to unpickle {field}, using empty default"
+                        )
+                        data[field] = default
+            # Ensure next_run_at is UTC-aware
+            if "next_run_at" in data:
+                data["next_run_at"] = QuivModelBase.set_timezone_to_utc(
+                    data["next_run_at"]
+                )
+            return data
+
+        # If it's a TaskDB object, extract and unpickle
+        if hasattr(data, "args") and hasattr(data, "kwargs"):
+            try:
+                args = pickle.loads(data.args)
+            except Exception:
+                logger.warning("Failed to unpickle args, using empty tuple")
+                args = ()
+            try:
+                kwargs = pickle.loads(data.kwargs)
+            except Exception:
+                logger.warning("Failed to unpickle kwargs, using empty dict")
+                kwargs = {}
+
+            return {
+                "id": data.id,
+                "task_name": data.task_name,
+                "args": args,
+                "kwargs": kwargs,
+                "interval_seconds": data.interval_seconds,
+                "run_once": data.run_once,
+                "status": data.status,
+                "next_run_at": QuivModelBase.set_timezone_to_utc(
+                    data.next_run_at
+                ),
+            }
+
+        return data
 
 
 class Job(QuivModelBase, table=True):

@@ -6,6 +6,7 @@ from quiv.models import (
     Job,
     QuivModelBase,
     Task,
+    TaskDB,
     get_current_time,
     id_generator,
     next_run_time,
@@ -39,12 +40,13 @@ def test_set_timezone_to_utc_with_none() -> None:
 
 
 def test_task_model_validator_normalizes_naive_next_run() -> None:
-    task = Task(
+    task_db = TaskDB(
         task_name="demo",
         interval_seconds=10,
         next_run_at=datetime(2026, 1, 1, 12, 0, 0),
     )
-    validated = Task.model_validate(task)
+    # Convert to public Task model (which normalizes datetime)
+    validated = Task.model_validate(task_db)
     assert validated.next_run_at.tzinfo is not None
     assert validated.next_run_at.utcoffset() == timedelta(0)
 
@@ -66,15 +68,16 @@ def test_job_model_validator_normalizes_naive_fields() -> None:
 def test_task_serializes_args_kwargs_as_unpickled_values() -> None:
     import pickle
 
-    task = Task(
+    task_db = TaskDB(
         task_name="serialize-check",
         interval_seconds=60,
         args=pickle.dumps((1, "hello", [3, 4])),
         kwargs=pickle.dumps({"key": "value", "num": 42}),
     )
-    data = task.model_dump()
-    assert data["args"] == (1, "hello", [3, 4])
-    assert data["kwargs"] == {"key": "value", "num": 42}
+    # Convert to public Task model
+    task = Task.model_validate(task_db)
+    assert task.args == (1, "hello", [3, 4])
+    assert task.kwargs == {"key": "value", "num": 42}
 
     # Also verify JSON serialization works (what FastAPI uses)
     json_str = task.model_dump_json()

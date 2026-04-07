@@ -166,7 +166,7 @@ Raises:
 
 ### `get_job(job_id)`
 
-Returns a single [`Job`](#job) by its integer ID.
+Returns a single [`Job`](#job) by its UUID string.
 
 Raises:
 
@@ -174,7 +174,7 @@ Raises:
 
 ### `get_all_tasks(include_run_once=False)`
 
-Returns persisted task rows.
+Returns persisted task rows as [`Task`](#task) objects.
 
 - when `include_run_once=False`, run-once tasks are excluded
 - when `include_run_once=True`, all persisted tasks are returned
@@ -239,12 +239,27 @@ not share the main application event loop.
 
 ### `Task`
 
+Public API model returned by `get_task()`, `get_task_by_id()`, and
+`get_all_tasks()`. Use directly in FastAPI endpoints — no manual conversion
+needed.
+
+```python
+# Methods return Task directly
+task = scheduler.get_task("my-task")        # Task
+tasks = scheduler.get_all_tasks()           # list[Task]
+
+# Use directly in FastAPI endpoints
+@app.get("/tasks")
+def list_tasks():
+    return scheduler.get_all_tasks()
+```
+
 Key fields:
 
 - `id: str` — UUID identifier
-- `task_name: str` — unique name mapped to a registered handler
-- `args: bytes` — pickle-encoded positional arguments
-- `kwargs: bytes` — pickle-encoded keyword arguments
+- `task_name: str` — unique name
+- `args: tuple[Any, ...]` — positional arguments (unpickled)
+- `kwargs: dict[str, Any]` — keyword arguments (unpickled)
 - `interval_seconds: float` — seconds between runs
 - `run_once: bool` — if `True`, task runs once then is removed
 - `status: str` — `"active"`, `"running"`, or `"paused"`
@@ -255,6 +270,11 @@ Key fields:
     
     - You can safely return this from fastapi endpoints which will have a `Z` at the end to indicate UTC datetime.
     - This is the golden-standard for Browsers as they can easily parse it and display in user's timezone.
+
+!!! info "Internal TaskDB model"
+    Internally, quiv stores `args` and `kwargs` as pickle-encoded bytes in the
+    `TaskDB` model for flexibility. The public API automatically converts to
+    `Task` with unpickled values and correct types for JSON/OpenAPI.
 
 ### `Job`
 

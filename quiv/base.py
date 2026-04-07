@@ -24,7 +24,7 @@ from .exceptions import (
     HandlerRegistrationError,
 )
 from .execution import ExecutionLayer
-from .models import Event, Job, QuivModelBase, Task
+from .models import Event, Job, QuivModelBase, Task, TaskDB
 from .persistence import PersistenceLayer
 
 
@@ -133,7 +133,7 @@ class QuivBase(ABC):
         try:
             QuivModelBase.metadata.create_all(self._engine)
             with Session(self._engine) as session:
-                session.exec(select(Task).limit(1)).all()
+                session.exec(select(TaskDB).limit(1)).all()
                 session.exec(select(Job).limit(1)).all()
             self._logger.debug(
                 "Database tables created and verified successfully."
@@ -613,13 +613,14 @@ class QuivBase(ABC):
             task_name (str): Task name.
 
         Returns:
-            Task: The task record.
+            Task: The task record with unpickled args/kwargs.
 
         Raises:
             TaskNotFoundError: If no task with that name exists.
         """
 
-        return self.persistence.get_task_by_name(task_name)
+        task = self.persistence.get_task_by_name(task_name)
+        return Task.model_validate(task)
 
     def get_task_by_id(self, task_id: str) -> Task:
         """Retrieve a single task by ID.
@@ -628,13 +629,14 @@ class QuivBase(ABC):
             task_id (str): Task UUID.
 
         Returns:
-            Task: The task record.
+            Task: The task record with unpickled args/kwargs.
 
         Raises:
             TaskNotFoundError: If no task with that ID exists.
         """
 
-        return self.persistence.get_task_by_id(task_id)
+        task = self.persistence.get_task_by_id(task_id)
+        return Task.model_validate(task)
 
     def get_job(self, job_id: str) -> Job:
         """Retrieve a single job by ID.
@@ -659,12 +661,13 @@ class QuivBase(ABC):
                 Include single-run tasks when ``True``.
 
         Returns:
-            list[Task]: List of tasks.
+            list[Task]: List of tasks with unpickled args/kwargs.
         """
 
-        return self.persistence.get_all_tasks(
+        tasks = self.persistence.get_all_tasks(
             include_run_once=include_run_once
         )
+        return [Task.model_validate(t) for t in tasks]
 
     def get_all_jobs(self, status: str | None = None) -> list[Job]:
         """Retrieve persisted job records.

@@ -11,7 +11,7 @@ from .exceptions import (
     TaskNotFoundError,
     TaskNotScheduledError,
 )
-from .models import Job, JobStatus, Task, TaskStatus
+from .models import Job, JobStatus, TaskDB, TaskStatus
 
 
 class PersistenceLayer:
@@ -59,7 +59,7 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            task = Task(
+            task = TaskDB(
                 task_name=task_name,
                 interval_seconds=interval,
                 next_run_at=next_run_at,
@@ -86,12 +86,10 @@ class PersistenceLayer:
 
         with self._lock, Session(self._engine) as session:
             task = session.exec(
-                select(Task).where(Task.task_name == task_name)
+                select(TaskDB).where(TaskDB.task_name == task_name)
             ).first()
             if task is None:
-                raise TaskNotFoundError(
-                    f"Task '{task_name}' was not found"
-                )
+                raise TaskNotFoundError(f"Task '{task_name}' was not found")
             return task.id
 
     def delete_task(self, task_name: str) -> None:
@@ -106,16 +104,14 @@ class PersistenceLayer:
 
         with self._lock, Session(self._engine) as session:
             task = session.exec(
-                select(Task).where(Task.task_name == task_name)
+                select(TaskDB).where(TaskDB.task_name == task_name)
             ).first()
             if task is None:  # pragma: no cover
-                raise TaskNotFoundError(
-                    f"Task '{task_name}' was not found"
-                )
+                raise TaskNotFoundError(f"Task '{task_name}' was not found")
             session.delete(task)
             session.commit()
 
-    def get_all_tasks(self, include_run_once: bool = False) -> list[Task]:
+    def get_all_tasks(self, include_run_once: bool = False) -> list[TaskDB]:
         """Fetch all persisted tasks.
 
         Args:
@@ -123,24 +119,24 @@ class PersistenceLayer:
                 Include single-run tasks when ``True``.
 
         Returns:
-            list[Task]: A list of task records.
+            list[TaskDB]: A list of task records.
         """
 
-        statement = select(Task)
+        statement = select(TaskDB)
         if not include_run_once:
-            statement = statement.where(Task.run_once == False)
+            statement = statement.where(TaskDB.run_once == False)
         with self._lock, Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks
 
-    def get_task_by_name(self, task_name: str) -> Task:
+    def get_task_by_name(self, task_name: str) -> TaskDB:
         """Fetch a single task by name.
 
         Args:
             task_name (str): Task name to look up.
 
         Returns:
-            Task: The task record.
+            TaskDB: The task record.
 
         Raises:
             TaskNotFoundError: If no task with that name exists.
@@ -148,33 +144,29 @@ class PersistenceLayer:
 
         with self._lock, Session(self._engine) as session:
             task = session.exec(
-                select(Task).where(Task.task_name == task_name)
+                select(TaskDB).where(TaskDB.task_name == task_name)
             ).first()
             if task is None:
-                raise TaskNotFoundError(
-                    f"Task '{task_name}' was not found"
-                )
+                raise TaskNotFoundError(f"Task '{task_name}' was not found")
             return task
 
-    def get_task_by_id(self, task_id: str) -> Task:
+    def get_task_by_id(self, task_id: str) -> TaskDB:
         """Fetch a single task by ID.
 
         Args:
             task_id (str): Task UUID to look up.
 
         Returns:
-            Task: The task record.
+            TaskDB: The task record.
 
         Raises:
             TaskNotFoundError: If no task with that ID exists.
         """
 
         with self._lock, Session(self._engine) as session:
-            task = session.get(Task, task_id)
+            task = session.get(TaskDB, task_id)
             if task is None:
-                raise TaskNotFoundError(
-                    f"Task '{task_id}' was not found"
-                )
+                raise TaskNotFoundError(f"Task '{task_id}' was not found")
             return task
 
     def get_job(self, job_id: str) -> Job:
@@ -193,9 +185,7 @@ class PersistenceLayer:
         with self._lock, Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
-                raise JobNotFoundError(
-                    f"Job '{job_id}' was not found"
-                )
+                raise JobNotFoundError(f"Job '{job_id}' was not found")
             return job
 
     def get_all_jobs(self, status: str | None = None) -> list[Job]:
@@ -229,7 +219,7 @@ class PersistenceLayer:
 
         with self._lock, Session(self._engine) as session:
             tasks = session.exec(
-                select(Task).where(Task.task_name == task_name)
+                select(TaskDB).where(TaskDB.task_name == task_name)
             ).all()
             if not tasks:
                 raise TaskNotScheduledError(
@@ -254,7 +244,7 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            task = session.get(Task, task_id)
+            task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.PAUSED
@@ -272,7 +262,7 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            task = session.get(Task, task_id)
+            task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.ACTIVE
@@ -299,19 +289,19 @@ class PersistenceLayer:
                 session.delete(job)
             session.commit()
 
-    def get_due_tasks(self, now: datetime) -> list[Task]:
+    def get_due_tasks(self, now: datetime) -> list[TaskDB]:
         """Return tasks that are due for execution.
 
         Args:
             now (datetime): Current UTC timestamp used for due comparison.
 
         Returns:
-            list[Task]: A list of active due tasks.
+            list[TaskDB]: A list of active due tasks.
         """
 
         with self._lock, Session(self._engine) as session:
-            statement = select(Task).where(Task.next_run_at <= now)
-            statement = statement.where(Task.status == TaskStatus.ACTIVE)
+            statement = select(TaskDB).where(TaskDB.next_run_at <= now)
+            statement = statement.where(TaskDB.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
 
     def create_job(self, task_id: str) -> str:
@@ -341,7 +331,7 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            existing = session.get(Task, task_id)
+            existing = session.get(TaskDB, task_id)
             if existing is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             existing.status = TaskStatus.RUNNING
@@ -358,7 +348,7 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            existing = session.get(Task, task_id)
+            existing = session.get(TaskDB, task_id)
             if existing is None:
                 return  # run-once task already deleted, or task was removed
             if existing.run_once:
