@@ -71,9 +71,9 @@ Do not mix `config=...` with direct constructor config args. See [Quiv API](./ap
 
 ```python
 def my_task(
-    _job_id: str | None=None,
-    _stop_event: threading.Event | None=None,
-    _progress_hook: Callable | None=None
+    _job_id: str | None = None,
+    _stop_event: threading.Event | None = None,
+    _progress_hook: Callable | None = None,
 ):
     total = 5
     for step in range(1, total + 1):
@@ -103,8 +103,8 @@ created per invocation, so they do not block the scheduler or main loop.
 import httpx
 
 async def poll_api(
-    _stop_event: threading.Event | None=None,
-    _progress_hook: Callable | None=None
+    _stop_event: threading.Event | None = None,
+    _progress_hook: Callable | None = None,
 ):
     async with httpx.AsyncClient() as client:
         # example of doing some async work

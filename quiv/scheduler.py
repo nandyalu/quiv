@@ -93,8 +93,18 @@ class Quiv(QuivBase):
                 " remove_task() first if you want to replace it."
             )
 
-        resolved_args = args or ()
-        resolved_kwargs = kwargs or {}
+        resolved_args = args if args is not None else ()
+        resolved_kwargs = kwargs if kwargs is not None else {}
+
+        if not isinstance(resolved_args, tuple):
+            raise ConfigurationError(
+                f"args must be a tuple, got {type(resolved_args).__name__}"
+            )
+        if not isinstance(resolved_kwargs, dict):
+            raise ConfigurationError(
+                f"kwargs must be a dict, got {type(resolved_kwargs).__name__}"
+            )
+
         try:
             args_pickled = pickle.dumps(resolved_args)
         except Exception as e:
@@ -107,15 +117,6 @@ class Quiv(QuivBase):
             raise ConfigurationError(
                 f"Failed to serialize task kwargs: {e}"
             ) from e
-
-        if not isinstance(resolved_args, tuple):
-            raise ConfigurationError(
-                f"args must be a tuple, got {type(resolved_args).__name__}"
-            )
-        if not isinstance(resolved_kwargs, dict):
-            raise ConfigurationError(
-                f"kwargs must be a dict, got {type(resolved_kwargs).__name__}"
-            )
 
         self._register_handler(task_name, func)
         self._register_progress_callback(task_name, progress_callback)
