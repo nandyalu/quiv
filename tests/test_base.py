@@ -286,6 +286,26 @@ def test_sync_progress_callback_error_without_event_loop(
         scheduler.shutdown()
 
 
+def test_async_progress_callback_error_without_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Async callback error in temp loop is caught and logged."""
+    scheduler = Quiv()  # No main_loop
+
+    async def bad_async_callback(*_args, **_kwargs) -> None:
+        raise RuntimeError("async boom")
+
+    try:
+        scheduler._register_progress_callback("bad-async", bad_async_callback)
+        with caplog.at_level("ERROR", logger="Quiv"):
+            scheduler.run_progress_callback("bad-async", 1)
+        assert any(
+            "async boom" in r.message for r in caplog.records
+        ), "Expected error log from failing async callback in temp loop"
+    finally:
+        scheduler.shutdown()
+
+
 def test_cancel_job_returns_true_when_stop_event_exists(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

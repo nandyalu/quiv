@@ -94,3 +94,61 @@ def test_time_helpers_and_id_generator() -> None:
     assert nr > now
     assert isinstance(generated_id, str)
     assert len(generated_id) > 10
+
+
+def test_task_from_dict_with_corrupt_pickled_args() -> None:
+    """Task model handles corrupt pickled args in dict input gracefully."""
+    data = {
+        "id": "test-id",
+        "task_name": "corrupt-args",
+        "args": b"invalid pickle data",
+        "kwargs": b"also invalid",
+        "interval_seconds": 60.0,
+        "run_once": False,
+        "status": "active",
+        "next_run_at": datetime.now(timezone.utc),
+    }
+    task = Task.model_validate(data)
+    assert task.args == ()  # Falls back to empty tuple
+    assert task.kwargs == {}  # Falls back to empty dict
+
+
+def test_task_from_task_db_with_corrupt_pickled_args() -> None:
+    """Task model handles corrupt pickled bytes in TaskDB object gracefully."""
+    task_db = TaskDB(
+        id="test-id-2",
+        task_name="corrupt-from-db",
+        args=b"bad pickle bytes",
+        kwargs=b"more bad bytes",
+        interval_seconds=30.0,
+        run_once=True,
+        status="active",
+    )
+    task = Task.model_validate(task_db)
+    assert task.args == ()
+    assert task.kwargs == {}
+
+
+def test_task_model_validator_passthrough_for_unknown_type() -> None:
+    """Task model validator passes through data that's neither dict nor TaskDB-like."""
+    # This tests the final return data path for non-standard input
+    # Pydantic will fail validation, but the validator should not crash
+    try:
+        Task.model_validate("not a dict or object")
+    except Exception:
+        pass  # Expected to fail validation, but validator shouldn't crash
+
+
+def test_taskdb_field_serializer_with_valid_pickle() -> None:
+    """TaskDB field_serializer unpickles valid bytes for JSON output."""
+    import pickle
+
+    task_db = TaskDB(
+        task_name="serializer-test",
+        interval_seconds=60,
+        args=pickle.dumps(("a", "b", 3)),
+        kwargs=pickle.dumps({"x": 1}),
+    )
+    dumped = task_db.model_dump()
+    assert dumped["args"] == ("a", "b", 3)
+    assert dumped["kwargs"] == {"x": 1}

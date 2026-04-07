@@ -391,3 +391,23 @@ def test_async_listener_runs_without_event_loop() -> None:
         ), "Async listener should have been called via temporary event loop"
     finally:
         scheduler.shutdown()
+
+
+def test_async_listener_error_without_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Async listener error in temp loop is caught and logged."""
+    scheduler = Quiv()  # No main_loop
+
+    async def bad_listener(event: Event, data: dict[str, Any]) -> None:
+        raise RuntimeError("listener boom")
+
+    try:
+        scheduler.add_listener(Event.TASK_ADDED, bad_listener)
+        with caplog.at_level("ERROR", logger="Quiv"):
+            scheduler.add_task("bad-listener-task", lambda: None, interval=60)
+        assert any(
+            "listener boom" in r.message for r in caplog.records
+        ), "Expected error log from failing async listener in temp loop"
+    finally:
+        scheduler.shutdown()

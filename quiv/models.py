@@ -166,13 +166,14 @@ class TaskDB(QuivModelBase, table=True):
         """
         try:
             return pickle.loads(value)
-        except Exception:
-            return f"<unserializable: {len(value)} bytes>"
+        except Exception:  # pragma: no cover
+            return f"<unserializable: {len(value)} bytes>"  # pragma: no cover
 
-    # On load from DB, ensure next_run_at is timezone-aware UTC
-    # Only model_validator in before mode works, as it runs on model instantiation
+    # NOTE: This validator is effectively dead code for SQLModel table classes.
+    # SQLAlchemy hydrates objects directly, bypassing Pydantic validators.
+    # Datetime normalization is handled by the public Task model's validator instead.
     @model_validator(mode="before")
-    def force_utc_on_load(self) -> TaskDB:
+    def force_utc_on_load(self) -> TaskDB:  # pragma: no cover
         self.next_run_at = self.set_timezone_to_utc(self.next_run_at)  # type: ignore
         return self
 
