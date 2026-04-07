@@ -12,7 +12,7 @@ from quiv.exceptions import (
     TaskNotFoundError,
     TaskNotScheduledError,
 )
-from quiv.models import Job, JobStatus, Task
+from quiv.models import Job, JobStatus, TaskDB
 
 
 def test_queue_task_for_immediate_run_raises_for_missing_task(
@@ -160,7 +160,7 @@ def test_get_all_jobs_status_filter_and_task_filter(
 
         with Session(scheduler._engine) as session:
             fetched = session.exec(
-                select(Task).where(Task.id == recurring_id)
+                select(TaskDB).where(TaskDB.id == recurring_id)
             ).one_or_none()
             assert fetched is not None
     finally:

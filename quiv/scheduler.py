@@ -11,7 +11,7 @@ from typing import Any, Callable
 from .base import QuivBase
 from .config import QuivConfig
 from .exceptions import ConfigurationError
-from .models import Event, JobStatus, Task
+from .models import Event, JobStatus, TaskDB
 
 
 class Quiv(QuivBase):
@@ -196,7 +196,9 @@ class Quiv(QuivBase):
                 if self._active_job_count < self._pool_size:
                     due_tasks = self.persistence.get_due_tasks(now)
                     for task in due_tasks:
-                        if self._active_job_count >= self._pool_size:  # pragma: no cover
+                        if (
+                            self._active_job_count >= self._pool_size
+                        ):  # pragma: no cover
                             break
                         self._dispatch_due_task(task, now)
 
@@ -206,11 +208,11 @@ class Quiv(QuivBase):
                 self._logger.error(f"Error in scheduler loop: {e}")
                 time.sleep(5)
 
-    def _dispatch_due_task(self, task: Task, now: datetime) -> None:
+    def _dispatch_due_task(self, task: TaskDB, now: datetime) -> None:
         """Create and dispatch execution for a due task.
 
         Args:
-            task (Task): Task record due for execution.
+            task (TaskDB): Task record due for execution.
             now (datetime): Current UTC timestamp.
         """
 

@@ -13,7 +13,7 @@ from quiv.exceptions import (
     HandlerNotRegisteredError,
     TaskNotScheduledError,
 )
-from quiv.models import JobStatus, Task
+from quiv.models import JobStatus
 
 
 def test_quiv_config_conflict_raises(
@@ -129,9 +129,6 @@ def test_get_all_tasks_returns_utc_aware_next_run(
             task_name="aware-check", func=lambda: None, interval=60
         )
         tasks = scheduler.get_all_tasks(include_run_once=True)
-        print(tasks[0].model_dump())
-        print(Task(**tasks[0].model_dump()))
-        print(Task.model_validate(tasks[0]))
         task = next(item for item in tasks if item.task_name == "aware-check")
         assert task.next_run_at.tzinfo is not None
         offset = task.next_run_at.utcoffset()
@@ -373,9 +370,10 @@ def test_dispatch_due_task_logs_next_run_for_recurring_task(
             run_once=False,
         )
         assert task_id is not None
+        # Use internal persistence to get raw TaskDB (not public Task)
         task = next(
             item
-            for item in scheduler.get_all_tasks(include_run_once=True)
+            for item in scheduler.persistence.get_all_tasks(include_run_once=True)
             if item.id == task_id
         )
         scheduler._dispatch_due_task(task, scheduler._now_utc())
