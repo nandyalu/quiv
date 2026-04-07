@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import pickle
 import threading
 from typing import cast
 from typing import Any
@@ -28,8 +29,8 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
     args, kwargs = layer.prepare_invocation(
         task_name="demo",
         func=handler,
-        args_json="[]",
-        kwargs_json="{}",
+        args_pickled=pickle.dumps(()),
+        kwargs_pickled=pickle.dumps({}),
         stop_event=stop_event,
     )
 
@@ -84,8 +85,8 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
     args, kwargs = layer.prepare_invocation(
         task_name="no-hooks",
         func=handler,
-        args_json="[1]",
-        kwargs_json="{}",
+        args_pickled=pickle.dumps((1,)),
+        kwargs_pickled=pickle.dumps({}),
         stop_event=threading.Event(),
     )
 

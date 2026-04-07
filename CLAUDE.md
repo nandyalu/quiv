@@ -42,7 +42,7 @@ The library has a layered design with four core modules:
 
 - **`persistence.py`** (`PersistenceLayer`) — All SQLModel/SQLAlchemy database operations. Task CRUD (`create_task`/`delete_task`), task lifecycle (`mark_task_running`/`finalize_task_after_job`), job lifecycle transitions, due-task queries, history cleanup (SQL-level, runs every 60s). Uses `col()` wrapper for typed SQLModel WHERE clauses. Thread-safe via `threading.Lock`.
 
-- **`execution.py`** (`ExecutionLayer`) — Invocation preparation and callable dispatch. Introspects handler signatures to conditionally inject `_stop_event` and `_progress_hook` kwargs. Handles both sync and async callables. `prepare_invocation()` deserializes JSON args back into a `tuple` (not list) to preserve the type contract from `add_task()`.
+- **`execution.py`** (`ExecutionLayer`) — Invocation preparation and callable dispatch. Introspects handler signatures to conditionally inject `_stop_event` and `_progress_hook` kwargs. Handles both sync and async callables. `prepare_invocation()` deserializes pickled args back into a `tuple` to preserve the type contract from `add_task()`.
 
 - **`models.py`** — `Task` and `Job` SQLModel table classes with a private `quiv_registry` to isolate metadata from user models. `TaskStatus`/`JobStatus` are `str, Enum` enums. Model validators force UTC on datetime fields loaded from SQLite.
 
@@ -62,7 +62,7 @@ The library has a layered design with four core modules:
 - **Task lifecycle**: On dispatch, task status is set to `RUNNING` preventing concurrent runs. On job completion (or failure), `finalize_task_after_job` sets status back to `ACTIVE` and bumps `next_run_at = now + interval`. For run-once tasks, the task row is deleted instead.
 - **Backpressure**: Scheduler skips dispatching when `_active_job_count >= pool_size` (protected by `_job_count_lock`). Deferred tasks stay in DB and are picked up on the next tick. Jobs that start late log a warning with the delay.
 - **Cancellation**: `cancel_job()` sets the stop event in `self.stop_events`. `_run_job` checks this dict directly (not `kwargs`) so cancellation is detected even if the handler doesn't accept `_stop_event`.
-- **Args as tuples**: `add_task()` accepts `args` as a `tuple` (not list) to preserve ordering intent. Args are JSON-serialized for persistence; `ExecutionLayer.prepare_invocation()` converts the deserialized list back to a `tuple` before passing to the handler.
+- **Args as tuples**: `add_task()` accepts `args` as a `tuple` (not list) to preserve ordering intent. Args are pickle-serialized for persistence; `ExecutionLayer.prepare_invocation()` unpickles and wraps them in a `tuple` before passing to the handler.
 - **Logging**: The library does not set log levels. The `logger` parameter accepts `logging.Logger` or `logging.LoggerAdapter[Any]`. Applications configure the `"Quiv"` logger themselves.
 
 ## Testing

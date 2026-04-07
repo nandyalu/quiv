@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import pickle
 import uuid
 import logging
 
@@ -110,8 +111,8 @@ class Task(QuivModelBase, table=True):
         id (str, UUID): UUID task identifier string.
         task_name (str):
             Unique User-facing task key mapped to a registered handler.
-        args (str): JSON-encoded positional arguments.
-        kwargs (str): JSON-encoded keyword arguments.
+        args (bytes): Pickle-encoded positional arguments.
+        kwargs (bytes): Pickle-encoded keyword arguments.
         interval_seconds (float): Interval between consecutive task runs.
         run_once (bool): Whether task should execute only once.
         status (str): Task status string.
@@ -122,8 +123,8 @@ class Task(QuivModelBase, table=True):
 
     id: str = Field(default_factory=id_generator, primary_key=True)
     task_name: str
-    args: str = "[]"
-    kwargs: str = "{}"
+    args: bytes = Field(default_factory=lambda: pickle.dumps(()))
+    kwargs: bytes = Field(default_factory=lambda: pickle.dumps({}))
     interval_seconds: float
     run_once: bool = False
     status: str = TaskStatus.ACTIVE
