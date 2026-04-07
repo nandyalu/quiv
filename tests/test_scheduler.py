@@ -480,7 +480,7 @@ def test_late_start_warning_logged_when_pool_busy(
 
         with caplog.at_level("WARNING", logger="Quiv"):
             scheduler._run_job(
-                job_id=scheduler.persistence.create_job(task.id),
+                job_id=scheduler.persistence.create_job(task.id, "late-task"),
                 task_id=task.id,
                 task_name="late-task",
                 run_once=True,

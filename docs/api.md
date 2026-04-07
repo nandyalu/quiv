@@ -289,6 +289,7 @@ Key fields:
 
 - `id: str` — UUID identifier
 - `task_id: str` — foreign key to source task
+- `task_name: str` — name of the task that spawned this job
 - `status: str` — lifecycle status
 - `started_at: datetime` — UTC-aware start timestamp
 - `ended_at: datetime | None` — UTC-aware end timestamp

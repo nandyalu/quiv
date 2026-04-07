@@ -31,7 +31,7 @@ def test_set_timezone_to_utc_converts_aware_datetime() -> None:
 
 
 def test_job_validator_handles_none_end_time() -> None:
-    job = Job(task_id="task-1", ended_at=None)
+    job = Job(task_id="task-1", task_name="test-task", ended_at=None)
     assert job.ended_at is None
 
 
@@ -54,6 +54,7 @@ def test_task_model_validator_normalizes_naive_next_run() -> None:
 def test_job_model_validator_normalizes_naive_fields() -> None:
     job = Job(
         task_id="task-1",
+        task_name="test-task",
         started_at=datetime(2026, 1, 1, 0, 0, 0),
         ended_at=datetime(2026, 1, 1, 0, 0, 2),
     )

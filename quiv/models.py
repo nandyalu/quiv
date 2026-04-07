@@ -269,6 +269,7 @@ class Job(QuivModelBase, table=True):
         __tablename__ (str): Database table name for jobs.
         id (str, UUID): UUID job identifier string.
         task_id (str): Foreign key to the source task.
+        task_name (str): Name of the task that spawned this job.
         status (str): Job status string.
         started_at (datetime): UTC start timestamp.
         ended_at (datetime, Optional=None): UTC end timestamp when available.
@@ -278,6 +279,7 @@ class Job(QuivModelBase, table=True):
 
     id: str = Field(default_factory=id_generator, primary_key=True)
     task_id: str = Field(foreign_key="quiv_task.id")
+    task_name: str
     status: str = JobStatus.SCHEDULED
     started_at: datetime = Field(default_factory=get_current_time)
     ended_at: datetime | None = None
