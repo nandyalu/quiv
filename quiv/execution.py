@@ -69,6 +69,7 @@ class ExecutionLayer:
         args_pickled: bytes,
         kwargs_pickled: bytes,
         stop_event: Any,
+        job_id: str,
     ) -> tuple[tuple[Any, ...], dict[str, Any]]:
         """Prepare runtime invocation arguments for a task handler.
 
@@ -78,6 +79,7 @@ class ExecutionLayer:
             args_pickled (bytes): Pickle-encoded positional arguments.
             kwargs_pickled (bytes): Pickle-encoded keyword arguments.
             stop_event (Any): Cancellation event to inject when supported.
+            job_id (str): Job identifier (UUID string) to inject when supported.
 
         Returns:
             tuple[tuple, dict]: A tuple with decoded positional args and kwargs.
@@ -85,6 +87,9 @@ class ExecutionLayer:
 
         f_args = tuple(pickle.loads(args_pickled))
         f_kwargs = pickle.loads(kwargs_pickled)
+
+        if self._accepts_keyword_arg(func, "_job_id"):
+            f_kwargs["_job_id"] = job_id
 
         if self._accepts_keyword_arg(func, "_stop_event"):
             f_kwargs["_stop_event"] = stop_event

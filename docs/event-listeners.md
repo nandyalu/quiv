@@ -74,7 +74,7 @@ async def my_listener(event: Event, data: dict[str, Any]) -> None:
 
 - `task_name` (`str`) — the name of the task
 - `task_id` (`str`) — the UUID of the task
-- `job_id` (`int`) — the integer job ID
+- `job_id` (`str`) — the UUID job ID
 - `duration` (`timedelta`) — how long the job ran
 - `error` (`BaseException`) — the exception that caused the failure (only on `JOB_FAILED`)
 

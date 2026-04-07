@@ -167,7 +167,7 @@ class Job(QuivModelBase, table=True):
 
     Attributes:
         __tablename__ (str): Database table name for jobs.
-        id (int, Optional=None): Auto-incrementing job identifier.
+        id (str, UUID): UUID job identifier string.
         task_id (str): Foreign key to the source task.
         status (str): Job status string.
         started_at (datetime): UTC start timestamp.
@@ -176,7 +176,7 @@ class Job(QuivModelBase, table=True):
 
     __tablename__: str = "quiv_job"  # type: ignore
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: str = Field(default_factory=id_generator, primary_key=True)
     task_id: str = Field(foreign_key="quiv_task.id")
     status: str = JobStatus.SCHEDULED
     started_at: datetime = Field(default_factory=get_current_time)

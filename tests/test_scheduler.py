@@ -128,6 +128,34 @@ def test_run_once_sync_task_executes_and_creates_completed_job(
         scheduler.shutdown()
 
 
+def test_job_id_injected_into_handler(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    finished = threading.Event()
+    received_job_id: dict[str, str | None] = {"value": None}
+
+    def handler(_job_id: str | None = None) -> None:
+        received_job_id["value"] = _job_id
+        finished.set()
+
+    try:
+        scheduler.add_task(
+            task_name="job-id-inject",
+            func=handler,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+        scheduler.start()
+        assert finished.wait(timeout=3)
+        assert received_job_id["value"] is not None
+        assert isinstance(received_job_id["value"], str)
+        assert len(received_job_id["value"]) == 36  # UUID format
+    finally:
+        scheduler.shutdown()
+
+
 def test_run_once_async_task_executes(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

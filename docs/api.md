@@ -223,6 +223,7 @@ the call is silently ignored.
 
 When a task is dispatched, `quiv` inspects handler signatures:
 
+- injects `_job_id` (`str`, UUID) only if accepted
 - injects `_stop_event` (`threading.Event`) only if accepted
 - injects `_progress_hook` (callable) only if accepted
 
@@ -257,7 +258,7 @@ Key fields:
 
 Key fields:
 
-- `id: int` — auto-incrementing identifier
+- `id: str` — UUID identifier
 - `task_id: str` — foreign key to source task
 - `status: str` — lifecycle status
 - `started_at: datetime` — UTC-aware start timestamp

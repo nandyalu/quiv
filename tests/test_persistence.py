@@ -56,9 +56,9 @@ def test_mark_and_finalize_missing_job_raise(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(JobNotFoundError):
-            scheduler.persistence.mark_job_running(999999)
+            scheduler.persistence.mark_job_running("nonexistent-job-id")
         with pytest.raises(JobNotFoundError):
-            scheduler.persistence.finalize_job(999999, JobStatus.COMPLETED)
+            scheduler.persistence.finalize_job("nonexistent-job-id", JobStatus.COMPLETED)
     finally:
         scheduler.shutdown()
 

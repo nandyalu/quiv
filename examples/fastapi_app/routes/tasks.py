@@ -48,7 +48,7 @@ def list_jobs(status: str | None = None):
 
 
 @router.post("/jobs/{job_id}/cancel")
-def cancel_job(job_id: int):
+def cancel_job(job_id: str):
     """Cancel a running job."""
     cancelled = scheduler.cancel_job(job_id)
     if not cancelled:

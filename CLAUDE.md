@@ -52,7 +52,7 @@ The library has a layered design with four core modules:
 
 ### Key patterns
 
-- **Handler injection**: `_stop_event` and `_progress_hook` are only injected if the handler's signature accepts them (checked via `inspect.signature`).
+- **Handler injection**: `_job_id`, `_stop_event`, and `_progress_hook` are only injected if the handler's signature accepts them (checked via `inspect.signature`).
 - **Async bridge**: Async handlers run in thread-local event loops created per invocation. Progress callbacks are dispatched to the main loop via `run_coroutine_threadsafe` or `call_soon_threadsafe`.
 - **Lazy event loop resolution**: `_main_loop` is `None` at init and lazily resolved via `_resolve_main_loop()` on first progress callback dispatch. This allows module-level `Quiv()` instantiation before an asyncio loop exists (common in FastAPI apps). Without an event loop, sync progress callbacks run directly on the worker thread; async progress callbacks are skipped with a warning.
 - **Database lifecycle**: Each `Quiv` instance creates a temp SQLite file (WAL mode); `shutdown()` disposes the engine and deletes the file along with `-wal` and `-shm` sidecar files.
