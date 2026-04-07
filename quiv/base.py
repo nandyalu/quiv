@@ -511,6 +511,8 @@ class QuivBase(ABC):
 
     def start(self) -> None:
         """Start the scheduler background thread."""
+        if self._main_loop is None:
+            self._resolve_main_loop()  # pragma: no cover
         if not self.thread.is_alive():
             self.thread.start()
         return None
