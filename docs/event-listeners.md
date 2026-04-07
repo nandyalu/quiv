@@ -22,7 +22,7 @@ flowchart TD
     on main loop"]
     E -- No --> H["call_soon_threadsafe()
     on main loop"]
-    F -- Yes --> I["Skip with warning log"]
+    F -- Yes --> I["Run in temporary event loop"]
     F -- No --> J["Call directly on
     calling thread"]
 ```
@@ -34,7 +34,7 @@ flowchart TD
 | Available | Async | Dispatched via `run_coroutine_threadsafe` on the main loop |
 | Available | Sync | Dispatched via `call_soon_threadsafe` on the main loop |
 | Unavailable | Sync | Called directly on the calling thread |
-| Unavailable | Async | Skipped with a warning log |
+| Unavailable | Async | Run in a temporary event loop on the calling thread |
 
 ## Events
 
@@ -181,8 +181,9 @@ scheduler.add_task("my-task", lambda: None, interval=10)
 # Prints: Added: my-task
 ```
 
-Async listeners are skipped with a warning log when no event loop is
-available, since there is no loop to dispatch them on.
+Async listeners also work in this scenario — they run in a temporary event
+loop on the calling thread, so `await` calls inside the listener execute
+correctly.
 
 ## FastAPI example
 
