@@ -216,7 +216,7 @@ class Quiv(QuivBase):
             now (datetime): Current UTC timestamp.
         """
 
-        job_id = self.persistence.create_job(task.id)
+        job_id = self.persistence.create_job(task.id, task.task_name)
         stop_event = threading.Event()
         self.stop_events[job_id] = stop_event
 

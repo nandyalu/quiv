@@ -304,18 +304,19 @@ class PersistenceLayer:
             statement = statement.where(TaskDB.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
 
-    def create_job(self, task_id: str) -> str:
+    def create_job(self, task_id: str, task_name: str) -> str:
         """Create a scheduled job record for a task.
 
         Args:
             task_id (str): Source task identifier.
+            task_name (str): Name of the task.
 
         Returns:
             str: Newly created job id (UUID string).
         """
 
         with self._lock, Session(self._engine) as session:
-            job = Job(task_id=task_id, status=JobStatus.SCHEDULED)
+            job = Job(task_id=task_id, task_name=task_name, status=JobStatus.SCHEDULED)
             session.add(job)
             session.commit()
             return job.id

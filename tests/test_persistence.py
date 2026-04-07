@@ -94,10 +94,10 @@ def test_cleanup_history_deletes_old_finished_jobs(
         )
         assert task_id is not None
 
-        old_job_id = scheduler.persistence.create_job(task_id)
+        old_job_id = scheduler.persistence.create_job(task_id, "history-cleanup")
         scheduler.persistence.finalize_job(old_job_id, JobStatus.COMPLETED)
 
-        new_job_id = scheduler.persistence.create_job(task_id)
+        new_job_id = scheduler.persistence.create_job(task_id, "history-cleanup")
         scheduler.persistence.finalize_job(new_job_id, JobStatus.COMPLETED)
 
         with Session(scheduler._engine) as session:
@@ -135,11 +135,11 @@ def test_get_all_jobs_status_filter_and_task_filter(
         assert recurring_id is not None
         assert run_once_id is not None
 
-        first_job = scheduler.persistence.create_job(recurring_id)
+        first_job = scheduler.persistence.create_job(recurring_id, "jobs-filter-recurring")
         scheduler.persistence.mark_job_running(first_job)
         scheduler.persistence.finalize_job(first_job, JobStatus.COMPLETED)
 
-        second_job = scheduler.persistence.create_job(run_once_id)
+        second_job = scheduler.persistence.create_job(run_once_id, "jobs-filter-run-once")
         scheduler.persistence.mark_job_running(second_job)
         scheduler.persistence.finalize_job(second_job, JobStatus.FAILED)
 
