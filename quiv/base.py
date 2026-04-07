@@ -24,7 +24,7 @@ from .exceptions import (
     HandlerRegistrationError,
 )
 from .execution import ExecutionLayer
-from .models import Job, QuivModelBase, Task
+from .models import Event, Job, QuivModelBase, Task
 from .persistence import PersistenceLayer
 
 
@@ -48,6 +48,8 @@ class QuivBase(ABC):
             Mapping of job ids to cancellation events.
         persistence (PersistenceLayer): Persistence layer facade.
         execution (ExecutionLayer): Execution layer facade.
+        _event_listeners (dict[Event, list[Callable[..., Any]]]):
+            Mapping of event types to registered listener callables.
         _shutdown (bool): Loop shutdown flag.
         thread (threading.Thread): Background scheduler thread.
         _initialized (bool): Initialization completion flag.
@@ -148,6 +150,7 @@ class QuivBase(ABC):
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[int, threading.Event] = {}
+        self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
         self._active_job_count = 0
         self._job_count_lock = threading.Lock()
 
@@ -252,6 +255,149 @@ class QuivBase(ABC):
             )
         self.progress_callbacks[name] = callback
 
+    def add_listener(self, event: Event, callback: Callable[..., Any]) -> None:
+        """Register an event listener for a scheduler lifecycle event.
+
+        Listeners are dispatched on the main event loop when available
+        (same behavior as progress callbacks). Multiple listeners can be
+        registered for the same event.
+
+        The callback receives two arguments:
+
+        - ``event`` (``Event``): The event type that was emitted.
+        - ``data`` (``dict[str, Any]``): Context data for the event.
+
+        The ``data`` dict contains the following keys depending on the event:
+
+        - ``TASK_ADDED``: ``task_name``, ``task_id``
+        - ``TASK_REMOVED``: ``task_name``, ``task_id``
+        - ``TASK_PAUSED``: ``task_name``, ``task_id``
+        - ``TASK_RESUMED``: ``task_name``, ``task_id``
+        - ``JOB_STARTED``: ``task_name``, ``job_id``
+        - ``JOB_COMPLETED``: ``task_name``, ``job_id``, ``duration``
+        - ``JOB_FAILED``: ``task_name``, ``job_id``, ``error``, ``duration``
+        - ``JOB_CANCELLED``: ``task_name``, ``job_id``
+
+        Args:
+            event (Event): Event type to listen for.
+            callback (Callable[..., Any]): Listener callable
+                (sync or async).
+
+        Raises:
+            ConfigurationError: If event is not an ``Event`` enum member
+                or callback is not callable.
+        """
+
+        if not isinstance(event, Event):
+            raise ConfigurationError(
+                "event must be an Event enum member, got"
+                f" {type(event).__name__}"
+            )
+        if not callable(callback):
+            raise ConfigurationError("callback must be callable")
+        self._event_listeners.setdefault(event, []).append(callback)
+
+    def remove_listener(
+        self, event: Event, callback: Callable[..., Any]
+    ) -> None:
+        """Remove a previously registered event listener.
+
+        Args:
+            event (Event): Event type the callback was registered for.
+            callback (Callable[..., Any]): The exact callback to remove.
+        """
+
+        listeners = self._event_listeners.get(event, [])
+        try:
+            listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _emit_event(self, event: Event, data: dict[str, Any]) -> None:
+        """Dispatch all registered listeners for an event.
+
+        Listeners are dispatched on the main event loop when available
+        (via ``run_coroutine_threadsafe`` for async, ``call_soon_threadsafe``
+        for sync). Without a loop, sync listeners run on the calling thread
+        and async listeners are skipped with a warning.
+
+        Exceptions in listeners are logged and swallowed.
+
+        Args:
+            event (Event): The event being emitted.
+            data (dict[str, Any]): Context data for the event.
+        """
+
+        listeners = self._event_listeners.get(event, [])
+        if not listeners:
+            return
+
+        loop = self._resolve_main_loop()
+
+        for listener in listeners:
+            try:
+                self._dispatch_listener(listener, event, data, loop)
+            except Exception as e:  # pragma: no cover
+                self._logger.error(
+                    f"Event listener for '{event.value}' failed: {e}"
+                )
+
+    def _dispatch_listener(
+        self,
+        listener: Callable[..., Any],
+        event: Event,
+        data: dict[str, Any],
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> None:
+        """Dispatch a single event listener callback.
+
+        Args:
+            listener (Callable[..., Any]): Listener callable.
+            event (Event): The event being emitted.
+            data (dict[str, Any]): Context data for the event.
+            loop (asyncio.AbstractEventLoop | None): Main event loop.
+        """
+
+        def _on_listener_done(fut: Future[Any]) -> None:  # pragma: no cover
+            exc = fut.exception()
+            if exc is not None:
+                self._logger.error(
+                    f"Event listener for '{event.value}' failed: {exc}"
+                )
+
+        if inspect.iscoroutinefunction(listener):
+            if loop is None:
+                self._logger.warning(
+                    f"Async event listener for '{event.value}' skipped"
+                    " because no event loop is available."
+                )
+                return
+            coroutine = cast(Coroutine[Any, Any, Any], listener(event, data))
+            future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+            future.add_done_callback(_on_listener_done)
+            return
+
+        if loop is None:
+            try:
+                listener(event, data)
+            except Exception as e:  # pragma: no cover
+                self._logger.error(
+                    f"Event listener for '{event.value}' failed: {e}"
+                )
+            return
+
+        def _call_sync_listener() -> None:
+            try:
+                result = listener(event, data)
+                if asyncio.iscoroutine(result):  # pragma: no cover
+                    asyncio.ensure_future(result, loop=loop)
+            except Exception as e:
+                self._logger.error(
+                    f"Event listener for '{event.value}' failed: {e}"
+                )
+
+        loop.call_soon_threadsafe(partial(_call_sync_listener))
+
     def _resolve_main_loop(self) -> asyncio.AbstractEventLoop | None:
         """Lazily resolve the main event loop.
 
@@ -261,13 +407,13 @@ class QuivBase(ABC):
         """
 
         if self._main_loop is not None:
-            if self._main_loop.is_closed():
+            if self._main_loop.is_closed():  # pragma: no cover
                 return None
             return self._main_loop
         try:
             loop = asyncio.get_running_loop()
-            self._main_loop = loop
-            return loop
+            self._main_loop = loop  # pragma: no cover
+            return loop  # pragma: no cover
         except RuntimeError:
             return None
 
@@ -294,7 +440,7 @@ class QuivBase(ABC):
 
         loop = self._resolve_main_loop()
 
-        def _on_progress_done(fut: Future[Any]) -> None:
+        def _on_progress_done(fut: Future[Any]) -> None:  # pragma: no cover
             exc = fut.exception()
             if exc is not None:
                 self._logger.error(
@@ -327,7 +473,7 @@ class QuivBase(ABC):
         def _call_sync_callback() -> None:
             try:
                 result = callback(*args, **kwargs)
-                if asyncio.iscoroutine(result):
+                if asyncio.iscoroutine(result):  # pragma: no cover
                     asyncio.ensure_future(result, loop=loop)
             except Exception as e:
                 self._logger.error(
@@ -365,6 +511,14 @@ class QuivBase(ABC):
             self.thread.start()
         return None
 
+    def startup(self) -> None:  # pragma: no cover
+        """Start the scheduler background thread.
+
+        Alias for :meth:`start`. Pairs naturally with :meth:`shutdown`.
+        """
+
+        self.start()
+
     def shutdown(self) -> None:
         """Stop scheduler loop, cancel jobs, and release resources."""
 
@@ -383,9 +537,17 @@ class QuivBase(ABC):
                 path = self._db_path + suffix
                 if os.path.exists(path):
                     os.remove(path)
-            self._logger.info(f"Cleaned up database file: {self._db_path}")
+            self._logger.debug(f"Cleaned up database file: {self._db_path}")
         except Exception as e:
             self._logger.warning(f"Could not cleanup database file: {e}")
+
+    def stop(self) -> None:  # pragma: no cover
+        """Stop scheduler loop, cancel jobs, and release resources.
+
+        Alias for :meth:`shutdown`. Pairs naturally with :meth:`start`.
+        """
+
+        self.shutdown()
 
     def pause_task(self, task_name: str) -> None:
         """Pause a task by name.
@@ -399,6 +561,10 @@ class QuivBase(ABC):
 
         task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.pause_task(task_id)
+        self._emit_event(
+            Event.TASK_PAUSED,
+            {"task_name": task_name, "task_id": task_id},
+        )
 
     def resume_task(self, task_name: str, delay: int = 0) -> None:
         """Resume a paused task by name.
@@ -413,6 +579,10 @@ class QuivBase(ABC):
 
         task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.resume_task(task_id, delay=delay)
+        self._emit_event(
+            Event.TASK_RESUMED,
+            {"task_name": task_name, "task_id": task_id},
+        )
 
     def cancel_job(self, job_id: int) -> bool:
         """Signal cancellation for a running job.

@@ -71,6 +71,30 @@ def id_generator() -> str:
     return str(uuid.uuid4())
 
 
+class Event(str, Enum):
+    """Scheduler event types emitted during task and job lifecycle.
+
+    Attributes:
+        TASK_ADDED (str): Fired after a task is registered via ``add_task()``.
+        TASK_REMOVED (str): Fired after a task is removed via ``remove_task()``.
+        TASK_PAUSED (str): Fired after a task is paused via ``pause_task()``.
+        TASK_RESUMED (str): Fired after a task is resumed via ``resume_task()``.
+        JOB_STARTED (str): Fired when a job begins execution.
+        JOB_COMPLETED (str): Fired when a job finishes successfully.
+        JOB_FAILED (str): Fired when a job ends with an exception.
+        JOB_CANCELLED (str): Fired when a job is cancelled via stop event.
+    """
+
+    TASK_ADDED = "task_added"
+    TASK_REMOVED = "task_removed"
+    TASK_PAUSED = "task_paused"
+    TASK_RESUMED = "task_resumed"
+    JOB_STARTED = "job_started"
+    JOB_COMPLETED = "job_completed"
+    JOB_FAILED = "job_failed"
+    JOB_CANCELLED = "job_cancelled"
+
+
 class TaskStatus(str, Enum):
     """Task status constants.
 

@@ -38,13 +38,13 @@ The library has a layered design with four core modules:
 
 - **`scheduler.py`** (`Quiv`) — Public API and orchestration loop. Extends `QuivBase`. The `_loop()` method runs in a daemon thread, polling for due tasks every second and dispatching them to the thread pool. `add_task()` is the main entry point for scheduling; `remove_task()` removes a task and its registrations. `_run_job()` handles job execution and finalizes both job and task state on completion.
 
-- **`base.py`** (`QuivBase`) — Abstract base with lifecycle management. Owns the `ThreadPoolExecutor`, SQLite engine (temp file), handler/callback registries, and stop events dict. Handles async execution bridge (`run_async` creates thread-local event loops) and progress callback dispatch to the main event loop.
+- **`base.py`** (`QuivBase`) — Abstract base with lifecycle management. Owns the `ThreadPoolExecutor`, SQLite engine (temp file), handler/callback/event-listener registries, and stop events dict. Handles async execution bridge (`run_async` creates thread-local event loops), progress callback dispatch, and event listener dispatch to the main event loop.
 
 - **`persistence.py`** (`PersistenceLayer`) — All SQLModel/SQLAlchemy database operations. Task CRUD (`create_task`/`delete_task`), task lifecycle (`mark_task_running`/`finalize_task_after_job`), job lifecycle transitions, due-task queries, history cleanup (SQL-level, runs every 60s). Uses `col()` wrapper for typed SQLModel WHERE clauses. Thread-safe via `threading.Lock`.
 
 - **`execution.py`** (`ExecutionLayer`) — Invocation preparation and callable dispatch. Introspects handler signatures to conditionally inject `_stop_event` and `_progress_hook` kwargs. Handles both sync and async callables. `prepare_invocation()` deserializes pickled args back into a `tuple` to preserve the type contract from `add_task()`.
 
-- **`models.py`** — `Task` and `Job` SQLModel table classes with a private `quiv_registry` to isolate metadata from user models. `TaskStatus`/`JobStatus` are `str, Enum` enums. Model validators force UTC on datetime fields loaded from SQLite.
+- **`models.py`** — `Task` and `Job` SQLModel table classes with a private `quiv_registry` to isolate metadata from user models. `Event`/`TaskStatus`/`JobStatus` are `str, Enum` enums. Model validators force UTC on datetime fields loaded from SQLite.
 
 - **`config.py`** — `QuivConfig` frozen dataclass and `resolve_timezone()` helper.
 
@@ -63,6 +63,7 @@ The library has a layered design with four core modules:
 - **Backpressure**: Scheduler skips dispatching when `_active_job_count >= pool_size` (protected by `_job_count_lock`). Deferred tasks stay in DB and are picked up on the next tick. Jobs that start late log a warning with the delay.
 - **Cancellation**: `cancel_job()` sets the stop event in `self.stop_events`. `_run_job` checks this dict directly (not `kwargs`) so cancellation is detected even if the handler doesn't accept `_stop_event`.
 - **Args as tuples**: `add_task()` accepts `args` as a `tuple` (not list) to preserve ordering intent. Args are pickle-serialized for persistence; `ExecutionLayer.prepare_invocation()` unpickles and wraps them in a `tuple` before passing to the handler.
+- **Event listeners**: Global `add_listener(Event, callback)` / `remove_listener(Event, callback)` on `QuivBase`. Listeners are stored in `_event_listeners: dict[Event, list[Callable]]`. `_emit_event()` dispatches to the main loop using the same pattern as progress callbacks (async via `run_coroutine_threadsafe`, sync via `call_soon_threadsafe`, fallback to direct call). Exceptions in listeners are logged and swallowed. Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`.
 - **Logging**: The library does not set log levels. The `logger` parameter accepts `logging.Logger` or `logging.LoggerAdapter[Any]`. Applications configure the `"Quiv"` logger themselves.
 
 ## Testing

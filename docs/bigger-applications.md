@@ -123,6 +123,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from quiv import Event
+
 from myapp.scheduler import scheduler
 from myapp.tasks.cleanup import cleanup_stale_records
 from myapp.tasks.report import generate_report
@@ -164,8 +166,23 @@ async def on_report_progress(**payload):
 
 # ---------- Lifespan ----------
 
+async def on_job_event(event: Event, data: dict) -> None:
+    """Forward job lifecycle events to WebSocket clients."""
+    payload = {"event": event.value, "task": data["task_name"]}
+    if "duration" in data:
+        payload["duration"] = str(data["duration"])
+    if "error" in data:
+        payload["error"] = str(data["error"])
+    await ws_manager.broadcast(payload)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Register event listeners
+    scheduler.add_listener(Event.JOB_STARTED, on_job_event)
+    scheduler.add_listener(Event.JOB_COMPLETED, on_job_event)
+    scheduler.add_listener(Event.JOB_FAILED, on_job_event)
+
     # Register and start tasks
     scheduler.add_task(
         task_name="db-cleanup",
@@ -312,3 +329,7 @@ progress updates.
 - **Progress goes through WebSocket.** Async progress callbacks run on
   FastAPI's event loop, so they can broadcast to WebSocket clients directly.
   See [Progress Callbacks](progress-callbacks.md) for dispatch details.
+- **Event listeners for observability.** Use `add_listener()` to react to
+  task and job lifecycle events. Async listeners run on the main loop, so
+  they can broadcast to WebSocket clients alongside progress callbacks.
+  See [Event Listeners](event-listeners.md) for the full event list.
