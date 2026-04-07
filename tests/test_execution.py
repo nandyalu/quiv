@@ -33,7 +33,7 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
         stop_event=stop_event,
     )
 
-    assert args == []
+    assert args == ()
     assert kwargs["_stop_event"] is stop_event
     kwargs["_progress_hook"](1, pct=50)
     assert captured == [(("demo", 1), {"pct": 50})]
@@ -49,7 +49,7 @@ def test_run_callable_executes_sync_function() -> None:
     def handler(increment: int) -> None:
         result["value"] += increment
 
-    layer.run_callable(handler, [3], {})
+    layer.run_callable(handler, (3,), {})
     assert result["value"] == 3
 
 
@@ -66,7 +66,7 @@ def test_run_callable_routes_async_function_to_run_async() -> None:
     async def handler() -> None:
         await asyncio.sleep(0)
 
-    layer.run_callable(handler, [], {})
+    layer.run_callable(handler, (), {})
     assert called["called"] is True
 
 
@@ -89,7 +89,7 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
         stop_event=threading.Event(),
     )
 
-    assert args == [1]
+    assert args == (1,)
     assert "_stop_event" not in kwargs
     assert "_progress_hook" not in kwargs
 

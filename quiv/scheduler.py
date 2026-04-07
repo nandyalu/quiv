@@ -24,7 +24,7 @@ class Quiv(QuivBase):
         history_retention_seconds: int = 86400,
         timezone: str | tzinfo = "UTC",
         *,
-        logger: logging.Logger | None = None,
+        logger: logging.Logger | logging.LoggerAdapter[Any] | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
     ):
         """Initialize Quiv scheduler instance.
@@ -35,7 +35,7 @@ class Quiv(QuivBase):
             history_retention_seconds (int, Optional=86400): Job retention period when ``config`` is not provided.
             timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
-            logger (logging.Logger, Optional=None): Optional logger instance.
+            logger (logging.Logger | logging.LoggerAdapter[Any], Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None): Optional main event loop for progress callbacks.
         """
 
@@ -55,7 +55,7 @@ class Quiv(QuivBase):
         interval: float,
         delay: float = 0,
         run_once: bool = False,
-        args: list[Any] | None = None,
+        args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
     ) -> str:
@@ -67,8 +67,8 @@ class Quiv(QuivBase):
             interval (float): Interval in seconds between runs.
             delay (float, Optional=0): Initial delay before first run in seconds.
             run_once (bool, Optional=False): If ``True``, run task once and remove it.
-            args (list, Optional=None): Positional arguments for handler.
-            kwargs (dict, Optional=None): Keyword arguments for handler.
+            args (tuple[Any, ...], Optional=None): Positional arguments for handler.
+            kwargs (dict[str, Any], Optional=None): Keyword arguments for handler.
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
 
         Raises:
@@ -102,7 +102,7 @@ class Quiv(QuivBase):
             interval=interval,
             run_once=run_once,
             next_run_at=next_run,
-            args_json=json.dumps(args or []),
+            args_json=json.dumps(args or ()),
             kwargs_json=json.dumps(kwargs or {}),
         )
         next_run_user_tz = self._to_display_timezone(next_run)
@@ -220,7 +220,7 @@ class Quiv(QuivBase):
         run_once: bool,
         scheduled_at: datetime,
         func: Callable[..., Any],
-        args: list[Any],
+        args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> None:
         """Execute a single job and persist terminal status.
@@ -232,7 +232,7 @@ class Quiv(QuivBase):
             run_once (bool): Whether the task is single-run.
             scheduled_at (datetime): UTC time when the job was dispatched.
             func (Callable[..., Any]): Handler callable.
-            args (list): Positional arguments for handler.
+            args (tuple): Positional arguments for handler.
             kwargs (dict): Keyword arguments for handler.
         """
 

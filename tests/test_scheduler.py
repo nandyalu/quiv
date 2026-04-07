@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from typing import Any
 
 import pytest
 
@@ -420,7 +421,7 @@ def test_late_start_warning_logged_when_pool_busy(
                 run_once=True,
                 scheduled_at=scheduled_at,
                 func=lambda: None,
-                args=[],
+                args=(),
                 kwargs={},
             )
 
@@ -528,6 +529,43 @@ def test_remove_task_cancels_running_job(
         assert any(j.status == JobStatus.CANCELLED for j in jobs)
     finally:
         blocker.set()
+        scheduler.shutdown()
+
+
+def test_add_task_with_args_and_kwargs_preserves_order(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    finished = threading.Event()
+    received_args: tuple[Any, ...] = ()
+    received_kwargs: dict[str, Any] = {}
+
+    def handler(*args: Any, **kwargs: Any) -> None:
+        nonlocal received_args
+        received_args = args
+        received_kwargs.update(kwargs)
+        finished.set()
+
+    try:
+        scheduler.add_task(
+            task_name="args-kwargs-order",
+            func=handler,
+            interval=60,
+            run_once=True,
+            delay=0,
+            args=(20, 5, 11, 3, 99, 1, 50, 7),
+            kwargs={"z": 30, "a": 1, "m": 15, "b": 2, "y": 40},
+        )
+        scheduler.start()
+        assert finished.wait(timeout=3)
+        time.sleep(0.2)
+        assert received_args == (20, 5, 11, 3, 99, 1, 50, 7)
+        assert received_kwargs["z"] == 30
+        assert received_kwargs["a"] == 1
+        assert received_kwargs["m"] == 15
+        assert received_kwargs["b"] == 2
+        assert received_kwargs["y"] == 40
+    finally:
         scheduler.shutdown()
 
 
