@@ -88,7 +88,7 @@ task_id = scheduler.add_task(
     interval=10,
     delay=0,
     run_once=False,
-    args=[],
+    args=(),
     kwargs={},
 )
 ```

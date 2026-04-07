@@ -10,25 +10,25 @@ class ExecutionLayer:
     """Execution-focused utilities for preparing and running task handlers.
 
     Attributes:
-        _run_async (Callable[[Callable[..., Awaitable[Any]], list | None, \
-            dict | None], None]): 
+        _run_async (Callable[[Callable[..., Awaitable[Any]], tuple | None, \
+            dict | None], None]):
             Callable used to run coroutine handlers in thread-local loops.
-        _run_progress_callback (Callable[..., None]): 
+        _run_progress_callback (Callable[..., None]):
             Callable used to dispatch progress updates.
     """
 
     def __init__(
         self,
         run_async: Callable[
-            [Callable[..., Awaitable[Any]], list[Any] | None, dict[str, Any] | None], None
+            [Callable[..., Awaitable[Any]], tuple[Any, ...] | None, dict[str, Any] | None], None
         ],
         run_progress_callback: Callable[..., None],
     ):
         """Initialize the execution layer.
 
         Args:
-            run_async (Callable[[Callable[..., Awaitable[Any]], list | None, \
-                dict | None], None]): 
+            run_async (Callable[[Callable[..., Awaitable[Any]], tuple | None, \
+                dict | None], None]):
                 Callback that executes async handlers.
             run_progress_callback (Callable[..., None]): 
                 Callback for progress hook dispatch.
@@ -69,7 +69,7 @@ class ExecutionLayer:
         args_json: str,
         kwargs_json: str,
         stop_event: Any,
-    ) -> tuple[list[Any], dict[str, Any]]:
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
         """Prepare runtime invocation arguments for a task handler.
 
         Args:
@@ -80,10 +80,10 @@ class ExecutionLayer:
             stop_event (Any): Cancellation event to inject when supported.
 
         Returns:
-            tuple[list, dict]: A tuple with decoded positional args and kwargs.
+            tuple[tuple, dict]: A tuple with decoded positional args and kwargs.
         """
 
-        f_args = json.loads(args_json)
+        f_args = tuple(json.loads(args_json))
         f_kwargs = json.loads(kwargs_json)
 
         if self._accepts_keyword_arg(func, "_stop_event"):
@@ -101,13 +101,13 @@ class ExecutionLayer:
         return f_args, f_kwargs
 
     def run_callable(
-        self, func: Callable[..., Any], args: list[Any], kwargs: dict[str, Any]
+        self, func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> None:
         """Run a handler function, supporting sync and async callables.
 
         Args:
             func (Callable[..., Any]): Handler callable.
-            args (list): Positional arguments.
+            args (tuple): Positional arguments.
             kwargs (dict): Keyword arguments.
         """
 

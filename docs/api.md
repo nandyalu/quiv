@@ -11,7 +11,7 @@ Quiv(
     history_retention_seconds: int = 86400,
     timezone: str | tzinfo = "UTC",
     *,
-    logger: logging.Logger | None = None,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
     main_loop: asyncio.AbstractEventLoop | None = None,
 )
 ```
@@ -31,7 +31,7 @@ Parameters:
     `timezone` is only used to format datetime values in quiv's log output.
     All internal datetime handling (scheduling, persistence, job lifecycle) uses
     UTC regardless of this setting.
-- `logger`: optional custom logger instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
+- `logger`: optional custom logger or `LoggerAdapter` instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
 
 !!! note "Logger scope"
 
@@ -49,7 +49,7 @@ add_task(
     interval: float,
     delay: float = 0,
     run_once: bool = False,
-    args: list | None = None,
+    args: tuple | None = None,
     kwargs: dict | None = None,
     progress_callback: Callable[..., Any] | None = None,
 ) -> str | None

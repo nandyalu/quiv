@@ -32,7 +32,7 @@ class QuivBase(ABC):
     """Base scheduler runtime with lifecycle, execution, and callback plumbing.
 
     Attributes:
-        _logger (logging.Logger): Logger instance used by the scheduler.
+        _logger (logging.Logger | logging.LoggerAdapter[Any]): Logger instance used by the scheduler.
         _timezone (tzinfo): Configured display timezone.
         _main_loop (asyncio.AbstractEventLoop):
             Main application event loop for progress callbacks.
@@ -60,7 +60,7 @@ class QuivBase(ABC):
         history_retention_seconds: int = 86400,
         timezone: str | tzinfo = "UTC",
         *,
-        logger: logging.Logger | None = None,
+        logger: logging.Logger | logging.LoggerAdapter[Any] | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
     ):
         """Initialize shared runtime components.
@@ -73,7 +73,7 @@ class QuivBase(ABC):
                 Job retention period when ``config`` is not provided.
             timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
-            logger (logging.Logger, Optional=None): Optional logger instance.
+            logger (logging.Logger | logging.LoggerAdapter[Any], Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None):
                 Optional main event loop for progress callbacks.
 
@@ -193,21 +193,21 @@ class QuivBase(ABC):
     def run_async(
         self,
         task: Callable[..., Awaitable[Any]],
-        args: list[Any] | None = None,
+        args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Run an async callable in a thread-local event loop.
 
         Args:
             task (Callable[..., Awaitable[Any]]): Coroutine function to execute.
-            args (list, Optional=None): Positional arguments for the callable.
+            args (tuple, Optional=None): Positional arguments for the callable.
             kwargs (dict, Optional=None): Keyword arguments for the callable.
         """
 
         new_loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
-            new_loop.run_until_complete(task(*(args or []), **(kwargs or {})))
+            new_loop.run_until_complete(task(*(args or ()), **(kwargs or {})))
         finally:
             asyncio.set_event_loop(None)
             new_loop.close()
