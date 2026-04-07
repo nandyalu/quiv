@@ -21,7 +21,7 @@ flowchart TD
     on main loop"]
     E -- No --> H["call_soon_threadsafe()
     on main loop"]
-    F -- Yes --> I["Skip with warning log"]
+    F -- Yes --> I["Run in temporary event loop"]
     F -- No --> J["Call directly on
     worker thread"]
 ```
@@ -33,7 +33,7 @@ flowchart TD
 | Available | Async | Dispatched via `run_coroutine_threadsafe` on the main loop |
 | Available | Sync | Dispatched via `call_soon_threadsafe` on the main loop |
 | Unavailable | Sync | Called directly on the worker thread |
-| Unavailable | Async | Skipped with a warning log |
+| Unavailable | Async | Run in a temporary event loop on the worker thread |
 
 ## Event loop resolution
 
@@ -196,8 +196,9 @@ scheduler.add_task(
 scheduler.start()
 ```
 
-Async progress callbacks are skipped with a warning log in this scenario since
-there is no event loop to run them on.
+Async progress callbacks also work in this scenario — they run in a temporary
+event loop on the worker thread, so `await` calls inside the callback will
+execute correctly.
 
 ## Error handling
 
