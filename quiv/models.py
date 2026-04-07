@@ -5,8 +5,9 @@ from enum import Enum
 import pickle
 import uuid
 import logging
+from typing import Any
 
-from pydantic import model_validator
+from pydantic import field_serializer, model_validator
 from sqlalchemy.orm import registry
 from sqlmodel import Field, SQLModel
 
@@ -153,6 +154,12 @@ class Task(QuivModelBase, table=True):
     run_once: bool = False
     status: str = TaskStatus.ACTIVE
     next_run_at: datetime = Field(default_factory=next_run_time)
+
+    @field_serializer("args", "kwargs")
+    @classmethod
+    def _unpickle_for_serialization(cls, value: bytes) -> Any:
+        """Unpickle bytes to Python objects for JSON serialization."""
+        return pickle.loads(value)
 
     # On load from DB, ensure next_run_at is timezone-aware UTC
     # Only model_validator in before mode works, as it runs on model instantiation

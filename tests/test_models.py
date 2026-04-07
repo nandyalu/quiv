@@ -63,6 +63,25 @@ def test_job_model_validator_normalizes_naive_fields() -> None:
     assert validated.ended_at.utcoffset() == timedelta(0)
 
 
+def test_task_serializes_args_kwargs_as_unpickled_values() -> None:
+    import pickle
+
+    task = Task(
+        task_name="serialize-check",
+        interval_seconds=60,
+        args=pickle.dumps((1, "hello", [3, 4])),
+        kwargs=pickle.dumps({"key": "value", "num": 42}),
+    )
+    data = task.model_dump()
+    assert data["args"] == (1, "hello", [3, 4])
+    assert data["kwargs"] == {"key": "value", "num": 42}
+
+    # Also verify JSON serialization works (what FastAPI uses)
+    json_str = task.model_dump_json()
+    assert '"hello"' in json_str
+    assert '"key"' in json_str
+
+
 def test_time_helpers_and_id_generator() -> None:
     nr = next_run_time()
     now = get_current_time()
