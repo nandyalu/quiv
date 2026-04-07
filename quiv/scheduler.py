@@ -93,6 +93,30 @@ class Quiv(QuivBase):
                 " remove_task() first if you want to replace it."
             )
 
+        resolved_args = args or ()
+        resolved_kwargs = kwargs or {}
+        try:
+            args_pickled = pickle.dumps(resolved_args)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to serialize task args: {e}"
+            ) from e
+        try:
+            kwargs_pickled = pickle.dumps(resolved_kwargs)
+        except Exception as e:  # pragma: no cover
+            raise ConfigurationError(
+                f"Failed to serialize task kwargs: {e}"
+            ) from e
+
+        if not isinstance(resolved_args, tuple):
+            raise ConfigurationError(
+                f"args must be a tuple, got {type(resolved_args).__name__}"
+            )
+        if not isinstance(resolved_kwargs, dict):
+            raise ConfigurationError(
+                f"kwargs must be a dict, got {type(resolved_kwargs).__name__}"
+            )
+
         self._register_handler(task_name, func)
         self._register_progress_callback(task_name, progress_callback)
 
@@ -102,8 +126,8 @@ class Quiv(QuivBase):
             interval=interval,
             run_once=run_once,
             next_run_at=next_run,
-            args_pickled=pickle.dumps(args or ()),
-            kwargs_pickled=pickle.dumps(kwargs or {}),
+            args_pickled=args_pickled,
+            kwargs_pickled=kwargs_pickled,
         )
         next_run_user_tz = self._to_display_timezone(next_run)
         self._logger.info(

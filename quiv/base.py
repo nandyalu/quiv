@@ -151,6 +151,7 @@ class QuivBase(ABC):
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[str, threading.Event] = {}
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
+        self._event_listeners_lock = threading.Lock()
         self._active_job_count = 0
         self._job_count_lock = threading.Lock()
 
@@ -295,7 +296,8 @@ class QuivBase(ABC):
             )
         if not callable(callback):
             raise ConfigurationError("callback must be callable")
-        self._event_listeners.setdefault(event, []).append(callback)
+        with self._event_listeners_lock:
+            self._event_listeners.setdefault(event, []).append(callback)
 
     def remove_listener(
         self, event: Event, callback: Callable[..., Any]
@@ -307,11 +309,12 @@ class QuivBase(ABC):
             callback (Callable[..., Any]): The exact callback to remove.
         """
 
-        listeners = self._event_listeners.get(event, [])
-        try:
-            listeners.remove(callback)
-        except ValueError:
-            pass
+        with self._event_listeners_lock:
+            listeners = self._event_listeners.get(event, [])
+            try:
+                listeners.remove(callback)
+            except ValueError:
+                pass
 
     def _emit_event(self, event: Event, data: dict[str, Any]) -> None:
         """Dispatch all registered listeners for an event.
@@ -328,7 +331,8 @@ class QuivBase(ABC):
             data (dict[str, Any]): Context data for the event.
         """
 
-        listeners = self._event_listeners.get(event, [])
+        with self._event_listeners_lock:
+            listeners = list(self._event_listeners.get(event, []))
         if not listeners:
             return
 

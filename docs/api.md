@@ -73,7 +73,9 @@ Behavior:
 
 - `func` may be sync or async
 - `args`/`kwargs` are pickle-serialized and persisted — most Python objects
-  are supported, but lambdas and inner functions are not picklable
+  are supported, but lambdas and inner functions are not picklable. The
+  temporary database is trusted internal state and should not be exposed to
+  untrusted input
 - if `run_once=True`, task is executed once and then removed from storage
 - if `progress_callback` is provided, it runs on the main loop when available,
   or directly on the worker thread otherwise

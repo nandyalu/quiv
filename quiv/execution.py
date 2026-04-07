@@ -5,6 +5,8 @@ import pickle
 from collections.abc import Awaitable
 from typing import Any, Callable
 
+from .exceptions import ConfigurationError
+
 
 class ExecutionLayer:
     """Execution-focused utilities for preparing and running task handlers.
@@ -85,8 +87,25 @@ class ExecutionLayer:
             tuple[tuple, dict]: A tuple with decoded positional args and kwargs.
         """
 
-        f_args = tuple(pickle.loads(args_pickled))
-        f_kwargs = pickle.loads(kwargs_pickled)
+        try:
+            raw_args = pickle.loads(args_pickled)
+            f_args = tuple(raw_args)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to deserialize task args: {e}"
+            ) from e
+
+        try:
+            f_kwargs = pickle.loads(kwargs_pickled)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to deserialize task kwargs: {e}"
+            ) from e
+
+        if not isinstance(f_kwargs, dict):
+            raise ConfigurationError(
+                f"Expected kwargs to be a dict, got {type(f_kwargs).__name__}"
+            )
 
         if self._accepts_keyword_arg(func, "_job_id"):
             f_kwargs["_job_id"] = job_id

@@ -6,6 +6,9 @@ import threading
 from typing import cast
 from typing import Any
 
+import pytest
+
+from quiv.exceptions import ConfigurationError
 from quiv.execution import ExecutionLayer
 
 
@@ -130,3 +133,54 @@ def test_accepts_keyword_arg_true_for_var_keyword_parameter() -> None:
         return None
 
     assert layer._accepts_keyword_arg(handler, "_stop_event") is True
+
+
+def test_prepare_invocation_raises_on_corrupt_args() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    with pytest.raises(ConfigurationError, match="Failed to deserialize task args"):
+        layer.prepare_invocation(
+            task_name="bad-args",
+            func=lambda: None,
+            args_pickled=b"not valid pickle",
+            kwargs_pickled=pickle.dumps({}),
+            stop_event=threading.Event(),
+            job_id="test-uuid",
+        )
+
+
+def test_prepare_invocation_raises_on_corrupt_kwargs() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    with pytest.raises(ConfigurationError, match="Failed to deserialize task kwargs"):
+        layer.prepare_invocation(
+            task_name="bad-kwargs",
+            func=lambda: None,
+            args_pickled=pickle.dumps(()),
+            kwargs_pickled=b"not valid pickle",
+            stop_event=threading.Event(),
+            job_id="test-uuid",
+        )
+
+
+def test_prepare_invocation_raises_on_non_dict_kwargs() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    with pytest.raises(ConfigurationError, match="Expected kwargs to be a dict"):
+        layer.prepare_invocation(
+            task_name="bad-type",
+            func=lambda: None,
+            args_pickled=pickle.dumps(()),
+            kwargs_pickled=pickle.dumps("not a dict"),
+            stop_event=threading.Event(),
+            job_id="test-uuid",
+        )
