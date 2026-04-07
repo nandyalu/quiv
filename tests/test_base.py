@@ -247,9 +247,8 @@ def test_sync_progress_callback_without_event_loop() -> None:
         scheduler.shutdown()
 
 
-def test_async_progress_callback_skipped_without_event_loop(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_async_progress_callback_runs_without_event_loop() -> None:
+    """Async progress callbacks run in temporary loop when no main loop exists."""
     scheduler = Quiv()  # No main_loop
     called = threading.Event()
 
@@ -258,17 +257,12 @@ def test_async_progress_callback_skipped_without_event_loop(
 
     try:
         scheduler._register_progress_callback("async-no-loop", async_callback)
-        with caplog.at_level("WARNING", logger="Quiv"):
-            scheduler.run_progress_callback("async-no-loop", 1)
+        scheduler.run_progress_callback("async-no-loop", 1)
         time.sleep(0.2)
-        assert not called.is_set(), (
-            "Async progress callback should NOT have been called"
-            " when no event loop is available"
+        assert called.is_set(), (
+            "Async progress callback should have been called"
+            " via temporary event loop"
         )
-        assert any(
-            "skipped" in r.message and "no event loop" in r.message
-            for r in caplog.records
-        ), "Expected a warning about skipped async callback"
     finally:
         scheduler.shutdown()
 

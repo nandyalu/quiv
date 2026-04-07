@@ -371,10 +371,17 @@ class QuivBase(ABC):
 
         if inspect.iscoroutinefunction(listener):
             if loop is None:
-                self._logger.warning(
-                    f"Async event listener for '{event.value}' skipped"
-                    " because no event loop is available."
-                )
+                # No main loop available; run in temporary loop on this thread
+                try:
+                    new_loop = asyncio.new_event_loop()
+                    try:
+                        new_loop.run_until_complete(listener(event, data))
+                    finally:
+                        new_loop.close()
+                except Exception as e:
+                    self._logger.error(
+                        f"Event listener for '{event.value}' failed: {e}"
+                    )
                 return
             coroutine = cast(Coroutine[Any, Any, Any], listener(event, data))
             future = asyncio.run_coroutine_threadsafe(coroutine, loop)
@@ -428,9 +435,9 @@ class QuivBase(ABC):
 
         When a main event loop is available, async callbacks are dispatched
         via ``run_coroutine_threadsafe`` and sync callbacks via
-        ``call_soon_threadsafe``. Without an event loop, sync callbacks
-        run directly on the calling thread and async callbacks are skipped
-        with a warning.
+        ``call_soon_threadsafe``. Without an event loop, async callbacks
+        run in a temporary event loop on the calling thread and sync
+        callbacks run directly.
 
         Args:
             task_name (str): Task name whose callback should be invoked.
@@ -453,10 +460,17 @@ class QuivBase(ABC):
 
         if inspect.iscoroutinefunction(callback):
             if loop is None:
-                self._logger.warning(
-                    f"Async progress callback for task '{task_name}' skipped"
-                    " because no event loop is available."
-                )
+                # No main loop available; run in temporary loop on this thread
+                try:
+                    new_loop = asyncio.new_event_loop()
+                    try:
+                        new_loop.run_until_complete(callback(*args, **kwargs))
+                    finally:
+                        new_loop.close()
+                except Exception as e:
+                    self._logger.error(
+                        f"Progress callback for task '{task_name}' failed: {e}"
+                    )
                 return
             coroutine = cast(
                 Coroutine[Any, Any, Any], callback(*args, **kwargs)

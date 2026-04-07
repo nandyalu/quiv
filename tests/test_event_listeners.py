@@ -357,8 +357,7 @@ def test_listener_exception_is_swallowed(
         scheduler.shutdown()
 
 
-def test_listener_without_event_loop_sync(
-) -> None:
+def test_listener_without_event_loop_sync() -> None:
     """Sync listeners work without an event loop (run on calling thread)."""
     scheduler = Quiv()
     captured: list[dict[str, Any]] = []
@@ -375,22 +374,20 @@ def test_listener_without_event_loop_sync(
         scheduler.shutdown()
 
 
-def test_async_listener_without_event_loop_skipped(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Async listeners are skipped with a warning when no event loop exists."""
+def test_async_listener_runs_without_event_loop() -> None:
+    """Async listeners run in temporary loop when no main event loop exists."""
     scheduler = Quiv()
+    called = threading.Event()
 
     async def listener(event: Event, data: dict[str, Any]) -> None:
-        pass  # pragma: no cover
+        called.set()
 
     try:
         scheduler.add_listener(Event.TASK_ADDED, listener)
-        with caplog.at_level("WARNING", logger="Quiv"):
-            scheduler.add_task("no-loop-async", lambda: None, interval=60)
-        assert any(
-            "Async event listener" in r.message and "skipped" in r.message
-            for r in caplog.records
-        )
+        scheduler.add_task("no-loop-async", lambda: None, interval=60)
+        time.sleep(0.2)
+        assert (
+            called.is_set()
+        ), "Async listener should have been called via temporary event loop"
     finally:
         scheduler.shutdown()
