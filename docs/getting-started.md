@@ -71,6 +71,7 @@ Do not mix `config=...` with direct constructor config args. See [Quiv API](./ap
 
 ```python
 def my_task(
+    _job_id: str | None=None,
     _stop_event: threading.Event | None=None,
     _progress_hook: Callable | None=None
 ):
@@ -120,9 +121,9 @@ scheduler.add_task(
 )
 ```
 
-`_stop_event` and `_progress_hook` are injected only if your handler accepts
-those keyword parameters. If your handler signature does not include them
-(and does not use `**kwargs`), they are not injected. See
+`_job_id`, `_stop_event`, and `_progress_hook` are injected only if your
+handler accepts those keyword parameters. If your handler signature does not
+include them (and does not use `**kwargs`), they are not injected. See
 [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md)
 for in-depth guides.
 

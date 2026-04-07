@@ -22,7 +22,7 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
         run_progress_callback=run_progress_callback,
     )
 
-    def handler(_stop_event=None, _progress_hook=None):
+    def handler(_job_id=None, _stop_event=None, _progress_hook=None):
         return None
 
     stop_event = threading.Event()
@@ -32,9 +32,11 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
         args_pickled=pickle.dumps(()),
         kwargs_pickled=pickle.dumps({}),
         stop_event=stop_event,
+        job_id="test-uuid-123",
     )
 
     assert args == ()
+    assert kwargs["_job_id"] == "test-uuid-123"
     assert kwargs["_stop_event"] is stop_event
     kwargs["_progress_hook"](1, pct=50)
     assert captured == [(("demo", 1), {"pct": 50})]
@@ -88,9 +90,11 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
         args_pickled=pickle.dumps((1,)),
         kwargs_pickled=pickle.dumps({}),
         stop_event=threading.Event(),
+        job_id="test-uuid-456",
     )
 
     assert args == (1,)
+    assert "_job_id" not in kwargs
     assert "_stop_event" not in kwargs
     assert "_progress_hook" not in kwargs
 

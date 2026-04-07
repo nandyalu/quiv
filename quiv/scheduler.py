@@ -200,6 +200,7 @@ class Quiv(QuivBase):
             args_pickled=task.args,
             kwargs_pickled=task.kwargs,
             stop_event=stop_event,
+            job_id=job_id,
         )
 
         self._logger.info(
@@ -222,7 +223,7 @@ class Quiv(QuivBase):
 
     def _run_job(
         self,
-        job_id: int,
+        job_id: str,
         task_id: str,
         task_name: str,
         run_once: bool,
@@ -234,7 +235,7 @@ class Quiv(QuivBase):
         """Execute a single job and persist terminal status.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
             task_id (str): Source task identifier.
             task_name (str): Task name for logging.
             run_once (bool): Whether the task is single-run.

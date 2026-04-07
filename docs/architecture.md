@@ -37,7 +37,7 @@ sequenceDiagram
         Q->>DB: INSERT Job row
         Q->>Pool: Submit job
         Pool->>H: Execute handler
-        Note over H: _stop_event / _progress_hook injected if accepted
+        Note over H: _job_id / _stop_event / _progress_hook injected if accepted
         H-->>Pool: Return result
         Pool->>DB: Finalize job status
         Pool->>DB: Set task ACTIVE, next_run = now + interval

@@ -177,11 +177,11 @@ class PersistenceLayer:
                 )
             return task
 
-    def get_job(self, job_id: int) -> Job:
+    def get_job(self, job_id: str) -> Job:
         """Fetch a single job by ID.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
 
         Returns:
             Job: The job record.
@@ -314,27 +314,20 @@ class PersistenceLayer:
             statement = statement.where(Task.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
 
-    def create_job(self, task_id: str) -> int:
+    def create_job(self, task_id: str) -> str:
         """Create a scheduled job record for a task.
 
         Args:
             task_id (str): Source task identifier.
 
         Returns:
-            int: Newly created job id.
-
-        Raises:
-            JobNotFoundError: If a job id could not be assigned.
+            str: Newly created job id (UUID string).
         """
 
         with self._lock, Session(self._engine) as session:
             job = Job(task_id=task_id, status=JobStatus.SCHEDULED)
             session.add(job)
             session.commit()
-            if job.id is None:
-                raise JobNotFoundError(
-                    "Job ID should be set after commit"
-                )  # pragma: no cover
             return job.id
 
     def mark_task_running(self, task_id: str) -> None:
@@ -377,11 +370,11 @@ class PersistenceLayer:
                 )
             session.commit()
 
-    def mark_job_running(self, job_id: int) -> None:
+    def mark_job_running(self, job_id: str) -> None:
         """Transition a job to running state and set start time.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
 
         Raises:
             JobNotFoundError: If job does not exist.
@@ -395,11 +388,11 @@ class PersistenceLayer:
             job.started_at = self._now_utc()
             session.commit()
 
-    def finalize_job(self, job_id: int, status: str) -> None:
+    def finalize_job(self, job_id: str, status: str) -> None:
         """Set final status and end timestamp for a job.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
             status (str): Terminal job status.
 
         Raises:

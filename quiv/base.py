@@ -44,8 +44,8 @@ class QuivBase(ABC):
             Mapping of task names to handler callables.
         progress_callbacks (dict[str, Callable[..., Any]]):
             Mapping of task names to progress callbacks.
-        stop_events (dict[int, threading.Event]):
-            Mapping of job ids to cancellation events.
+        stop_events (dict[str, threading.Event]):
+            Mapping of job ids (UUID strings) to cancellation events.
         persistence (PersistenceLayer): Persistence layer facade.
         execution (ExecutionLayer): Execution layer facade.
         _event_listeners (dict[Event, list[Callable[..., Any]]]):
@@ -149,7 +149,7 @@ class QuivBase(ABC):
         self.history_limit = history_retention_seconds
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
-        self.stop_events: dict[int, threading.Event] = {}
+        self.stop_events: dict[str, threading.Event] = {}
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
         self._active_job_count = 0
         self._job_count_lock = threading.Lock()
@@ -584,11 +584,11 @@ class QuivBase(ABC):
             {"task_name": task_name, "task_id": task_id},
         )
 
-    def cancel_job(self, job_id: int) -> bool:
+    def cancel_job(self, job_id: str) -> bool:
         """Signal cancellation for a running job.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
 
         Returns:
             bool: ``True`` if a stop event existed and was set,
@@ -630,11 +630,11 @@ class QuivBase(ABC):
 
         return self.persistence.get_task_by_id(task_id)
 
-    def get_job(self, job_id: int) -> Job:
+    def get_job(self, job_id: str) -> Job:
         """Retrieve a single job by ID.
 
         Args:
-            job_id (int): Job identifier.
+            job_id (str): Job identifier (UUID string).
 
         Returns:
             Job: The job record.
