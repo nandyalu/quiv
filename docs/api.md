@@ -16,8 +16,7 @@ Quiv(
 )
 ```
 
-If `config` is provided, do not also pass explicit
-`pool_size/history_retention_seconds/timezone`.
+If `config` is provided, do not also pass explicit `pool_size/history_retention_seconds/timezone`.
 
 Parameters:
 
@@ -26,19 +25,21 @@ Parameters:
 - `history_retention_seconds`: how long finished job records are kept (default 86400 = 24 hours)
 - `timezone`: [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) or `tzinfo` for display formatting (default `"UTC"`)
 
-!!! note "Timezone is for display only"
+    !!! note "Timezone is for display only"
 
-    `timezone` is only used to format datetime values in quiv's log output.
-    All internal datetime handling (scheduling, persistence, job lifecycle) uses
-    UTC regardless of this setting.
+        `timezone` is only used to format datetime values in quiv's log output.
+        All internal datetime handling (scheduling, persistence, job lifecycle) uses
+        UTC regardless of this setting.
+
 - `logger`: optional custom logger or `LoggerAdapter` instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
 
-!!! note "Logger scope"
+    !!! note "Logger scope"
 
-    The `logger` is only used for quiv's own internal logs (scheduler loop events,
-    job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed
-    through this logger — use your own loggers inside your task handlers as usual.
-- `main_loop`: optional asyncio event loop for progress callbacks; if not provided, the loop is lazily resolved on first progress callback dispatch via `asyncio.get_running_loop()`. This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). If no event loop is available when a progress callback fires, sync callbacks run directly on the worker thread and async callbacks are skipped with a warning.
+        The `logger` is only used for quiv's own internal logs (scheduler loop events,
+        job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed
+        through this logger — use your own loggers inside your task handlers as usual.
+
+- `main_loop`: optional asyncio event loop for progress callbacks and event listeners. If not provided, resolution is attempted at `start()` time via `asyncio.get_running_loop()`, and lazily on first callback dispatch if still unset. This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). If no event loop is available when a callback fires, sync callbacks run directly on the worker thread and async callbacks are skipped with a warning.
 
 ### `add_task(...)`
 
@@ -72,30 +73,30 @@ registered. Call [`remove_task()`](#remove_tasktask_name) first to replace it.
 Behavior:
 
 - `func` may be sync or async
-- `args`/`kwargs` are pickle-serialized and persisted — most Python objects
-  are supported, but lambdas and inner functions are not picklable. The
-  temporary database is trusted internal state and should not be exposed to
-  untrusted input
+- `args`/`kwargs` are pickle-serialized and persisted — most Python objects are supported, but lambdas and inner functions are not picklable. 
+  
+    !!! warning
+        The temporary database is trusted internal state and should not be exposed to untrusted input. Doing so might open to attackers injecting untrusted args/kwargs that gets passed to Tasks which could compromise the application.
+
 - if `run_once=True`, task is executed once and then removed from storage
 - if `progress_callback` is provided, it runs on the main loop when available,
   or directly on the worker thread otherwise
 
-!!! info "`interval`"
+    !!! info "`interval`"
+        Quiv schedules next run of the task after current run has finished. 
 
-    Quiv schedules next run of the task after current run has finished. 
+        So, if a task is set to run with `interval=3600` (1 hour), it will wait **1 hour** between runs.
 
-    So, if a task is set to run with `interval=3600` (1 hour), it will wait **1 hour** between runs.
+        It might not exactly run once an hour as the task itself might take some time to finish.
 
-    It might not exactly run once an hour as the task itself might take some time to finish.
-
-### `start()` / `startup()`
+### `start() -> None` / `startup() -> None`
 
 Starts scheduler background loop thread. Safe to call multiple times.
 
-`startup()` is an alias for `start()` — use whichever reads better in your
-code. `startup()` pairs naturally with `shutdown()`.
+!!! success "`startup()` is an alias for `start()`"
+    use whichever reads better in your code. `startup()` pairs naturally with `shutdown()`.
 
-### `shutdown()` / `stop()`
+### `shutdown() -> None` / `stop() -> None`
 
 - Stops scheduler loop and worker threads
 - Cancels running jobs via stop events
@@ -104,10 +105,10 @@ code. `startup()` pairs naturally with `shutdown()`.
 
 Always call this during app teardown.
 
-`stop()` is an alias for `shutdown()` — use whichever reads better in your
-code. `stop()` pairs naturally with `start()`.
+!!! success "`stop()` is an alias for `shutdown()`"
+    use whichever reads better in your code. `stop()` pairs naturally with `start()`.
 
-### `run_task_immediately(task_name)`
+### `run_task_immediately(task_name: str) -> int`
 
 Queues already-scheduled task rows with this `task_name` to run now.
 
@@ -118,7 +119,7 @@ Raises:
 
 Returns number of task rows queued.
 
-### `pause_task(task_name)`
+### `pause_task(task_name: str) -> None`
 
 Pause blocks future runs of the task.
 
@@ -126,7 +127,7 @@ Raises:
 
 - `TaskNotFoundError` if no task with that name exists.
 
-### `resume_task(task_name, delay)`
+### `resume_task(task_name: str, delay: int = 0) -> None`
 
 Resume re-activates and sets next run with an optional `delay` (in seconds, default=0).
 
@@ -139,16 +140,16 @@ Raises:
     
     If a `delay` is not provided or set to 0, next run will fire immediately.
 
-### `cancel_job(job_id)`
+### `cancel_job(job_id: str) -> bool`
 
 Signals cancellation for a running job by setting its stop event.
 
 Returns `True` if the stop event was found and set, `False` otherwise.
 
-Cancellation is cooperative: the handler must check `_stop_event.is_set()` to
-actually stop.
+!!! info
+    Cancellation is cooperative: the handler must check `_stop_event.is_set()` to actually stop.
 
-### `get_task(task_name)`
+### `get_task(task_name: str) -> Task`
 
 Returns a single [`Task`](#task) by name.
 
@@ -156,7 +157,7 @@ Raises:
 
 - `TaskNotFoundError` if no task with that name exists.
 
-### `get_task_by_id(task_id)`
+### `get_task_by_id(task_id: str) -> Task`
 
 Returns a single [`Task`](#task) by its UUID string.
 
@@ -164,7 +165,7 @@ Raises:
 
 - `TaskNotFoundError` if no task with that ID exists.
 
-### `get_job(job_id)`
+### `get_job(job_id: str) -> Job`
 
 Returns a single [`Job`](#job) by its UUID string.
 
@@ -172,19 +173,19 @@ Raises:
 
 - `JobNotFoundError` if no job with that ID exists.
 
-### `get_all_tasks(include_run_once=False)`
+### `get_all_tasks(include_run_once: bool = False) -> list[Task]`
 
 Returns persisted task rows as [`Task`](#task) objects.
 
 - when `include_run_once=False`, run-once tasks are excluded
 - when `include_run_once=True`, all persisted tasks are returned
 
-### `get_all_jobs(status=None)`
+### `get_all_jobs(status: str | None = None) -> list[Job]`
 
 Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`,
 `"running"`).
 
-### `remove_task(task_name)`
+### `remove_task(task_name: str) -> None`
 
 Removes a scheduled task, its registered handler, and progress callback. If the
 task has a running job, its stop event is set to signal cancellation.
@@ -197,7 +198,7 @@ After removal, the same `task_name` can be re-registered immediately with
 `add_task()`. Any previously running job will finish on its own and clean up
 normally.
 
-### `add_listener(event, callback)`
+### `add_listener(event: Event, callback: Callable[..., Any]) -> None`
 
 Register an event listener for a scheduler lifecycle event. Multiple listeners
 can be registered for the same event. Both sync and async callbacks are
@@ -216,7 +217,7 @@ Raises:
 See [Event Listeners](event-listeners.md) for the full event list, data keys,
 and dispatch details.
 
-### `remove_listener(event, callback)`
+### `remove_listener(event: Event, callback: Callable[..., Any]) -> None`
 
 Remove a previously registered event listener. If the callback is not found,
 the call is silently ignored.
