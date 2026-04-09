@@ -104,9 +104,11 @@ Behavior:
 
         **`fixed_interval=True`** (default) — Next run is scheduled at fixed
         intervals from the job **start time**. A task with `interval=3600`
-        runs every hour on the clock, regardless of how long the task takes.
+        runs every 3600 seconds relative to that start-time anchor (for
+        example, if a run starts at 12:00:10, subsequent targets are
+        13:00:10, 14:00:10, etc.), regardless of how long the task takes.
         If a run exceeds the interval, missed intervals are skipped and the
-        next run lands on the next interval boundary.
+        next run lands on the next scheduled time in that cadence.
 
         **`fixed_interval=False`** — Next run is scheduled `interval` seconds
         after job **completion**. A task with `interval=3600` that takes 10

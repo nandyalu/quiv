@@ -46,7 +46,7 @@ sequenceDiagram
         H-->>Pool: Return result
         Pool->>App: Emit JOB_COMPLETED/FAILED event
         Pool->>DB: Finalize job status
-        Pool->>DB: Set task ACTIVE, next_run = now + interval
+        Pool->>DB: Set task ACTIVE, schedule next_run
     end
 
     App->>Q: shutdown()
