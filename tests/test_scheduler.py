@@ -488,6 +488,7 @@ def test_late_start_warning_logged_when_pool_busy(
                 task_name="late-task",
                 run_once=True,
                 scheduled_at=scheduled_at,
+                task_snapshot=task,
                 func=lambda: None,
                 args=(),
                 kwargs={},
