@@ -83,7 +83,7 @@ sequenceDiagram
 6. Job completion:
     - emits `JOB_COMPLETED`, `JOB_FAILED`, or `JOB_CANCELLED` event
     - updates job with terminal status (`completed`, `failed`, `cancelled`)
-    - sets task back to `active` and schedules next run (`now + interval`)
+    - sets task back to `active` and schedules next run (from start time when `fixed_interval=True`, from completion when `False`)
     - for run-once tasks, deletes the task row instead
     - jobs that started late due to pool saturation log a warning with the delay
 

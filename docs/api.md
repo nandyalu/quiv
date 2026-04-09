@@ -56,6 +56,7 @@ add_task(
     interval: float,
     delay: float = 0,
     run_once: bool = False,
+    fixed_interval: bool = True,
     args: tuple | None = None,
     kwargs: dict | None = None,
     progress_callback: Callable[..., Any] | None = None,
@@ -99,12 +100,17 @@ Behavior:
 - if `progress_callback` is provided, it runs on the main loop when available,
   or directly on the worker thread otherwise
 
-    !!! info "`interval`"
-        Quiv schedules next run of the task after current run has finished. 
+    !!! info "`fixed_interval` scheduling modes"
 
-        So, if a task is set to run with `interval=3600` (1 hour), it will wait **1 hour** between runs.
+        **`fixed_interval=True`** (default) — Next run is scheduled at fixed
+        intervals from the job **start time**. A task with `interval=3600`
+        runs every hour on the clock, regardless of how long the task takes.
+        If a run exceeds the interval, missed intervals are skipped and the
+        next run lands on the next interval boundary.
 
-        It might not exactly run once an hour as the task itself might take some time to finish.
+        **`fixed_interval=False`** — Next run is scheduled `interval` seconds
+        after job **completion**. A task with `interval=3600` that takes 10
+        minutes to run will have 70-minute gaps between start times.
 
 ### `start() -> None` / `startup() -> None`
 
@@ -272,6 +278,7 @@ Key fields:
 - `args: tuple[Any, ...]` — positional arguments (unpickled)
 - `kwargs: dict[str, Any]` — keyword arguments (unpickled)
 - `interval_seconds: float` — seconds between runs
+- `fixed_interval: bool` — if `True`, next run is measured from job start time; if `False`, from completion
 - `run_once: bool` — if `True`, task runs once then is removed
 - `status: str` — `"active"`, `"running"`, or `"paused"`
 - `next_run_at: datetime` — next scheduled run (UTC-aware)
