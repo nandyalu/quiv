@@ -16,6 +16,21 @@ jobs:
     steps:
       - uses: actions/configure-pages@v6
       - uses: actions/checkout@v6
+      - name: Wait for release API availability
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "Release $TAG is available in API"
+              exit 0
+            fi
+            echo "Waiting for release to propagate... ($i/30)"
+            sleep 2
+          done
+          echo "::warning::Release $TAG not found in API after 60s, proceeding anyway"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate Changelog from Releases
         uses: rhysd/changelog-from-release/action@v3
         with:
