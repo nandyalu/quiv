@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Callable
@@ -41,6 +42,7 @@ class PersistenceLayer:
         task_name: str,
         interval: float,
         run_once: bool,
+        fixed_interval: bool,
         next_run_at: datetime,
         args_pickled: bytes,
         kwargs_pickled: bytes,
@@ -48,9 +50,10 @@ class PersistenceLayer:
         """Insert a new scheduled task.
 
         Args:
-            task_name (str): Unique task name.
+            task_name (str): Task display name.
             interval (float): Seconds between task runs.
             run_once (bool): Whether task should be single-run.
+            fixed_interval (bool): Whether to schedule from job start time.
             next_run_at (datetime): Next UTC run timestamp.
             args_pickled (bytes): Pickle-encoded positional args.
             kwargs_pickled (bytes): Pickle-encoded keyword args.
@@ -64,6 +67,7 @@ class PersistenceLayer:
                 interval_seconds=interval,
                 next_run_at=next_run_at,
                 run_once=run_once,
+                fixed_interval=fixed_interval,
                 args=args_pickled,
                 kwargs=kwargs_pickled,
             )
@@ -291,14 +295,25 @@ class PersistenceLayer:
             existing.status = TaskStatus.RUNNING
             session.commit()
 
-    def finalize_task_after_job(self, task_id: str) -> None:
+    def finalize_task_after_job(
+        self, task_id: str, job_started_at: datetime
+    ) -> None:
         """Update task state after job completion.
 
         For run-once tasks, deletes the task row. For recurring tasks,
         sets status back to active and schedules the next run.
 
+        When ``fixed_interval`` is ``True``, the next run is aligned to
+        the next interval boundary after now, measured from
+        ``job_started_at``. If the job took longer than one interval,
+        intermediate intervals are skipped.
+
+        When ``fixed_interval`` is ``False``, the next run is simply
+        ``now + interval``.
+
         Args:
             task_id (str): Task identifier.
+            job_started_at (datetime): UTC time when the job started.
         """
 
         with self._lock, Session(self._engine) as session:
@@ -309,9 +324,16 @@ class PersistenceLayer:
                 session.delete(existing)
             else:
                 existing.status = TaskStatus.ACTIVE
-                existing.next_run_at = self._now_utc() + timedelta(
-                    seconds=existing.interval_seconds
-                )
+                now = self._now_utc()
+                interval = existing.interval_seconds
+                if existing.fixed_interval:
+                    elapsed = (now - job_started_at).total_seconds()
+                    periods = math.ceil(elapsed / interval)
+                    existing.next_run_at = job_started_at + timedelta(
+                        seconds=periods * interval
+                    )
+                else:
+                    existing.next_run_at = now + timedelta(seconds=interval)
             session.commit()
 
     def mark_job_running(self, job_id: str) -> None:

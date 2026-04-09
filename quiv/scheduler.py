@@ -55,6 +55,7 @@ class Quiv(QuivBase):
         interval: float,
         delay: float = 0,
         run_once: bool = False,
+        fixed_interval: bool = True,
         args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
@@ -67,6 +68,10 @@ class Quiv(QuivBase):
             interval (float): Interval in seconds between runs.
             delay (float, Optional=0): Initial delay before first run in seconds.
             run_once (bool, Optional=False): If ``True``, run task once and remove it.
+            fixed_interval (bool, Optional=True): If ``True``, next run is
+                scheduled at fixed intervals from the job start time. If
+                ``False``, next run is scheduled ``interval`` seconds after
+                job completion.
             args (tuple[Any, ...], Optional=None): Positional arguments for handler.
             kwargs (dict[str, Any], Optional=None): Keyword arguments for handler.
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
@@ -117,6 +122,7 @@ class Quiv(QuivBase):
             task_name=task_name,
             interval=interval,
             run_once=run_once,
+            fixed_interval=fixed_interval,
             next_run_at=next_run,
             args_pickled=args_pickled,
             kwargs_pickled=kwargs_pickled,
@@ -320,7 +326,7 @@ class Quiv(QuivBase):
                 duration_seconds=duration.total_seconds(),
                 error_message=error_message,
             )
-            self.persistence.finalize_task_after_job(task_id)
+            self.persistence.finalize_task_after_job(task_id, start_time)
             with self._job_count_lock:
                 self._active_job_count -= 1
             if run_once:

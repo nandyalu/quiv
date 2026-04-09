@@ -142,6 +142,8 @@ class TaskDB(QuivModelBase, table=True):
         args (bytes): Pickle-encoded positional arguments.
         kwargs (bytes): Pickle-encoded keyword arguments.
         interval_seconds (float): Interval between consecutive task runs.
+        fixed_interval (bool): Whether next run is measured from job start
+            time (True) or from job completion time (False).
         run_once (bool): Whether task should execute only once.
         status (str): Task status string.
         next_run_at (datetime): Next scheduled UTC run timestamp.
@@ -154,6 +156,7 @@ class TaskDB(QuivModelBase, table=True):
     args: bytes = Field(default_factory=lambda: pickle.dumps(()))
     kwargs: bytes = Field(default_factory=lambda: pickle.dumps({}))
     interval_seconds: float
+    fixed_interval: bool = True
     run_once: bool = False
     status: str = TaskStatus.ACTIVE
     next_run_at: datetime = Field(default_factory=next_run_time)
@@ -196,6 +199,8 @@ class Task(BaseModel):
         args (tuple[Any, ...]): Positional arguments.
         kwargs (dict[str, Any]): Keyword arguments.
         interval_seconds (float): Interval between consecutive task runs.
+        fixed_interval (bool): Whether next run is measured from job start
+            time (True) or from job completion time (False).
         run_once (bool): Whether task executes only once.
         status (str): Task status string.
         next_run_at (datetime): Next scheduled UTC run timestamp.
@@ -208,6 +213,7 @@ class Task(BaseModel):
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
     interval_seconds: float
+    fixed_interval: bool = True
     run_once: bool
     status: str
     next_run_at: datetime
@@ -253,6 +259,7 @@ class Task(BaseModel):
                 "args": args,
                 "kwargs": kwargs,
                 "interval_seconds": data.interval_seconds,
+                "fixed_interval": data.fixed_interval,
                 "run_once": data.run_once,
                 "status": data.status,
                 "next_run_at": QuivModelBase.set_timezone_to_utc(

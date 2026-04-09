@@ -75,7 +75,7 @@ def test_finalize_task_after_job_run_once_removes_task(
             run_once=True,
         )
         assert task_id is not None
-        scheduler.persistence.finalize_task_after_job(task_id)
+        scheduler.persistence.finalize_task_after_job(task_id, scheduler._now_utc())
         tasks = scheduler.get_all_tasks(include_run_once=True)
         assert all(task.id != task_id for task in tasks)
     finally:
@@ -216,8 +216,8 @@ def test_finalize_task_after_job_updates_recurring_next_run(
             delay=0,
         )
         assert task_id is not None
-        now = scheduler._now_utc()
-        scheduler.persistence.finalize_task_after_job(task_id)
+        start_time = scheduler._now_utc()
+        scheduler.persistence.finalize_task_after_job(task_id, start_time)
         tasks = scheduler.get_all_tasks(include_run_once=True)
         task = next(item for item in tasks if item.id == task_id)
         task_next = (
@@ -225,13 +225,13 @@ def test_finalize_task_after_job_updates_recurring_next_run(
             if task.next_run_at.tzinfo is not None
             else task.next_run_at
         )
-        now_naive = now.replace(tzinfo=None)
-        assert task_next >= now_naive
+        start_naive = start_time.replace(tzinfo=None)
+        assert task_next >= start_naive
     finally:
         scheduler.shutdown()
 
 
-def test_finalize_task_after_job_sets_active_and_schedules_from_completion(
+def test_finalize_task_fixed_interval_schedules_from_start(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     from quiv.models import TaskStatus
@@ -240,36 +240,128 @@ def test_finalize_task_after_job_sets_active_and_schedules_from_completion(
     try:
         interval = 60
         task_id = scheduler.add_task(
-            task_name="recurring-completion-schedule",
+            task_name="fixed-interval-schedule",
             func=lambda: None,
             interval=interval,
             run_once=False,
+            fixed_interval=True,
             delay=0,
         )
         assert task_id is not None
 
-        # Set the task to RUNNING (simulating dispatch)
         scheduler.persistence.mark_task_running(task_id)
-        task_before = next(
-            t for t in scheduler.get_all_tasks(include_run_once=True)
-            if t.id == task_id
-        )
-        assert task_before.status == TaskStatus.RUNNING
 
-        # Finalize the task after job completion
-        now_before = scheduler._now_utc()
-        scheduler.persistence.finalize_task_after_job(task_id)
-        now_after = scheduler._now_utc()
+        # Simulate job that started 5s ago
+        start_time = scheduler._now_utc() - timedelta(seconds=5)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time)
 
-        # Verify the task is back to ACTIVE
         task_after = next(
             t for t in scheduler.get_all_tasks(include_run_once=True)
             if t.id == task_id
         )
         assert task_after.status == TaskStatus.ACTIVE
 
-        # next_run_at should be approximately now + interval
-        # (calculated from completion time, not from when originally due)
+        # next_run_at should be start_time + interval (1 period)
+        next_run = task_after.next_run_at.replace(tzinfo=None)
+        expected = (start_time + timedelta(seconds=interval)).replace(
+            tzinfo=None
+        )
+        # Allow 1s tolerance for test execution time
+        assert abs((next_run - expected).total_seconds()) < 1, (
+            f"next_run_at {next_run} should be near {expected}"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_task_fixed_interval_skips_missed_intervals(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """When a job takes longer than the interval, intermediate runs are skipped."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        interval = 60
+        task_id = scheduler.add_task(
+            task_name="fixed-interval-skip",
+            func=lambda: None,
+            interval=interval,
+            run_once=False,
+            fixed_interval=True,
+            delay=0,
+        )
+
+        scheduler.persistence.mark_task_running(task_id)
+
+        # Simulate job that started 70s ago (missed one interval)
+        start_time = scheduler._now_utc() - timedelta(seconds=70)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+
+        task_after = next(
+            t for t in scheduler.get_all_tasks(include_run_once=True)
+            if t.id == task_id
+        )
+        # Should skip to 2*interval from start (120s)
+        next_run = task_after.next_run_at.replace(tzinfo=None)
+        expected = (start_time + timedelta(seconds=2 * interval)).replace(
+            tzinfo=None
+        )
+        assert abs((next_run - expected).total_seconds()) < 1, (
+            f"next_run_at {next_run} should be near {expected} (skipped 1 interval)"
+        )
+
+        # Simulate job that started 130s ago (missed two intervals)
+        scheduler.persistence.mark_task_running(task_id)
+        start_time_2 = scheduler._now_utc() - timedelta(seconds=130)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time_2)
+
+        task_after_2 = next(
+            t for t in scheduler.get_all_tasks(include_run_once=True)
+            if t.id == task_id
+        )
+        # Should skip to 3*interval from start (180s)
+        next_run_2 = task_after_2.next_run_at.replace(tzinfo=None)
+        expected_2 = (start_time_2 + timedelta(seconds=3 * interval)).replace(
+            tzinfo=None
+        )
+        assert abs((next_run_2 - expected_2).total_seconds()) < 1, (
+            f"next_run_at {next_run_2} should be near {expected_2} (skipped 2 intervals)"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_task_wait_between_runs_schedules_from_completion(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import TaskStatus
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        interval = 60
+        task_id = scheduler.add_task(
+            task_name="wait-between-schedule",
+            func=lambda: None,
+            interval=interval,
+            run_once=False,
+            fixed_interval=False,
+            delay=0,
+        )
+        assert task_id is not None
+
+        scheduler.persistence.mark_task_running(task_id)
+
+        now_before = scheduler._now_utc()
+        start_time = now_before - timedelta(seconds=5)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+        now_after = scheduler._now_utc()
+
+        task_after = next(
+            t for t in scheduler.get_all_tasks(include_run_once=True)
+            if t.id == task_id
+        )
+        assert task_after.status == TaskStatus.ACTIVE
+
+        # next_run_at should be approximately now + interval (from completion)
         next_run = task_after.next_run_at.replace(tzinfo=None)
         expected_lower = (
             now_before.replace(tzinfo=None) + timedelta(seconds=interval)
