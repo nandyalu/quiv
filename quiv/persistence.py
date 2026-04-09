@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from sqlmodel import Session, select, col
@@ -71,43 +71,20 @@ class PersistenceLayer:
             session.commit()
             return task.id
 
-    def get_task_id_by_name(self, task_name: str) -> str:
-        """Look up a task ID by name.
+    def delete_task(self, task_id: str) -> None:
+        """Delete a task by id.
 
         Args:
-            task_name (str): Task name to look up.
-
-        Returns:
-            str: Task ID (UUID string).
+            task_id (str): Task id to delete.
 
         Raises:
-            TaskNotFoundError: If no task with that name exists.
+            TaskNotFoundError: If no task with that id exists.
         """
 
         with self._lock, Session(self._engine) as session:
-            task = session.exec(
-                select(TaskDB).where(TaskDB.task_name == task_name)
-            ).first()
+            task = session.get(TaskDB, task_id)
             if task is None:
-                raise TaskNotFoundError(f"Task '{task_name}' was not found")
-            return task.id
-
-    def delete_task(self, task_name: str) -> None:
-        """Delete a task by name.
-
-        Args:
-            task_name (str): Task name to delete.
-
-        Raises:
-            TaskNotFoundError: If no task with that name exists.
-        """
-
-        with self._lock, Session(self._engine) as session:
-            task = session.exec(
-                select(TaskDB).where(TaskDB.task_name == task_name)
-            ).first()
-            if task is None:  # pragma: no cover
-                raise TaskNotFoundError(f"Task '{task_name}' was not found")
+                raise TaskNotFoundError(f"Task '{task_id}' was not found")
             session.delete(task)
             session.commit()
 
@@ -129,28 +106,7 @@ class PersistenceLayer:
             tasks = list(session.exec(statement).all())
             return tasks
 
-    def get_task_by_name(self, task_name: str) -> TaskDB:
-        """Fetch a single task by name.
-
-        Args:
-            task_name (str): Task name to look up.
-
-        Returns:
-            TaskDB: The task record.
-
-        Raises:
-            TaskNotFoundError: If no task with that name exists.
-        """
-
-        with self._lock, Session(self._engine) as session:
-            task = session.exec(
-                select(TaskDB).where(TaskDB.task_name == task_name)
-            ).first()
-            if task is None:
-                raise TaskNotFoundError(f"Task '{task_name}' was not found")
-            return task
-
-    def get_task_by_id(self, task_id: str) -> TaskDB:
+    def get_task(self, task_id: str) -> TaskDB:
         """Fetch a single task by ID.
 
         Args:
@@ -204,34 +160,31 @@ class PersistenceLayer:
                 statement = statement.where(Job.status == status)
             return list(session.exec(statement).all())
 
-    def queue_task_for_immediate_run(self, task_name: str) -> int:
-        """Mark scheduled task rows for immediate execution.
+    def queue_task_for_immediate_run(self, task_id: str) -> int:
+        """Mark a scheduled task for immediate execution.
 
         Args:
-            task_name (str): Task name to enqueue.
+            task_id (str): Task id to enqueue.
 
         Returns:
             int: Number of task rows updated.
 
         Raises:
-            TaskNotScheduledError: If no scheduled task exists for the name.
+            TaskNotScheduledError: If no scheduled task exists for the id.
         """
 
         with self._lock, Session(self._engine) as session:
-            tasks = session.exec(
-                select(TaskDB).where(TaskDB.task_name == task_name)
-            ).all()
-            if not tasks:
+            task = session.get(TaskDB, task_id)
+            if task is None:
                 raise TaskNotScheduledError(
-                    f"Task '{task_name}' is not scheduled. Add it with"
+                    f"Task '{task_id}' is not scheduled. Add it with"
                     " add_task before running immediately."
                 )
             now = self._now_utc()
-            for task in tasks:
-                task.status = TaskStatus.ACTIVE
-                task.next_run_at = now
+            task.status = TaskStatus.ACTIVE
+            task.next_run_at = now
             session.commit()
-            return len(tasks)
+            return 1
 
     def pause_task(self, task_id: str) -> None:
         """Pause a task so it will not be dispatched.
@@ -379,12 +332,20 @@ class PersistenceLayer:
             job.started_at = self._now_utc()
             session.commit()
 
-    def finalize_job(self, job_id: str, status: str) -> None:
+    def finalize_job(
+        self,
+        job_id: str,
+        status: str,
+        duration_seconds: float | None = None,
+        error_message: str | None = None,
+    ) -> None:
         """Set final status and end timestamp for a job.
 
         Args:
             job_id (str): Job identifier (UUID string).
             status (str): Terminal job status.
+            duration_seconds (float, Optional=None): Job duration in seconds.
+            error_message (str, Optional=None): Error message if job failed.
 
         Raises:
             JobNotFoundError: If job does not exist.
@@ -396,4 +357,6 @@ class PersistenceLayer:
                 raise JobNotFoundError(f"Job '{job_id}' should exist")
             job.status = status
             job.ended_at = self._now_utc()
+            job.duration_seconds = duration_seconds
+            job.error_message = error_message
             session.commit()

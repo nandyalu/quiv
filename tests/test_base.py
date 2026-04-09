@@ -37,7 +37,7 @@ def test_register_handler_validation(
         with pytest.raises(HandlerRegistrationError):
             scheduler._register_handler("", lambda: None)
         with pytest.raises(HandlerRegistrationError):
-            scheduler._register_handler("x", None)  # type: ignore[arg-type]
+            scheduler._register_handler("some-id", None)  # type: ignore[arg-type]
     finally:
         scheduler.shutdown()
 
@@ -190,8 +190,8 @@ def test_pause_and_resume_wrappers_hit_base_methods(
     try:
         task_id = scheduler.add_task("pause-resume", lambda: None, interval=60)
         assert task_id is not None
-        scheduler.pause_task("pause-resume")
-        scheduler.resume_task("pause-resume")
+        scheduler.pause_task(task_id)
+        scheduler.resume_task(task_id)
     finally:
         scheduler.shutdown()
 
@@ -319,48 +319,25 @@ def test_cancel_job_returns_true_when_stop_event_exists(
         scheduler.shutdown()
 
 
-def test_get_task_returns_task_by_name(
+def test_get_task_returns_task_by_id(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        scheduler.add_task("lookup-task", lambda: None, interval=60)
-        task = scheduler.get_task("lookup-task")
+        task_id = scheduler.add_task("lookup-task", lambda: None, interval=60)
+        task = scheduler.get_task(task_id)
         assert task.task_name == "lookup-task"
     finally:
         scheduler.shutdown()
 
 
-def test_get_task_raises_for_missing_name(
+def test_get_task_raises_for_missing_id(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(TaskNotFoundError):
-            scheduler.get_task("no-such-task")
-    finally:
-        scheduler.shutdown()
-
-
-def test_get_task_by_id_returns_task(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    scheduler = Quiv(main_loop=running_main_loop)
-    try:
-        task_id = scheduler.add_task("id-lookup", lambda: None, interval=60)
-        task = scheduler.get_task_by_id(task_id)
-        assert task.task_name == "id-lookup"
-    finally:
-        scheduler.shutdown()
-
-
-def test_get_task_by_id_raises_for_missing_id(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    scheduler = Quiv(main_loop=running_main_loop)
-    try:
-        with pytest.raises(TaskNotFoundError):
-            scheduler.get_task_by_id("nonexistent-uuid")
+            scheduler.get_task("nonexistent-uuid")
     finally:
         scheduler.shutdown()
 

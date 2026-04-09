@@ -138,7 +138,7 @@ class TaskDB(QuivModelBase, table=True):
         __tablename__ (str): Database table name for tasks.
         id (str, UUID): UUID task identifier string.
         task_name (str):
-            Unique User-facing task key mapped to a registered handler.
+            User-facing display name for the task.
         args (bytes): Pickle-encoded positional arguments.
         kwargs (bytes): Pickle-encoded keyword arguments.
         interval_seconds (float): Interval between consecutive task runs.
@@ -181,13 +181,14 @@ class TaskDB(QuivModelBase, table=True):
 class Task(BaseModel):
     """Scheduled task model returned by public API methods.
 
-    The public API methods ``get_task()``, ``get_task_by_id()``, and
-    ``get_all_tasks()`` return ``Task`` objects directly.
+    The public API methods ``get_task()`` and ``get_all_tasks()`` return
+    ``Task`` objects directly.
 
     Example::
 
-        task = scheduler.get_task("my-task")  # Returns Task
-        tasks = scheduler.get_all_tasks()     # Returns list[Task]
+        task_id = scheduler.add_task("my-task", handler, interval=60)
+        task = scheduler.get_task(task_id)  # Returns Task
+        tasks = scheduler.get_all_tasks()   # Returns list[Task]
 
     Attributes:
         id (str): UUID task identifier string.
@@ -273,6 +274,8 @@ class Job(QuivModelBase, table=True):
         status (str): Job status string.
         started_at (datetime): UTC start timestamp.
         ended_at (datetime, Optional=None): UTC end timestamp when available.
+        duration_seconds (float, Optional=None): Job duration in seconds.
+        error_message (str, Optional=None): Error message if job failed.
     """
 
     __tablename__: str = "quiv_job"  # type: ignore
@@ -283,6 +286,8 @@ class Job(QuivModelBase, table=True):
     status: str = JobStatus.SCHEDULED
     started_at: datetime = Field(default_factory=get_current_time)
     ended_at: datetime | None = None
+    duration_seconds: float | None = None
+    error_message: str | None = None
 
     # Ensure started_at and ended_at are timezone-aware UTC on load from DB
     @model_validator(mode="before")

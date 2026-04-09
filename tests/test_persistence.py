@@ -21,7 +21,7 @@ def test_queue_task_for_immediate_run_raises_for_missing_task(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(TaskNotScheduledError):
-            scheduler.persistence.queue_task_for_immediate_run("missing")
+            scheduler.persistence.queue_task_for_immediate_run("missing-id")
     finally:
         scheduler.shutdown()
 

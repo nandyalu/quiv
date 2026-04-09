@@ -62,7 +62,7 @@ class Quiv(QuivBase):
         """Schedule a callable to run at a fixed interval.
 
         Args:
-            task_name (str): Unique name for this task.
+            task_name (str): Display name for this task.
             func (Callable[..., Any]): Function to execute as task (sync/async).
             interval (float): Interval in seconds between runs.
             delay (float, Optional=0): Initial delay before first run in seconds.
@@ -72,8 +72,7 @@ class Quiv(QuivBase):
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
 
         Raises:
-            ConfigurationError: If scheduling parameters are invalid or
-                a task with the same name is already registered.
+            ConfigurationError: If scheduling parameters are invalid.
 
         Returns:
             str: Task id string (UUID).
@@ -86,11 +85,6 @@ class Quiv(QuivBase):
         if delay < 0:
             raise ConfigurationError(
                 "delay must be greater than or equal to 0"
-            )
-        if task_name in self.registry:
-            raise ConfigurationError(
-                f"Task '{task_name}' is already registered. Call"
-                " remove_task() first if you want to replace it."
             )
 
         resolved_args = args if args is not None else ()
@@ -118,9 +112,6 @@ class Quiv(QuivBase):
                 f"Failed to serialize task kwargs: {e}"
             ) from e
 
-        self._register_handler(task_name, func)
-        self._register_progress_callback(task_name, progress_callback)
-
         next_run = self._now_utc() + timedelta(seconds=delay)
         task_id = self.persistence.create_task(
             task_name=task_name,
@@ -130,52 +121,50 @@ class Quiv(QuivBase):
             args_pickled=args_pickled,
             kwargs_pickled=kwargs_pickled,
         )
+
+        self._register_handler(task_id, func)
+        self._register_progress_callback(task_id, progress_callback)
+
         next_run_user_tz = self._to_display_timezone(next_run)
         self._logger.info(
             f"Task '{task_name}' added with interval {interval}s and delay"
             f" {delay}s (next run at {next_run_user_tz})"
         )
-        self._emit_event(
-            Event.TASK_ADDED,
-            {"task_name": task_name, "task_id": task_id},
-        )
+        task = self.get_task(task_id)
+        self._emit_event(Event.TASK_ADDED, task)
         return task_id
 
-    def remove_task(self, task_name: str) -> None:
+    def remove_task(self, task_id: str) -> None:
         """Remove a scheduled task and its handler/callback registrations.
 
         If the task has a running job, its stop event is set to signal
         cancellation. The running job will finish on its own and clean
         up via ``_run_job``'s finally block.
 
-        After removal, the same ``task_name`` can be re-registered
-        immediately with ``add_task()``.
-
         Args:
-            task_name (str): Task name to remove.
+            task_id (str): Task id to remove.
 
         Raises:
-            TaskNotFoundError: If no task with that name exists.
+            TaskNotFoundError: If no task with that id exists.
         """
+
+        # Snapshot the task before deletion for the event listener
+        task = self.get_task(task_id)
 
         # Cancel any running job for this task before deleting
         running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
-        task_id = self.persistence.get_task_id_by_name(task_name)
         for job in running_jobs:
             if job.task_id == task_id and job.id in self.stop_events:
                 self.stop_events[job.id].set()
                 self._logger.info(
-                    f"Cancelled running job {job.id} for task '{task_name}'"
+                    f"Cancelled running job {job.id} for task '{task_id}'"
                 )
 
-        self.persistence.delete_task(task_name)
-        self.registry.pop(task_name, None)
-        self.progress_callbacks.pop(task_name, None)
-        self._logger.info(f"Task '{task_name}' removed")
-        self._emit_event(
-            Event.TASK_REMOVED,
-            {"task_name": task_name, "task_id": task_id},
-        )
+        self.persistence.delete_task(task_id)
+        self.registry.pop(task_id, None)
+        self.progress_callbacks.pop(task_id, None)
+        self._logger.info(f"Task '{task_id}' removed")
+        self._emit_event(Event.TASK_REMOVED, task)
 
     def _loop(self) -> None:
         """Continuously dispatch due tasks until shutdown is requested."""
@@ -220,9 +209,9 @@ class Quiv(QuivBase):
         stop_event = threading.Event()
         self.stop_events[job_id] = stop_event
 
-        func = self.registry[task.task_name]
+        func = self.registry[task.id]
         f_args, f_kwargs = self.execution.prepare_invocation(
-            task_name=task.task_name,
+            task_id=task.id,
             func=func,
             args_pickled=task.args,
             kwargs_pickled=task.kwargs,
@@ -284,10 +273,11 @@ class Quiv(QuivBase):
             f" {self._to_display_timezone(start_time)}"
         )
         self.persistence.mark_job_running(job_id)
-        self._emit_event(
-            Event.JOB_STARTED,
-            {"task_name": task_name, "job_id": job_id},
-        )
+
+        # Snapshot task for event listeners (before finalize may delete it)
+        task_snapshot = self.get_task(task_id)
+        started_job = self.get_job(job_id)
+        self._emit_event(Event.JOB_STARTED, task_snapshot, started_job)
 
         status = JobStatus.COMPLETED
         job_error: BaseException | None = None
@@ -315,35 +305,28 @@ class Quiv(QuivBase):
             stop_event = self.stop_events.pop(job_id, None)
             if stop_event is not None and stop_event.is_set():
                 status = JobStatus.CANCELLED
-            self.persistence.finalize_job(job_id, status)
+
+            error_message = str(job_error) if job_error is not None else None
+            self.persistence.finalize_job(
+                job_id,
+                status,
+                duration_seconds=duration.total_seconds(),
+                error_message=error_message,
+            )
             self.persistence.finalize_task_after_job(task_id)
             with self._job_count_lock:
                 self._active_job_count -= 1
             if run_once:
-                self.registry.pop(task_name, None)
-                self.progress_callbacks.pop(task_name, None)
+                self.registry.pop(task_id, None)
+                self.progress_callbacks.pop(task_id, None)
 
-            if status == JobStatus.COMPLETED:
+            finalized_job = self.get_job(job_id)
+            event_map = {
+                JobStatus.COMPLETED: Event.JOB_COMPLETED,
+                JobStatus.FAILED: Event.JOB_FAILED,
+                JobStatus.CANCELLED: Event.JOB_CANCELLED,
+            }
+            if status in event_map:
                 self._emit_event(
-                    Event.JOB_COMPLETED,
-                    {
-                        "task_name": task_name,
-                        "job_id": job_id,
-                        "duration": duration,
-                    },
-                )
-            elif status == JobStatus.FAILED:
-                self._emit_event(
-                    Event.JOB_FAILED,
-                    {
-                        "task_name": task_name,
-                        "job_id": job_id,
-                        "error": job_error,
-                        "duration": duration,
-                    },
-                )
-            elif status == JobStatus.CANCELLED:
-                self._emit_event(
-                    Event.JOB_CANCELLED,
-                    {"task_name": task_name, "job_id": job_id},
+                    event_map[status], task_snapshot, finalized_job
                 )

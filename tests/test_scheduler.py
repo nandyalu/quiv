@@ -99,9 +99,10 @@ def test_run_task_immediately_requires_scheduled_task(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        scheduler._register_handler("demo", lambda: None)
+        task_id = scheduler.add_task(task_name="demo", func=lambda: None, interval=60)
+        scheduler.persistence.delete_task(task_id)
         with pytest.raises(TaskNotScheduledError):
-            scheduler.run_task_immediately("demo")
+            scheduler.run_task_immediately(task_id)
     finally:
         scheduler.shutdown()
 
@@ -111,8 +112,8 @@ def test_add_task_and_run_task_immediately_queues_task(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        scheduler.add_task(task_name="demo", func=lambda: None, interval=60)
-        count = scheduler.run_task_immediately("demo")
+        task_id = scheduler.add_task(task_name="demo", func=lambda: None, interval=60)
+        count = scheduler.run_task_immediately(task_id)
         assert count >= 1
     finally:
         scheduler.shutdown()
@@ -346,14 +347,16 @@ def test_failed_job_sets_failed_status(
         scheduler.shutdown()
 
 
-def test_add_task_raises_on_duplicate_task_name(
+def test_add_task_allows_duplicate_task_name(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        scheduler.add_task("dup", lambda: None, interval=60)
-        with pytest.raises(ConfigurationError):
-            scheduler.add_task("dup", lambda: None, interval=60)
+        id1 = scheduler.add_task("dup", lambda: None, interval=60)
+        id2 = scheduler.add_task("dup", lambda: None, interval=60)
+        assert id1 != id2
+        assert id1 in scheduler.registry
+        assert id2 in scheduler.registry
     finally:
         scheduler.shutdown()
 
@@ -441,7 +444,7 @@ def test_backpressure_skips_dispatch_when_pool_full(
             interval=60,
             run_once=True,
         )
-        scheduler.run_task_immediately("deferred")
+        scheduler.run_task_immediately(deferred_id)
         time.sleep(1.5)
 
         # deferred task should still be pending — pool is full
@@ -533,7 +536,7 @@ def test_remove_task(
         pass
 
     try:
-        scheduler.add_task(
+        task_id = scheduler.add_task(
             task_name="removable",
             func=my_handler,
             interval=60,
@@ -542,22 +545,22 @@ def test_remove_task(
 
         # Verify the task, handler, and callback are present
         tasks = scheduler.get_all_tasks(include_run_once=True)
-        assert any(t.task_name == "removable" for t in tasks)
-        assert "removable" in scheduler.registry
-        assert "removable" in scheduler.progress_callbacks
+        assert any(t.id == task_id for t in tasks)
+        assert task_id in scheduler.registry
+        assert task_id in scheduler.progress_callbacks
 
         # Remove the task
-        scheduler.remove_task("removable")
+        scheduler.remove_task(task_id)
 
         # Verify the task, handler, and callback are gone
         tasks = scheduler.get_all_tasks(include_run_once=True)
-        assert all(t.task_name != "removable" for t in tasks)
-        assert "removable" not in scheduler.registry
-        assert "removable" not in scheduler.progress_callbacks
+        assert all(t.id != task_id for t in tasks)
+        assert task_id not in scheduler.registry
+        assert task_id not in scheduler.progress_callbacks
 
         # Removing a non-existent task should raise TaskNotFoundError
         with pytest.raises(TaskNotFoundError):
-            scheduler.remove_task("non-existent-task")
+            scheduler.remove_task("non-existent-id")
     finally:
         scheduler.shutdown()
 
@@ -575,7 +578,7 @@ def test_remove_task_cancels_running_job(
             blocker.wait(timeout=0.1)
 
     try:
-        scheduler.add_task(
+        task_id = scheduler.add_task(
             task_name="remove-while-running",
             func=blocking_handler,
             interval=60,
@@ -586,7 +589,7 @@ def test_remove_task_cancels_running_job(
         assert started.wait(timeout=3)
 
         # Task is running — remove should cancel the running job
-        scheduler.remove_task("remove-while-running")
+        scheduler.remove_task(task_id)
 
         # Wait for job to finalize after stop event is set
         time.sleep(1)

@@ -127,13 +127,20 @@ include them (and does not use `**kwargs`), they are not injected. See
 [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md)
 for in-depth guides.
 
+!!! tip "Hold onto `task_id`"
+    `add_task()` returns a `task_id` (UUID string). All runtime operations —
+    `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`,
+    and `get_task()` — use this id. Multiple tasks can share the same
+    `task_name`; each gets its own unique `task_id`.
+
 ## 3) Add progress callback (optional)
 
 Progress callbacks can be sync or async. When an asyncio event loop is
 available, async callbacks run via `run_coroutine_threadsafe` and sync
 callbacks run via `call_soon_threadsafe` on the main loop. If no event loop
 is available (e.g. in a plain script without asyncio), sync callbacks run
-directly on the worker thread and async callbacks are skipped with a warning.
+directly on the worker thread and async callbacks run in a temporary event
+loop on the worker thread.
 
 ```python
 async def on_progress(**payload):
@@ -154,22 +161,28 @@ callback with `add_listener()`:
 
 ```python
 from quiv import Event
+from quiv.models import Task, Job
 
-def on_job_completed(event, data):
-    print(f"Job {data['job_id']} for '{data['task_name']}' completed in {data['duration']}")
+def on_job_completed(event: Event, task: Task, job: Job):
+    print(f"Job {job.id} for '{task.task_name}' completed in {job.duration_seconds}s")
 
-def on_job_failed(event, data):
-    print(f"Job {data['job_id']} for '{data['task_name']}' failed: {data['error']}")
+def on_job_failed(event: Event, task: Task, job: Job):
+    print(f"Job {job.id} for '{task.task_name}' failed: {job.error_message}")
 
 scheduler.add_listener(Event.JOB_COMPLETED, on_job_completed)
 scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
+!!! info "Typed callbacks"
+    `TASK_*` listeners receive `(event, task)`. `JOB_*` listeners receive
+    `(event, task, job)`. Both use typed model objects with full IDE
+    autocomplete — no dict key lookups.
+
 Listeners follow the same dispatch model as progress callbacks: async listeners
 run on the main loop, sync listeners run via `call_soon_threadsafe` (or
 directly on the calling thread when no loop is available). Exceptions in
 listeners are logged and swallowed. See [Event Listeners](event-listeners.md)
-for the full list of events and data keys.
+for the full event list and dispatch details.
 
 ## 5) Start and stop
 
@@ -192,9 +205,15 @@ works identically — they are aliases.
 ## 6) Operate tasks at runtime
 
 ```python
-scheduler.run_task_immediately("demo-task")
-scheduler.pause_task("demo-task")
-scheduler.resume_task("demo-task")
+task_id = scheduler.add_task(
+    task_name="demo-task",
+    func=my_task,
+    interval=10,
+)
+
+scheduler.run_task_immediately(task_id)
+scheduler.pause_task(task_id)
+scheduler.resume_task(task_id)
 ```
 
 ## 7) Cancel a running job
@@ -328,9 +347,9 @@ standard Python logging configuration.
 - **`InvalidTimezoneError`**: use a valid IANA timezone name (for example
   `UTC` or `America/New_York`).
 - **`HandlerNotRegisteredError` for immediate run**: call `add_task(...)`
-  first.
-- **`TaskNotScheduledError`**: the task handler exists, but no scheduled task
-  row exists yet.
+  first, and use the returned `task_id`.
+- **`TaskNotScheduledError`**: the task handler is registered, but the
+  scheduled task row no longer exists in the database.
 - **No log output**: configure Python logging (see [Logging](#logging) above).
 - **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most
   Python objects are supported. If you encounter errors, ensure the objects

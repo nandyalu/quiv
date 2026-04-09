@@ -63,9 +63,10 @@ sequenceDiagram
 2. `add_listener(event, callback)` registers a callback for scheduler events.
     - Listeners can be added at any time.
     - Multiple listeners per event are supported.
-3. `add_task(...)` registers the handler and progress callback, then creates a `Task` row with scheduling metadata.
+3. `add_task(...)` creates a `Task` row with scheduling metadata, then registers the handler and progress callback by `task_id`.
 
-    - Raises `ConfigurationError` if the task name is already registered.
+    - Returns a unique `task_id` (UUID string) used for all subsequent task operations.
+    - Multiple tasks can share the same `task_name` — each gets its own `task_id`.
     - Emits `TASK_ADDED` event.
     - Tasks can be added before `start()`, after `start()`, or at any point while the scheduler is running.
 

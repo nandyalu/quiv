@@ -97,13 +97,13 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/start-heartbeat")
 def start_heartbeat():
-    scheduler.add_task(
+    task_id = scheduler.add_task(
         task_name="heartbeat",
         func=ping,
         interval=30,
         progress_callback=on_progress,
     )
-    return {"message": "Heartbeat started successfully!"}
+    return {"task_id": task_id}
 ```
 
 Async handlers work the same way:
@@ -131,7 +131,7 @@ For a full FastAPI integration example (startup/shutdown lifecycle plus
 
 ## Why quiv?
 
-Python has several task schedulers — [APScheduler](https://pypi.org/project/APScheduler/), [arq](https://github.com/python-arq/arq), [rq](https://python-rq.org/), [sched](https://docs.python.org/3/library/sched.html), [schedule](https://schedule.readthedocs.io/en/stable/index.html), and others. `quiv` was born out of two gaps none of them filled well.
+Python has several task schedulers — [APScheduler](https://pypi.org/project/APScheduler/), [arq](https://github.com/python-arq/arq), [rq](https://python-rq.org/), [sched](https://docs.python.org/3/library/sched.html), [schedule](https://schedule.readthedocs.io/en/stable/index.html), and others. `quiv` was born out of gaps none of them filled well.
 
 ### Cooperative cancellation
 I am the developor of [Trailarr](https://github.com/nandyalu/trailarr), an open-source app for downloading and managing trailers for media libraries, Trailarr is a fastapi app at it's core and was using APScheduler for background tasks and things that shouldn't block the main thread/async loop. 
@@ -148,7 +148,42 @@ There was no straightforward way to call an async function on the main event loo
 
 `quiv` solves this with `_progress_hook`: your handler calls it with arbitrary payload data, and the scheduler dispatches your registered callback on the main asyncio loop, where it can broadcast over websockets or update application state.
 
-If your app needs either of these patterns, `quiv` might be a good fit.
+### Job-level tracing via `_job_id`
+
+When you need to trace exactly what happened during a specific run of a task,
+log correlation is essential. `quiv` injects a unique `_job_id` (UUID string)
+into every handler invocation, giving you a stable identifier you can attach
+to log records, metrics, or spans.
+
+[Trailarr](https://github.com/nandyalu/trailarr) uses this today: every task
+handler receives `_job_id` from quiv and sets it as a `trace_id` on the
+logger. All log lines emitted during that run carry the same trace id, so
+filtering logs by a single job is a one-line query — no matter how many tasks
+ran concurrently.
+
+```python
+import logging
+
+from config.logging_context import with_logging_context
+
+logger = logging.getLogger(__name__)
+
+@with_logging_context
+def download_trailer(
+    media_id: int,
+    _job_id: str | None = None,
+    _stop_event=None,
+):
+    # quiv injects _job_id and with_logging_context decorator stores it as trace_id
+    # logs handler will get it using get_trace_id and adds it to all logs
+    # so logs from the task will be logged with that trace_id
+    # Attach job_id as trace context for this run
+    logger.info("Starting download for media %s", media_id)
+
+    # ... do work, all logs carry the same trace_id ...
+```
+
+If your app needs any of these patterns, `quiv` might be a good fit.
 
 ## Important caveats
 

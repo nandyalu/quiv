@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from datetime import timedelta
 from typing import Any
 
 import pytest
 
 from quiv import Event, Quiv
 from quiv.exceptions import ConfigurationError
+from quiv.models import Job, Task
 
 
 def test_add_listener_validates_event_type(
@@ -18,7 +18,7 @@ def test_add_listener_validates_event_type(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(ConfigurationError):
-            scheduler.add_listener("not_an_event", lambda e, d: None)  # type: ignore[arg-type]
+            scheduler.add_listener("not_an_event", lambda e, t: None)  # type: ignore[arg-type]
     finally:
         scheduler.shutdown()
 
@@ -40,7 +40,7 @@ def test_remove_listener(
     scheduler = Quiv(main_loop=running_main_loop)
     captured: list[Event] = []
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
+    def listener(event: Event, task: Task) -> None:
         captured.append(event)
 
     try:
@@ -59,7 +59,7 @@ def test_remove_listener_ignores_unknown_callback(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         # Should not raise
-        scheduler.remove_listener(Event.TASK_ADDED, lambda e, d: None)
+        scheduler.remove_listener(Event.TASK_ADDED, lambda e, t: None)
     finally:
         scheduler.shutdown()
 
@@ -68,11 +68,11 @@ def test_task_added_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
         received.set()
 
     try:
@@ -80,9 +80,9 @@ def test_task_added_event(
         task_id = scheduler.add_task("my-task", lambda: None, interval=60)
         assert received.wait(timeout=2)
         assert len(captured) == 1
-        assert captured[0]["event"] == Event.TASK_ADDED
-        assert captured[0]["task_name"] == "my-task"
-        assert captured[0]["task_id"] == task_id
+        assert captured[0][0] == Event.TASK_ADDED
+        assert captured[0][1].task_name == "my-task"
+        assert captured[0][1].id == task_id
     finally:
         scheduler.shutdown()
 
@@ -91,22 +91,22 @@ def test_task_removed_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
         received.set()
 
     try:
-        scheduler.add_task("removable", lambda: None, interval=60)
+        task_id = scheduler.add_task("removable", lambda: None, interval=60)
         scheduler.add_listener(Event.TASK_REMOVED, listener)
-        scheduler.remove_task("removable")
+        scheduler.remove_task(task_id)
         assert received.wait(timeout=2)
         assert len(captured) == 1
-        assert captured[0]["event"] == Event.TASK_REMOVED
-        assert captured[0]["task_name"] == "removable"
-        assert "task_id" in captured[0]
+        assert captured[0][0] == Event.TASK_REMOVED
+        assert captured[0][1].id == task_id
+        assert captured[0][1].task_name == "removable"
     finally:
         scheduler.shutdown()
 
@@ -115,21 +115,21 @@ def test_task_paused_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
         received.set()
 
     try:
-        scheduler.add_task("pausable", lambda: None, interval=60, delay=300)
+        task_id = scheduler.add_task("pausable", lambda: None, interval=60, delay=300)
         scheduler.add_listener(Event.TASK_PAUSED, listener)
-        scheduler.pause_task("pausable")
+        scheduler.pause_task(task_id)
         assert received.wait(timeout=2)
-        assert captured[0]["event"] == Event.TASK_PAUSED
-        assert captured[0]["task_name"] == "pausable"
-        assert "task_id" in captured[0]
+        assert captured[0][0] == Event.TASK_PAUSED
+        assert captured[0][1].id == task_id
+        assert captured[0][1].status == "paused"
     finally:
         scheduler.shutdown()
 
@@ -138,22 +138,22 @@ def test_task_resumed_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
         received.set()
 
     try:
-        scheduler.add_task("resumable", lambda: None, interval=60, delay=300)
-        scheduler.pause_task("resumable")
+        task_id = scheduler.add_task("resumable", lambda: None, interval=60, delay=300)
+        scheduler.pause_task(task_id)
         scheduler.add_listener(Event.TASK_RESUMED, listener)
-        scheduler.resume_task("resumable", delay=300)
+        scheduler.resume_task(task_id, delay=300)
         assert received.wait(timeout=2)
-        assert captured[0]["event"] == Event.TASK_RESUMED
-        assert captured[0]["task_name"] == "resumable"
-        assert "task_id" in captured[0]
+        assert captured[0][0] == Event.TASK_RESUMED
+        assert captured[0][1].id == task_id
+        assert captured[0][1].status == "active"
     finally:
         scheduler.shutdown()
 
@@ -162,11 +162,11 @@ def test_job_started_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task, Job]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task, job: Job) -> None:
+        captured.append((event, task, job))
         received.set()
 
     try:
@@ -176,9 +176,9 @@ def test_job_started_event(
         )
         scheduler.start()
         assert received.wait(timeout=3)
-        assert captured[0]["event"] == Event.JOB_STARTED
-        assert captured[0]["task_name"] == "start-check"
-        assert "job_id" in captured[0]
+        assert captured[0][0] == Event.JOB_STARTED
+        assert captured[0][1].task_name == "start-check"
+        assert captured[0][2].status == "running"
     finally:
         scheduler.shutdown()
 
@@ -187,11 +187,11 @@ def test_job_completed_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task, Job]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task, job: Job) -> None:
+        captured.append((event, task, job))
         received.set()
 
     try:
@@ -201,10 +201,13 @@ def test_job_completed_event(
         )
         scheduler.start()
         assert received.wait(timeout=3)
-        assert captured[0]["event"] == Event.JOB_COMPLETED
-        assert captured[0]["task_name"] == "complete-check"
-        assert "job_id" in captured[0]
-        assert isinstance(captured[0]["duration"], timedelta)
+        assert captured[0][0] == Event.JOB_COMPLETED
+        assert captured[0][1].task_name == "complete-check"
+        job = captured[0][2]
+        assert job.status == "completed"
+        assert job.duration_seconds is not None
+        assert job.duration_seconds >= 0
+        assert job.error_message is None
     finally:
         scheduler.shutdown()
 
@@ -213,11 +216,11 @@ def test_job_failed_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task, Job]] = []
     received = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task, job: Job) -> None:
+        captured.append((event, task, job))
         received.set()
 
     def bad_handler() -> None:
@@ -230,12 +233,12 @@ def test_job_failed_event(
         )
         scheduler.start()
         assert received.wait(timeout=3)
-        assert captured[0]["event"] == Event.JOB_FAILED
-        assert captured[0]["task_name"] == "fail-check"
-        assert "job_id" in captured[0]
-        assert isinstance(captured[0]["error"], RuntimeError)
-        assert str(captured[0]["error"]) == "boom"
-        assert isinstance(captured[0]["duration"], timedelta)
+        assert captured[0][0] == Event.JOB_FAILED
+        assert captured[0][1].task_name == "fail-check"
+        job = captured[0][2]
+        assert job.status == "failed"
+        assert job.duration_seconds is not None
+        assert job.error_message == "boom"
     finally:
         scheduler.shutdown()
 
@@ -244,12 +247,12 @@ def test_job_cancelled_event(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task, Job]] = []
     received = threading.Event()
     started = threading.Event()
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task, job: Job) -> None:
+        captured.append((event, task, job))
         received.set()
 
     def blocking_handler(_stop_event=None) -> None:
@@ -274,9 +277,9 @@ def test_job_cancelled_event(
                 scheduler.cancel_job(job.id)
 
         assert received.wait(timeout=3)
-        assert captured[0]["event"] == Event.JOB_CANCELLED
-        assert captured[0]["task_name"] == "cancel-check"
-        assert "job_id" in captured[0]
+        assert captured[0][0] == Event.JOB_CANCELLED
+        assert captured[0][1].task_name == "cancel-check"
+        assert captured[0][2].status == "cancelled"
     finally:
         scheduler.shutdown()
 
@@ -289,12 +292,12 @@ def test_multiple_listeners_for_same_event(
     captured_b: list[Event] = []
     both_received = threading.Event()
 
-    def listener_a(event: Event, data: dict[str, Any]) -> None:
+    def listener_a(event: Event, task: Task) -> None:
         captured_a.append(event)
         if captured_a and captured_b:
             both_received.set()
 
-    def listener_b(event: Event, data: dict[str, Any]) -> None:
+    def listener_b(event: Event, task: Task) -> None:
         captured_b.append(event)
         if captured_a and captured_b:
             both_received.set()
@@ -314,19 +317,19 @@ def test_async_listener_dispatched_on_main_loop(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
     received = threading.Event()
 
-    async def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    async def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
         received.set()
 
     try:
         scheduler.add_listener(Event.TASK_ADDED, listener)
         scheduler.add_task("async-listen", lambda: None, interval=60)
         assert received.wait(timeout=2)
-        assert captured[0]["event"] == Event.TASK_ADDED
-        assert captured[0]["task_name"] == "async-listen"
+        assert captured[0][0] == Event.TASK_ADDED
+        assert captured[0][1].task_name == "async-listen"
     finally:
         scheduler.shutdown()
 
@@ -339,10 +342,10 @@ def test_listener_exception_is_swallowed(
     good_captured: list[Event] = []
     good_received = threading.Event()
 
-    def bad_listener(event: Event, data: dict[str, Any]) -> None:
+    def bad_listener(event: Event, task: Task) -> None:
         raise RuntimeError("listener error")
 
-    def good_listener(event: Event, data: dict[str, Any]) -> None:
+    def good_listener(event: Event, task: Task) -> None:
         good_captured.append(event)
         good_received.set()
 
@@ -360,16 +363,16 @@ def test_listener_exception_is_swallowed(
 def test_listener_without_event_loop_sync() -> None:
     """Sync listeners work without an event loop (run on calling thread)."""
     scheduler = Quiv()
-    captured: list[dict[str, Any]] = []
+    captured: list[tuple[Event, Task]] = []
 
-    def listener(event: Event, data: dict[str, Any]) -> None:
-        captured.append({"event": event, **data})
+    def listener(event: Event, task: Task) -> None:
+        captured.append((event, task))
 
     try:
         scheduler.add_listener(Event.TASK_ADDED, listener)
         scheduler.add_task("no-loop", lambda: None, interval=60)
         assert len(captured) == 1
-        assert captured[0]["event"] == Event.TASK_ADDED
+        assert captured[0][0] == Event.TASK_ADDED
     finally:
         scheduler.shutdown()
 
@@ -379,7 +382,7 @@ def test_async_listener_runs_without_event_loop() -> None:
     scheduler = Quiv()
     called = threading.Event()
 
-    async def listener(event: Event, data: dict[str, Any]) -> None:
+    async def listener(event: Event, task: Task) -> None:
         called.set()
 
     try:
@@ -399,7 +402,7 @@ def test_async_listener_error_without_event_loop(
     """Async listener error in temp loop is caught and logged."""
     scheduler = Quiv()  # No main_loop
 
-    async def bad_listener(event: Event, data: dict[str, Any]) -> None:
+    async def bad_listener(event: Event, task: Task) -> None:
         raise RuntimeError("listener boom")
 
     try:
