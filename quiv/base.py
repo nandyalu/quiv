@@ -375,10 +375,12 @@ class QuivBase(ABC):
                 try:
                     new_loop = asyncio.new_event_loop()
                     try:
+                        asyncio.set_event_loop(new_loop)
                         new_loop.run_until_complete(
                             listener(event, *args)
                         )
                     finally:
+                        asyncio.set_event_loop(None)
                         new_loop.close()
                 except Exception as e:
                     self._logger.error(
@@ -468,8 +470,10 @@ class QuivBase(ABC):
                 try:
                     new_loop = asyncio.new_event_loop()
                     try:
+                        asyncio.set_event_loop(new_loop)
                         new_loop.run_until_complete(callback(*args, **kwargs))
                     finally:
+                        asyncio.set_event_loop(None)
                         new_loop.close()
                 except Exception as e:
                     self._logger.error(

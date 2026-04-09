@@ -223,6 +223,12 @@ class Quiv(QuivBase):
             f"Scheduling task '{task.task_name}' (Job ID: {job_id}) to run now"
         )
         self.persistence.mark_task_running(task.id)
+
+        # Snapshot task for event listeners while it is guaranteed to exist.
+        # The task row may be deleted by finalize_task_after_job (run-once)
+        # or by remove_task() before _run_job emits its events.
+        task_snapshot = self.get_task(task.id)
+
         with self._job_count_lock:
             self._active_job_count += 1
         self.executor.submit(
@@ -232,6 +238,7 @@ class Quiv(QuivBase):
             task.task_name,
             task.run_once,
             now,
+            task_snapshot,
             func,
             f_args,
             f_kwargs,
@@ -244,6 +251,7 @@ class Quiv(QuivBase):
         task_name: str,
         run_once: bool,
         scheduled_at: datetime,
+        task_snapshot: Any,
         func: Callable[..., Any],
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
@@ -256,6 +264,7 @@ class Quiv(QuivBase):
             task_name (str): Task name for logging.
             run_once (bool): Whether the task is single-run.
             scheduled_at (datetime): UTC time when the job was dispatched.
+            task_snapshot (Task): Pre-fetched task snapshot for event listeners.
             func (Callable[..., Any]): Handler callable.
             args (tuple): Positional arguments for handler.
             kwargs (dict): Keyword arguments for handler.
@@ -274,8 +283,6 @@ class Quiv(QuivBase):
         )
         self.persistence.mark_job_running(job_id)
 
-        # Snapshot task for event listeners (before finalize may delete it)
-        task_snapshot = self.get_task(task_id)
         started_job = self.get_job(job_id)
         self._emit_event(Event.JOB_STARTED, task_snapshot, started_job)
 
