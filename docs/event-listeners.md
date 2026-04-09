@@ -40,43 +40,61 @@ flowchart TD
 
 All events are defined in the `Event` enum:
 
-| Event | When it fires | Data keys |
-|-------|--------------|-----------|
-| `TASK_ADDED` | After `add_task()` completes | `task_name`, `task_id` |
-| `TASK_REMOVED` | After `remove_task()` completes | `task_name`, `task_id` |
-| `TASK_PAUSED` | After `pause_task()` completes | `task_name`, `task_id` |
-| `TASK_RESUMED` | After `resume_task()` completes | `task_name`, `task_id` |
-| `JOB_STARTED` | When a job begins execution | `task_name`, `job_id` |
-| `JOB_COMPLETED` | When a job finishes successfully | `task_name`, `job_id`, `duration` |
-| `JOB_FAILED` | When a job ends with an exception | `task_name`, `job_id`, `error`, `duration` |
-| `JOB_CANCELLED` | When a job is cancelled via stop event | `task_name`, `job_id` |
+| Event | When it fires | Callback receives |
+|-------|--------------|-------------------|
+| `TASK_ADDED` | After `add_task()` completes | `event`, `task` |
+| `TASK_REMOVED` | After `remove_task()` completes | `event`, `task`[^1] |
+| `TASK_PAUSED` | After `pause_task()` completes | `event`, `task` |
+| `TASK_RESUMED` | After `resume_task()` completes | `event`, `task` |
+| `JOB_STARTED` | When a job begins execution | `event`, `task`, `job` |
+| `JOB_COMPLETED` | When a job finishes successfully | `event`, `task`, `job` |
+| `JOB_FAILED` | When a job ends with an exception | `event`, `task`, `job` |
+| `JOB_CANCELLED` | When a job is cancelled via stop event | `event`, `task`, `job` |
 
-## Callback signature
+[^1]: For `TASK_REMOVED`, the `task` object is a snapshot taken before deletion.
 
-Every event listener receives two arguments:
+## Callback signatures
+
+Listeners receive typed model objects — better callbacks with predictable inputs. The signature depends on the event group:
+
+### Task events (`TASK_*`)
 
 ```python
-def my_listener(event: Event, data: dict[str, Any]) -> None:
+from quiv import Event
+from quiv.models import Task
+
+def on_task_event(event: Event, task: Task) -> None:
+    print(f"[{event.value}] Task '{task.task_name}' (id={task.id})")
+```
+
+### Job events (`JOB_*`)
+
+```python
+from quiv import Event
+from quiv.models import Task, Job
+
+def on_job_event(event: Event, task: Task, job: Job) -> None:
+    print(f"[{event.value}] Job {job.id} for '{task.task_name}'")
+    if job.duration_seconds is not None:
+        print(f"  Duration: {job.duration_seconds:.2f}s")
+    if job.error_message is not None:
+        print(f"  Error: {job.error_message}")
+```
+
+Async callbacks use the same signatures:
+
+```python
+async def on_task_event(event: Event, task: Task) -> None:
+    ...
+
+async def on_job_event(event: Event, task: Task, job: Job) -> None:
     ...
 ```
 
-- `event` — the `Event` enum member that was emitted
-- `data` — a dict with context keys specific to the event (see table above)
-
-Async callbacks use the same signature:
-
-```python
-async def my_listener(event: Event, data: dict[str, Any]) -> None:
-    ...
-```
-
-### Data fields
-
-- `task_name` (`str`) — the name of the task
-- `task_id` (`str`) — the UUID of the task
-- `job_id` (`str`) — the UUID job ID
-- `duration` (`timedelta`) — how long the job ran
-- `error` (`BaseException`) — the exception that caused the failure (only on `JOB_FAILED`)
+!!! tip "Full type safety"
+    Since listeners receive `Task` and `Job` model objects, you get IDE
+    autocomplete and type checking on every field — no more guessing dict
+    keys at runtime.
 
 ## Registering listeners
 
@@ -84,12 +102,13 @@ Use `add_listener()` to register a callback for a specific event:
 
 ```python
 from quiv import Quiv, Event
+from quiv.models import Task
 
 scheduler = Quiv()
 
 
-def on_task_added(event: Event, data: dict) -> None:
-    print(f"Task '{data['task_name']}' added with ID {data['task_id']}")
+def on_task_added(event: Event, task: Task) -> None:
+    print(f"Task '{task.task_name}' added with ID {task.id}")
 
 
 scheduler.add_listener(Event.TASK_ADDED, on_task_added)
@@ -107,15 +126,16 @@ scheduler.add_listener(Event.JOB_FAILED, send_alert)
 
 ### Multiple events
 
-Register the same callback for different events:
+Register the same callback for different events within the same event group:
 
 ```python
-def audit_log(event: Event, data: dict) -> None:
-    print(f"[{event.value}] {data}")
+from quiv.models import Task, Job
 
-scheduler.add_listener(Event.TASK_ADDED, audit_log)
-scheduler.add_listener(Event.TASK_REMOVED, audit_log)
-scheduler.add_listener(Event.JOB_FAILED, audit_log)
+def job_audit_log(event: Event, task: Task, job: Job) -> None:
+    print(f"[{event.value}] task={task.task_name} job={job.id}")
+
+scheduler.add_listener(Event.JOB_COMPLETED, job_audit_log)
+scheduler.add_listener(Event.JOB_FAILED, job_audit_log)
 ```
 
 ## Removing listeners
@@ -135,11 +155,13 @@ just like async progress callbacks. This makes them ideal for FastAPI apps
 where you want to broadcast events to WebSocket clients:
 
 ```python
-async def on_job_completed(event: Event, data: dict) -> None:
+from quiv.models import Task, Job
+
+async def on_job_completed(event: Event, task: Task, job: Job) -> None:
     await ws_manager.broadcast({
         "type": "job_completed",
-        "task": data["task_name"],
-        "duration": str(data["duration"]),
+        "task": task.task_name,
+        "duration_seconds": job.duration_seconds,
     })
 
 scheduler.add_listener(Event.JOB_COMPLETED, on_job_completed)
@@ -168,12 +190,13 @@ directly on the calling thread:
 
 ```python
 from quiv import Quiv, Event
+from quiv.models import Task
 
 scheduler = Quiv()
 
 
-def on_added(event: Event, data: dict) -> None:
-    print(f"Added: {data['task_name']}")
+def on_added(event: Event, task: Task) -> None:
+    print(f"Added: {task.task_name}")
 
 
 scheduler.add_listener(Event.TASK_ADDED, on_added)
@@ -198,6 +221,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from quiv import Event, Quiv
+from quiv.models import Task, Job
 
 scheduler = Quiv(timezone="UTC")
 logger = logging.getLogger(__name__)
@@ -213,17 +237,17 @@ async def broadcast(message: dict) -> None:
             pass
 
 
-async def on_job_event(event: Event, data: dict[str, Any]) -> None:
+async def on_job_event(event: Event, task: Task, job: Job) -> None:
     """Broadcast job lifecycle events to WebSocket clients."""
     payload: dict[str, Any] = {
         "event": event.value,
-        "task_name": data["task_name"],
-        "job_id": data.get("job_id"),
+        "task_name": task.task_name,
+        "job_id": job.id,
     }
-    if "duration" in data:
-        payload["duration_seconds"] = data["duration"].total_seconds()
-    if "error" in data:
-        payload["error"] = str(data["error"])
+    if job.duration_seconds is not None:
+        payload["duration_seconds"] = job.duration_seconds
+    if job.error_message is not None:
+        payload["error"] = job.error_message
     await broadcast(payload)
 
 

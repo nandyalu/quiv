@@ -39,7 +39,82 @@ scheduler = Quiv(
 Since `Quiv` lazily resolves the asyncio event loop, this works at module level
 before FastAPI or uvicorn creates a loop.
 
-## 2) Define tasks in separate files
+## 2) Create a logging context (optional)
+
+Create a logging context that holds the `trace_id` which can be later used for logs
+
+```python
+# myapp/config/logging_context.py
+import asyncio
+from contextvars import ContextVar, Token
+from functools import wraps
+import uuid
+
+# Define a ContextVar to hold the Trace ID
+trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
+
+
+def get_trace_id() -> str | None:
+    """Returns the current Trace ID."""
+    return trace_id_var.get()
+
+
+def get_new_trace_id() -> str:
+    """Generates and returns a new Trace ID without setting it in the context."""
+    return str(uuid.uuid4())
+
+
+def generate_trace_id(trace_id: str | None = None) -> Token:
+    """Generates a new Trace ID and sets it in the context."""
+    if trace_id is None:
+        trace_id = str(uuid.uuid4())
+    return trace_id_var.set(trace_id)
+
+
+def clear_trace_id(token: Token) -> None:
+    """Clears the Trace ID from the context."""
+    trace_id_var.reset(token)
+
+
+def with_logging_context(func):
+    """Decorator to add a Trace ID to the logging context for the duration of the function call.
+    Args:
+        func: The function to decorate.
+    Returns:
+        The decorated function with Trace ID management.
+    """
+
+    @wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        # 1. Extract or Create
+        trace_id = kwargs.get("_job_id") or kwargs.get("trace_id")
+
+        token = generate_trace_id(trace_id)  # Falls back to uuid4() internally
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            clear_trace_id(token)
+
+    @wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        # 1. Extract or Create
+        trace_id = kwargs.get("_job_id") or kwargs.get("trace_id")
+
+        token = generate_trace_id(trace_id)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            clear_trace_id(token)
+
+    # Return the appropriate wrapper based on the source function
+    return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+```
+
+Make the logging adapter or logging handler retrieve the trace_id and add it to logs.
+
+For full working code with logging context, stop events, and progress hooks, see [Trailarr](https://github.com/nandyalu/trailarr/).
+
+## 3) Define tasks in separate files
 
 Each task file imports the shared scheduler to register its task via
 `add_task()`. Tasks are plain functions — sync or async.
@@ -52,14 +127,23 @@ import logging
 import threading
 import time
 
+from config.logging_context import with_logging_context
+
 logger = logging.getLogger(__name__)
 
-
+@with_logging_context
 def cleanup_stale_records(
     days: int,
+    _job_id: str | None = None,
     _stop_event: threading.Event | None = None,
 ):
     """Delete records older than `days` from the database."""
+
+    # quiv injects _job_id and with_logging_context decorator stores it as trace_id
+    # logs handler will get it using get_trace_id and adds it to all logs
+    # so logs from the task will be logged with that trace_id
+    # Attach job_id as trace context for this run
+
     batches = 10
     for batch in range(1, batches + 1):
         if _stop_event and _stop_event.is_set():
@@ -81,11 +165,14 @@ import threading
 import time
 from typing import Callable
 
+from config.logging_context import with_logging_context
+
 logger = logging.getLogger(__name__)
 
-
+@with_logging_context
 def generate_report(
     report_type: str,
+    _job_id: str | None = None,
     _stop_event: threading.Event | None = None,
     _progress_hook: Callable | None = None,
 ):
@@ -109,7 +196,7 @@ def generate_report(
     logger.info("Report '%s' generated successfully", report_type)
 ```
 
-## 3) Register tasks and wire up the lifespan
+## 4) Register tasks and wire up the lifespan
 
 The main module registers tasks, starts the scheduler on startup, and shuts it
 down on teardown. This is also where you set up WebSocket-based progress
@@ -124,6 +211,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from quiv import Event
+from quiv.models import Task, Job
 
 from myapp.scheduler import scheduler
 from myapp.tasks.cleanup import cleanup_stale_records
@@ -166,13 +254,13 @@ async def on_report_progress(**payload):
 
 # ---------- Lifespan ----------
 
-async def on_job_event(event: Event, data: dict) -> None:
+async def on_job_event(event: Event, task: Task, job: Job) -> None:
     """Forward job lifecycle events to WebSocket clients."""
-    payload = {"event": event.value, "task": data["task_name"]}
-    if "duration" in data:
-        payload["duration"] = str(data["duration"])
-    if "error" in data:
-        payload["error"] = str(data["error"])
+    payload: dict = {"event": event.value, "task": task.task_name, "job_id": job.id}
+    if job.duration_seconds is not None:
+        payload["duration_seconds"] = job.duration_seconds
+    if job.error_message is not None:
+        payload["error"] = job.error_message
     await ws_manager.broadcast(payload)
 
 
@@ -218,7 +306,7 @@ async def progress_websocket(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 ```
 
-## 4) API endpoints for runtime control
+## 5) API endpoints for runtime control
 
 A separate router imports the same scheduler instance to expose task management
 endpoints.
@@ -232,34 +320,43 @@ from myapp.scheduler import scheduler
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.post("/{task_name}/run")
-def run_task_now(task_name: str):
+@router.post("/{task_id}/run")
+def run_task_now(task_id: str):
     """Trigger a scheduled task to run immediately."""
     try:
-        count = scheduler.run_task_immediately(task_name)
+        count = scheduler.run_task_immediately(task_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"queued": count}
 
 
-@router.post("/{task_name}/pause")
-def pause_task(task_name: str):
-    """Pause a task by name."""
+@router.post("/{task_id}/pause")
+def pause_task(task_id: str):
+    """Pause a task by id."""
     try:
-        scheduler.pause_task(task_name)
+        scheduler.pause_task(task_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "paused"}
 
 
-@router.post("/{task_name}/resume")
-def resume_task(task_name: str, delay: int = 0):
+@router.post("/{task_id}/resume")
+def resume_task(task_id: str, delay: int = 0):
     """Resume a paused task, optionally with a delay."""
     try:
-        scheduler.resume_task(task_name, delay=delay)
+        scheduler.resume_task(task_id, delay=delay)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "resumed"}
+
+
+@router.get("/{task_id}")
+def get_task(task_id: str):
+    """Get a single task by id."""
+    try:
+        return scheduler.get_task(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/")
@@ -282,6 +379,12 @@ def cancel_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found or not running")
     return {"status": "cancelled"}
 ```
+
+!!! tip "Task IDs in your API"
+    Since `add_task()` returns a `task_id` (UUID string), you can store it
+    in your application state or return it to clients. All runtime operations
+    (`pause_task`, `resume_task`, `run_task_immediately`, `remove_task`)
+    use `task_id` as the identifier.
 
 `Task` and `Job` are SQLModel objects, so FastAPI serializes them directly —
 no manual conversion needed. All datetime fields (`next_run_at`, `started_at`,

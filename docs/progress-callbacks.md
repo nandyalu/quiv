@@ -230,6 +230,6 @@ _progress_hook(
 )
 ```
 
-The progress callback receives exactly what the handler passes — quiv adds the
-`task_name` as the first positional argument internally, but this is consumed
+The progress callback receives exactly what the handler passes — quiv uses the
+`task_id` internally to look up the registered callback, but this is consumed
 by the dispatch layer and not forwarded to the callback.

@@ -326,6 +326,7 @@ link = "https://github.com/nandyalu/quiv"
 
 
 [project.markdown_extensions.admonition]
+[project.markdown_extensions.footnotes]
 [project.markdown_extensions.pymdownx.details]
 
 [project.markdown_extensions.pymdownx.tabbed]

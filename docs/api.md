@@ -59,22 +59,33 @@ add_task(
     args: tuple | None = None,
     kwargs: dict | None = None,
     progress_callback: Callable[..., Any] | None = None,
-) -> str | None
+) -> str
 ```
 
-Adds a scheduled task and returns its task ID (UUID string).
+Adds a scheduled task and returns its task ID (UUID string)[^1].
+
+[^1]: 
+    Hold onto the returned `task_id` — it is the key for all subsequent operations:
+
+    - `remove_task()`
+    - `pause_task()`
+    - `resume_task()`
+    - `run_task_immediately()`
+    - `get_task()`.
 
 This is the primary way to register tasks. It handles handler registration,
 progress callback registration, and task persistence in one call.
 
 Validation:
 
-- `task_name` must not be empty, has to be unique
+- `task_name` must not be empty
 - `interval > 0`
 - `delay >= 0`
 
-Raises `ConfigurationError` if a task with the same `task_name` is already
-registered. Call [`remove_task()`](#remove_tasktask_name) first to replace it.
+!!! note "Duplicate task names are allowed"
+    Multiple tasks can share the same `task_name`. Each call to `add_task()`
+    returns a unique `task_id` (UUID) which is the identifier used for all
+    task operations. `task_name` is a display label, not a unique key.
 
 Behavior:
 
@@ -114,33 +125,33 @@ Always call this during app teardown.
 !!! success "`stop()` is an alias for `shutdown()`"
     use whichever reads better in your code. `stop()` pairs naturally with `start()`.
 
-### `run_task_immediately(task_name: str) -> int`
+### `run_task_immediately(task_id: str) -> int`
 
-Queues already-scheduled task rows with this `task_name` to run now.
+Queues an already-scheduled task to run now.
 
 Raises:
 
-- `HandlerNotRegisteredError` if no registered handler exists
+- `HandlerNotRegisteredError` if no registered handler exists for the id
 - `TaskNotScheduledError` if handler exists but no scheduled task row exists
 
 Returns number of task rows queued.
 
-### `pause_task(task_name: str) -> None`
+### `pause_task(task_id: str) -> None`
 
 Pause blocks future runs of the task.
 
 Raises:
 
-- `TaskNotFoundError` if no task with that name exists.
+- `TaskNotFoundError` if no task with that id exists.
 
-### `resume_task(task_name: str, delay: int = 0) -> None`
+### `resume_task(task_id: str, delay: int = 0) -> None`
 
 Resume re-activates and sets next run with an optional `delay` (in seconds, default=0).
 
 
 Raises:
 
-- `TaskNotFoundError` if no task with that name exists.
+- `TaskNotFoundError` if no task with that id exists.
 
 !!! info 
     
@@ -155,15 +166,7 @@ Returns `True` if the stop event was found and set, `False` otherwise.
 !!! info
     Cancellation is cooperative: the handler must check `_stop_event.is_set()` to actually stop.
 
-### `get_task(task_name: str) -> Task`
-
-Returns a single [`Task`](#task) by name.
-
-Raises:
-
-- `TaskNotFoundError` if no task with that name exists.
-
-### `get_task_by_id(task_id: str) -> Task`
+### `get_task(task_id: str) -> Task`
 
 Returns a single [`Task`](#task) by its UUID string.
 
@@ -191,18 +194,16 @@ Returns persisted task rows as [`Task`](#task) objects.
 Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`,
 `"running"`).
 
-### `remove_task(task_name: str) -> None`
+### `remove_task(task_id: str) -> None`
 
 Removes a scheduled task, its registered handler, and progress callback. If the
 task has a running job, its stop event is set to signal cancellation.
 
 Raises:
 
-- `TaskNotFoundError` if no task with that name exists.
+- `TaskNotFoundError` if no task with that id exists.
 
-After removal, the same `task_name` can be re-registered immediately with
-`add_task()`. Any previously running job will finish on its own and clean up
-normally.
+Any previously running job will finish on its own and clean up normally.
 
 ### `add_listener(event: Event, callback: Callable[..., Any]) -> None`
 
@@ -210,18 +211,21 @@ Register an event listener for a scheduler lifecycle event. Multiple listeners
 can be registered for the same event. Both sync and async callbacks are
 supported.
 
-The callback receives two arguments:
+The callback signature depends on the event group:
 
-- `event` (`Event`) — the event type that was emitted
-- `data` (`dict[str, Any]`) — context data (keys depend on the event type)
+- **`TASK_*` events**: `callback(event: Event, task: Task)`
+- **`JOB_*` events**: `callback(event: Event, task: Task, job: Job)`
+
+Listeners receive typed `Task` and `Job` model objects with full IDE
+autocomplete — no dict key lookups needed.
 
 Raises:
 
 - `ConfigurationError` if `event` is not an `Event` enum member or `callback`
   is not callable.
 
-See [Event Listeners](event-listeners.md) for the full event list, data keys,
-and dispatch details.
+See [Event Listeners](event-listeners.md) for the full event list and
+dispatch details.
 
 ### `remove_listener(event: Event, callback: Callable[..., Any]) -> None`
 
@@ -246,14 +250,14 @@ not share the main application event loop.
 
 ### `Task`
 
-Public API model returned by `get_task()`, `get_task_by_id()`, and
-`get_all_tasks()`. Use directly in FastAPI endpoints — no manual conversion
-needed.
+Public API model returned by `get_task()` and `get_all_tasks()`.
+Use directly in FastAPI endpoints — no manual conversion needed.
 
 ```python
 # Methods return Task directly
-task = scheduler.get_task("my-task")        # Task
-tasks = scheduler.get_all_tasks()           # list[Task]
+task_id = scheduler.add_task("my-task", handler, interval=60)
+task = scheduler.get_task(task_id)      # Task
+tasks = scheduler.get_all_tasks()       # list[Task]
 
 # Use directly in FastAPI endpoints
 @app.get("/tasks")
@@ -264,7 +268,7 @@ def list_tasks():
 Key fields:
 
 - `id: str` — UUID identifier
-- `task_name: str` — unique name
+- `task_name: str` — display name (not necessarily unique)
 - `args: tuple[Any, ...]` — positional arguments (unpickled)
 - `kwargs: dict[str, Any]` — keyword arguments (unpickled)
 - `interval_seconds: float` — seconds between runs
@@ -273,7 +277,7 @@ Key fields:
 - `next_run_at: datetime` — next scheduled run (UTC-aware)
 
 !!! abstract "datetime objects are in UTC"
-    The datetime values (`next_run_at`) is always returned as a UTC-aware datetime.
+    The datetime values (`next_run_at`) are always returned as a UTC-aware datetime.
     
     - You can safely return this from fastapi endpoints which will have a `Z` at the end to indicate UTC datetime.
     - This is the golden-standard for Browsers as they can easily parse it and display in user's timezone.
@@ -293,6 +297,8 @@ Key fields:
 - `status: str` — lifecycle status
 - `started_at: datetime` — UTC-aware start timestamp
 - `ended_at: datetime | None` — UTC-aware end timestamp
+- `duration_seconds: float | None` — job duration in seconds (set on completion)
+- `error_message: str | None` — error description if job failed
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`started_at`, `ended_at`) are always returned as UTC-aware datetimes. 
@@ -378,18 +384,17 @@ workers were busy, a warning is logged with the delay.
 ## Public methods summary
 
 - `Quiv(...)` — create scheduler instance
-- `add_task(...)` — schedule a task (primary entry point)
+- `add_task(...)` — schedule a task, returns `task_id`
 - `start()` / `startup()` — start the scheduler loop
 - `shutdown()` / `stop()` — stop scheduler and clean up resources
-- `run_task_immediately(task_name)` — trigger a scheduled task now
-- `pause_task(task_name)` — pause a task
-- `resume_task(task_name)` — resume a paused task
+- `run_task_immediately(task_id)` — trigger a scheduled task now
+- `pause_task(task_id)` — pause a task
+- `resume_task(task_id)` — resume a paused task
 - `cancel_job(job_id)` — signal cancellation for a running job
-- `remove_task(task_name)` — remove a task and its registrations
+- `remove_task(task_id)` — remove a task and its registrations
 - `add_listener(event, callback)` — register an event listener
 - `remove_listener(event, callback)` — remove an event listener
-- `get_task(task_name)` — get a single task by name
-- `get_task_by_id(task_id)` — get a single task by UUID
+- `get_task(task_id)` — get a single task by UUID
 - `get_job(job_id)` — get a single job by ID
 - `get_all_tasks(...)` — list persisted tasks
 - `get_all_jobs(...)` — list persisted jobs

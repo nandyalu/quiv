@@ -30,7 +30,7 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
 
     stop_event = threading.Event()
     args, kwargs = layer.prepare_invocation(
-        task_name="demo",
+        task_id="demo",
         func=handler,
         args_pickled=pickle.dumps(()),
         kwargs_pickled=pickle.dumps({}),
@@ -88,7 +88,7 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
         return value
 
     args, kwargs = layer.prepare_invocation(
-        task_name="no-hooks",
+        task_id="no-hooks",
         func=handler,
         args_pickled=pickle.dumps((1,)),
         kwargs_pickled=pickle.dumps({}),
@@ -143,7 +143,7 @@ def test_prepare_invocation_raises_on_corrupt_args() -> None:
 
     with pytest.raises(ConfigurationError, match="Failed to deserialize task args"):
         layer.prepare_invocation(
-            task_name="bad-args",
+            task_id="bad-args",
             func=lambda: None,
             args_pickled=b"not valid pickle",
             kwargs_pickled=pickle.dumps({}),
@@ -160,7 +160,7 @@ def test_prepare_invocation_raises_on_corrupt_kwargs() -> None:
 
     with pytest.raises(ConfigurationError, match="Failed to deserialize task kwargs"):
         layer.prepare_invocation(
-            task_name="bad-kwargs",
+            task_id="bad-kwargs",
             func=lambda: None,
             args_pickled=pickle.dumps(()),
             kwargs_pickled=b"not valid pickle",
@@ -177,7 +177,7 @@ def test_prepare_invocation_raises_on_non_dict_kwargs() -> None:
 
     with pytest.raises(ConfigurationError, match="Expected kwargs to be a dict"):
         layer.prepare_invocation(
-            task_name="bad-type",
+            task_id="bad-type",
             func=lambda: None,
             args_pickled=pickle.dumps(()),
             kwargs_pickled=pickle.dumps("not a dict"),

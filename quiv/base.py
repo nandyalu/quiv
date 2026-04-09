@@ -41,9 +41,9 @@ class QuivBase(ABC):
         executor (ThreadPoolExecutor): Thread pool used for task execution.
         history_limit (int): Job history retention period in seconds.
         registry (dict[str, Callable[..., Any]]):
-            Mapping of task names to handler callables.
+            Mapping of task ids to handler callables.
         progress_callbacks (dict[str, Callable[..., Any]]):
-            Mapping of task names to progress callbacks.
+            Mapping of task ids to progress callbacks.
         stop_events (dict[str, threading.Event]):
             Mapping of job ids (UUID strings) to cancellation events.
         persistence (PersistenceLayer): Persistence layer facade.
@@ -216,30 +216,30 @@ class QuivBase(ABC):
             asyncio.set_event_loop(None)
             new_loop.close()
 
-    def _register_handler(self, name: str, func: Callable[..., Any]) -> None:
+    def _register_handler(self, task_id: str, func: Callable[..., Any]) -> None:
         """Register a task handler callable.
 
         Args:
-            name (str): Unique task name.
+            task_id (str): Task identifier (UUID string).
             func (Callable[..., Any]): Handler callable.
 
         Raises:
-            HandlerRegistrationError: If name or callable is invalid.
+            HandlerRegistrationError: If task_id or callable is invalid.
         """
 
-        if not name.strip():
-            raise HandlerRegistrationError("task name must not be empty")
+        if not task_id.strip():
+            raise HandlerRegistrationError("task_id must not be empty")
         if not callable(func):
             raise HandlerRegistrationError("func must be callable")
-        self.registry[name] = func
+        self.registry[task_id] = func
 
     def _register_progress_callback(
-        self, name: str, callback: Callable[..., Any] | None
+        self, task_id: str, callback: Callable[..., Any] | None
     ) -> None:
         """Register or clear a progress callback for a task.
 
         Args:
-            name (str): Task name; has to be unique.
+            task_id (str): Task identifier (UUID string).
             callback (Callable[..., Any], Optional=None):
                 Progress callback; ``None`` clears existing callback.
 
@@ -248,13 +248,13 @@ class QuivBase(ABC):
         """
 
         if callback is None:
-            self.progress_callbacks.pop(name, None)
+            self.progress_callbacks.pop(task_id, None)
             return
         if not callable(callback):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
             )
-        self.progress_callbacks[name] = callback
+        self.progress_callbacks[task_id] = callback
 
     def add_listener(self, event: Event, callback: Callable[..., Any]) -> None:
         """Register an event listener for a scheduler lifecycle event.
@@ -263,21 +263,17 @@ class QuivBase(ABC):
         (same behavior as progress callbacks). Multiple listeners can be
         registered for the same event.
 
-        The callback receives two arguments:
+        For ``TASK_*`` events the callback receives:
 
         - ``event`` (``Event``): The event type that was emitted.
-        - ``data`` (``dict[str, Any]``): Context data for the event.
+        - ``task`` (``Task``): The task model object.
 
-        The ``data`` dict contains the following keys depending on the event:
+        For ``JOB_*`` events the callback receives:
 
-        - ``TASK_ADDED``: ``task_name``, ``task_id``
-        - ``TASK_REMOVED``: ``task_name``, ``task_id``
-        - ``TASK_PAUSED``: ``task_name``, ``task_id``
-        - ``TASK_RESUMED``: ``task_name``, ``task_id``
-        - ``JOB_STARTED``: ``task_name``, ``job_id``
-        - ``JOB_COMPLETED``: ``task_name``, ``job_id``, ``duration``
-        - ``JOB_FAILED``: ``task_name``, ``job_id``, ``error``, ``duration``
-        - ``JOB_CANCELLED``: ``task_name``, ``job_id``
+        - ``event`` (``Event``): The event type that was emitted.
+        - ``task`` (``Task``): The parent task model object.
+        - ``job`` (``Job``): The job model object (includes
+          ``duration_seconds`` and ``error_message`` when applicable).
 
         Args:
             event (Event): Event type to listen for.
@@ -316,19 +312,23 @@ class QuivBase(ABC):
             except ValueError:
                 pass
 
-    def _emit_event(self, event: Event, data: dict[str, Any]) -> None:
+    def _emit_event(self, event: Event, *args: Any) -> None:
         """Dispatch all registered listeners for an event.
 
         Listeners are dispatched on the main event loop when available
         (via ``run_coroutine_threadsafe`` for async, ``call_soon_threadsafe``
         for sync). Without a loop, sync listeners run on the calling thread
-        and async listeners are skipped with a warning.
+        and async listeners run in a temporary event loop.
 
         Exceptions in listeners are logged and swallowed.
 
+        For ``TASK_*`` events, listeners receive ``(event, task)``.
+        For ``JOB_*`` events, listeners receive ``(event, task, job)``.
+
         Args:
             event (Event): The event being emitted.
-            data (dict[str, Any]): Context data for the event.
+            *args (Any): Model objects to pass to listeners
+                (Task for task events; Task, Job for job events).
         """
 
         with self._event_listeners_lock:
@@ -340,7 +340,7 @@ class QuivBase(ABC):
 
         for listener in listeners:
             try:
-                self._dispatch_listener(listener, event, data, loop)
+                self._dispatch_listener(listener, event, args, loop)
             except Exception as e:  # pragma: no cover
                 self._logger.error(
                     f"Event listener for '{event.value}' failed: {e}"
@@ -350,7 +350,7 @@ class QuivBase(ABC):
         self,
         listener: Callable[..., Any],
         event: Event,
-        data: dict[str, Any],
+        args: tuple[Any, ...],
         loop: asyncio.AbstractEventLoop | None,
     ) -> None:
         """Dispatch a single event listener callback.
@@ -358,7 +358,7 @@ class QuivBase(ABC):
         Args:
             listener (Callable[..., Any]): Listener callable.
             event (Event): The event being emitted.
-            data (dict[str, Any]): Context data for the event.
+            args (tuple[Any, ...]): Positional arguments after event.
             loop (asyncio.AbstractEventLoop | None): Main event loop.
         """
 
@@ -375,7 +375,9 @@ class QuivBase(ABC):
                 try:
                     new_loop = asyncio.new_event_loop()
                     try:
-                        new_loop.run_until_complete(listener(event, data))
+                        new_loop.run_until_complete(
+                            listener(event, *args)
+                        )
                     finally:
                         new_loop.close()
                 except Exception as e:
@@ -383,14 +385,16 @@ class QuivBase(ABC):
                         f"Event listener for '{event.value}' failed: {e}"
                     )
                 return
-            coroutine = cast(Coroutine[Any, Any, Any], listener(event, data))
+            coroutine = cast(
+                Coroutine[Any, Any, Any], listener(event, *args)
+            )
             future = asyncio.run_coroutine_threadsafe(coroutine, loop)
             future.add_done_callback(_on_listener_done)
             return
 
         if loop is None:
             try:
-                listener(event, data)
+                listener(event, *args)
             except Exception as e:  # pragma: no cover
                 self._logger.error(
                     f"Event listener for '{event.value}' failed: {e}"
@@ -399,7 +403,7 @@ class QuivBase(ABC):
 
         def _call_sync_listener() -> None:
             try:
-                result = listener(event, data)
+                result = listener(event, *args)
                 if asyncio.iscoroutine(result):  # pragma: no cover
                     asyncio.ensure_future(result, loop=loop)
             except Exception as e:
@@ -429,7 +433,7 @@ class QuivBase(ABC):
             return None
 
     def run_progress_callback(
-        self, task_name: str, *args: Any, **kwargs: Any
+        self, task_id: str, *args: Any, **kwargs: Any
     ) -> None:
         """Dispatch a progress callback, adapting to async availability.
 
@@ -440,12 +444,12 @@ class QuivBase(ABC):
         callbacks run directly.
 
         Args:
-            task_name (str): Task name whose callback should be invoked.
+            task_id (str): Task id whose callback should be invoked.
             *args (Any): Positional payload values.
             **kwargs (Any): Keyword payload values.
         """
 
-        callback = self.progress_callbacks.get(task_name)
+        callback = self.progress_callbacks.get(task_id)
         if callback is None:
             return
 
@@ -455,7 +459,7 @@ class QuivBase(ABC):
             exc = fut.exception()
             if exc is not None:
                 self._logger.error(
-                    f"Progress callback for task '{task_name}' failed: {exc}"
+                    f"Progress callback for task '{task_id}' failed: {exc}"
                 )
 
         if inspect.iscoroutinefunction(callback):
@@ -469,7 +473,7 @@ class QuivBase(ABC):
                         new_loop.close()
                 except Exception as e:
                     self._logger.error(
-                        f"Progress callback for task '{task_name}' failed: {e}"
+                        f"Progress callback for task '{task_id}' failed: {e}"
                     )
                 return
             coroutine = cast(
@@ -484,7 +488,7 @@ class QuivBase(ABC):
                 callback(*args, **kwargs)
             except Exception as e:
                 self._logger.error(
-                    f"Progress callback for task '{task_name}' failed: {e}"
+                    f"Progress callback for task '{task_id}' failed: {e}"
                 )
             return
 
@@ -495,31 +499,31 @@ class QuivBase(ABC):
                     asyncio.ensure_future(result, loop=loop)
             except Exception as e:
                 self._logger.error(
-                    f"Progress callback for task '{task_name}' failed: {e}"
+                    f"Progress callback for task '{task_id}' failed: {e}"
                 )
 
         loop.call_soon_threadsafe(partial(_call_sync_callback))
 
-    def run_task_immediately(self, task_name: str) -> int:
+    def run_task_immediately(self, task_id: str) -> int:
         """Queue an existing scheduled task for immediate run.
 
         Args:
-            task_name (str): Task name to enqueue.
+            task_id (str): Task id to enqueue.
 
         Returns:
             int: Number of queued task rows.
 
         Raises:
-            HandlerNotRegisteredError: If no handler exists for the name.
+            HandlerNotRegisteredError: If no handler is registered for the id.
         """
 
-        if task_name not in self.registry:
+        if task_id not in self.registry:
             raise HandlerNotRegisteredError(
-                f"Handler '{task_name}' not registered."
+                f"Handler for task '{task_id}' not registered."
             )
-        count = self.persistence.queue_task_for_immediate_run(task_name)
+        count = self.persistence.queue_task_for_immediate_run(task_id)
         self._logger.info(
-            f"Task '{task_name}' queued for immediate run via scheduler loop."
+            f"Task '{task_id}' queued for immediate run via scheduler loop."
         )
         return count
 
@@ -569,40 +573,34 @@ class QuivBase(ABC):
 
         self.shutdown()
 
-    def pause_task(self, task_name: str) -> None:
-        """Pause a task by name.
+    def pause_task(self, task_id: str) -> None:
+        """Pause a task by id.
 
         Args:
-            task_name (str): Task name.
+            task_id (str): Task id.
 
         Raises:
-            TaskNotFoundError: If no task with that name exists.
+            TaskNotFoundError: If no task with that id exists.
         """
 
-        task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.pause_task(task_id)
-        self._emit_event(
-            Event.TASK_PAUSED,
-            {"task_name": task_name, "task_id": task_id},
-        )
+        task = Task.model_validate(self.persistence.get_task(task_id))
+        self._emit_event(Event.TASK_PAUSED, task)
 
-    def resume_task(self, task_name: str, delay: int = 0) -> None:
-        """Resume a paused task by name.
+    def resume_task(self, task_id: str, delay: int = 0) -> None:
+        """Resume a paused task by id.
 
         Args:
-            task_name (str): Task name.
+            task_id (str): Task id.
             delay (int, Optional=0): Seconds to delay before next run.
 
         Raises:
-            TaskNotFoundError: If no task with that name exists.
+            TaskNotFoundError: If no task with that id exists.
         """
 
-        task_id = self.persistence.get_task_id_by_name(task_name)
         self.persistence.resume_task(task_id, delay=delay)
-        self._emit_event(
-            Event.TASK_RESUMED,
-            {"task_name": task_name, "task_id": task_id},
-        )
+        task = Task.model_validate(self.persistence.get_task(task_id))
+        self._emit_event(Event.TASK_RESUMED, task)
 
     def cancel_job(self, job_id: str) -> bool:
         """Signal cancellation for a running job.
@@ -620,23 +618,7 @@ class QuivBase(ABC):
             return True
         return False
 
-    def get_task(self, task_name: str) -> Task:
-        """Retrieve a single task by name.
-
-        Args:
-            task_name (str): Task name.
-
-        Returns:
-            Task: The task record with unpickled args/kwargs.
-
-        Raises:
-            TaskNotFoundError: If no task with that name exists.
-        """
-
-        task = self.persistence.get_task_by_name(task_name)
-        return Task.model_validate(task)
-
-    def get_task_by_id(self, task_id: str) -> Task:
+    def get_task(self, task_id: str) -> Task:
         """Retrieve a single task by ID.
 
         Args:
@@ -649,7 +631,7 @@ class QuivBase(ABC):
             TaskNotFoundError: If no task with that ID exists.
         """
 
-        task = self.persistence.get_task_by_id(task_id)
+        task = self.persistence.get_task(task_id)
         return Task.model_validate(task)
 
     def get_job(self, job_id: str) -> Job:

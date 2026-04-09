@@ -35,18 +35,22 @@ Raised when SQLite/SQLModel initialization fails during scheduler creation.
 
 ### `HandlerRegistrationError`
 
-Raised when registering invalid handlers/callbacks (empty task name,
+Raised when registering invalid handlers/callbacks (empty task id,
 non-callable handler/callback).
 
 ### `HandlerNotRegisteredError`
 
 Raised when an operation requires a registered handler but none exists
-for the given task name.
+for the given task id[^1].
+
+[^1]: This typically means `run_task_immediately()` was called with a
+    `task_id` that was never returned by `add_task()`, or the task was
+    already removed.
 
 ### `TaskNotScheduledError`
 
-Raised when a task handler exists but there are no scheduled task rows,
-for example calling `run_task_immediately(...)` before `add_task(...)`.
+Raised when a task handler is registered but the scheduled task row no longer
+exists in the database, for example if it was deleted externally.
 
 ### `TaskNotFoundError`
 

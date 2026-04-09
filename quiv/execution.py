@@ -66,7 +66,7 @@ class ExecutionLayer:
 
     def prepare_invocation(
         self,
-        task_name: str,
+        task_id: str,
         func: Callable[..., Any],
         args_pickled: bytes,
         kwargs_pickled: bytes,
@@ -76,7 +76,7 @@ class ExecutionLayer:
         """Prepare runtime invocation arguments for a task handler.
 
         Args:
-            task_name (str): Scheduled task name.
+            task_id (str): Task identifier (UUID string).
             func (Callable[..., Any]): Registered handler.
             args_pickled (bytes): Pickle-encoded positional arguments.
             kwargs_pickled (bytes): Pickle-encoded keyword arguments.
@@ -117,7 +117,7 @@ class ExecutionLayer:
 
             def _progress_hook(*progress_args: Any, **progress_kwargs: Any) -> None:
                 self._run_progress_callback(
-                    task_name, *progress_args, **progress_kwargs
+                    task_id, *progress_args, **progress_kwargs
                 )
 
             f_kwargs["_progress_hook"] = _progress_hook
