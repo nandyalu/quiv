@@ -364,10 +364,14 @@ def test_get_job_returns_job_by_id(
         job = scheduler.get_job(jobs[0].id)
         assert job.status == JobStatus.COMPLETED
         assert job.started_at.tzinfo is not None
-        assert job.started_at.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
+        started_at_offset = job.started_at.utcoffset()
+        assert started_at_offset is not None
+        assert started_at_offset.total_seconds() == 0
         assert job.ended_at is not None
         assert job.ended_at.tzinfo is not None
-        assert job.ended_at.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
+        ended_at_offset = job.ended_at.utcoffset()
+        assert ended_at_offset is not None
+        assert ended_at_offset.total_seconds() == 0
     finally:
         scheduler.shutdown()
 
