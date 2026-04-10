@@ -363,6 +363,11 @@ def test_get_job_returns_job_by_id(
         assert jobs[0].id is not None
         job = scheduler.get_job(jobs[0].id)
         assert job.status == JobStatus.COMPLETED
+        assert job.started_at.tzinfo is not None
+        assert job.started_at.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
+        assert job.ended_at is not None
+        assert job.ended_at.tzinfo is not None
+        assert job.ended_at.utcoffset().total_seconds() == 0  # type: ignore[union-attr]
     finally:
         scheduler.shutdown()
 
@@ -373,7 +378,7 @@ def test_get_job_raises_for_missing_id(
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         with pytest.raises(JobNotFoundError):
-            scheduler.get_job(999999)
+            scheduler.get_job("999999")
     finally:
         scheduler.shutdown()
 
