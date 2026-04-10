@@ -1,5 +1,5 @@
 <a id="v0.3.3"></a>
-## [v0.3.3 - fixed inteval option for tasks](https://github.com/nandyalu/quiv/releases/tag/v0.3.3) - 2026-04-09
+## [v0.3.3 - fixed interval option for tasks](https://github.com/nandyalu/quiv/releases/tag/v0.3.3) - 2026-04-09
 
 ### Breaking changes
 
