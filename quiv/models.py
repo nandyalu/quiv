@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from pydantic import BaseModel, field_serializer, model_validator
-from sqlalchemy.orm import registry
+from sqlalchemy.orm import reconstructor, registry
 from sqlmodel import Field, SQLModel
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,6 @@ class QuivModelBase(SQLModel, registry=quiv_registry):
         metadata (Any): Registry metadata used for Quiv model table creation.
     """
 
-    # metadata = quiv_registry.metadata
-
     @classmethod
     def set_timezone_to_utc(cls, value: datetime | None) -> datetime | None:
         """Normalize datetime values to timezone-aware UTC.
@@ -40,6 +38,24 @@ class QuivModelBase(SQLModel, registry=quiv_registry):
         if isinstance(value, datetime) and value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    @reconstructor
+    def _normalize_datetimes_on_load(self) -> None:
+        """Normalize all datetime fields to UTC-aware after DB load.
+
+        SQLAlchemy hydrates table classes via ``__new__`` + direct dict
+        assignment, bypassing Pydantic validators. This reconstructor
+        runs after attribute population and normalizes any datetime field
+        to timezone-aware UTC.
+        """
+        for name, field_info in self.__class__.model_fields.items():
+            if field_info.annotation is datetime or (
+                hasattr(field_info.annotation, "__args__")
+                and datetime in getattr(field_info.annotation, "__args__", ())
+            ):
+                value = getattr(self, name, None)
+                if value is not None:
+                    setattr(self, name, self.set_timezone_to_utc(value))
 
 
 def next_run_time() -> datetime:
@@ -172,13 +188,6 @@ class TaskDB(QuivModelBase, table=True):
         except Exception:  # pragma: no cover
             return f"<unserializable: {len(value)} bytes>"  # pragma: no cover
 
-    # NOTE: This validator is effectively dead code for SQLModel table classes.
-    # SQLAlchemy hydrates objects directly, bypassing Pydantic validators.
-    # Datetime normalization is handled by the public Task model's validator instead.
-    @model_validator(mode="before")
-    def force_utc_on_load(self) -> TaskDB:  # pragma: no cover
-        self.next_run_at = self.set_timezone_to_utc(self.next_run_at)  # type: ignore
-        return self
 
 
 class Task(BaseModel):
@@ -296,9 +305,3 @@ class Job(QuivModelBase, table=True):
     duration_seconds: float | None = None
     error_message: str | None = None
 
-    # Ensure started_at and ended_at are timezone-aware UTC on load from DB
-    @model_validator(mode="before")
-    def force_utc_on_load(self) -> Job:
-        self.started_at = self.set_timezone_to_utc(self.started_at)  # type: ignore[assignment]
-        self.ended_at = self.set_timezone_to_utc(self.ended_at)
-        return self

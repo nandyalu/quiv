@@ -51,19 +51,66 @@ def test_task_model_validator_normalizes_naive_next_run() -> None:
     assert validated.next_run_at.utcoffset() == timedelta(0)
 
 
-def test_job_model_validator_normalizes_naive_fields() -> None:
+def test_job_datetimes_normalized_to_utc_on_db_load() -> None:
+    """Job datetimes loaded from SQLite are normalized to UTC-aware via @reconstructor."""
+    from sqlmodel import Session, create_engine
+
+    from quiv.models import QuivModelBase
+
+    engine = create_engine("sqlite:///:memory:")
+    QuivModelBase.metadata.create_all(engine)
+
+    # Insert a job with naive datetimes (as SQLite stores them)
     job = Job(
         task_id="task-1",
         task_name="test-task",
         started_at=datetime(2026, 1, 1, 0, 0, 0),
         ended_at=datetime(2026, 1, 1, 0, 0, 2),
     )
-    validated = Job.model_validate(job)
-    assert validated.started_at.tzinfo is not None
-    assert validated.started_at.utcoffset() == timedelta(0)
-    assert validated.ended_at is not None
-    assert validated.ended_at.tzinfo is not None
-    assert validated.ended_at.utcoffset() == timedelta(0)
+    with Session(engine) as session:
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    # Load from DB — @reconstructor should normalize datetimes
+    with Session(engine) as session:
+        loaded = session.get(Job, job_id)
+        assert loaded is not None
+        assert loaded.started_at.tzinfo is not None
+        assert loaded.started_at.utcoffset() == timedelta(0)
+        assert loaded.ended_at is not None
+        assert loaded.ended_at.tzinfo is not None
+        assert loaded.ended_at.utcoffset() == timedelta(0)
+
+    engine.dispose()
+
+
+def test_taskdb_datetimes_normalized_to_utc_on_db_load() -> None:
+    """TaskDB datetimes loaded from SQLite are normalized to UTC-aware via @reconstructor."""
+    from sqlmodel import Session, create_engine
+
+    from quiv.models import QuivModelBase
+
+    engine = create_engine("sqlite:///:memory:")
+    QuivModelBase.metadata.create_all(engine)
+
+    task = TaskDB(
+        task_name="tz-check",
+        interval_seconds=60,
+        next_run_at=datetime(2026, 1, 1, 0, 0, 0),  # naive
+    )
+    with Session(engine) as session:
+        session.add(task)
+        session.commit()
+        task_id = task.id
+
+    with Session(engine) as session:
+        loaded = session.get(TaskDB, task_id)
+        assert loaded is not None
+        assert loaded.next_run_at.tzinfo is not None
+        assert loaded.next_run_at.utcoffset() == timedelta(0)
+
+    engine.dispose()
 
 
 def test_task_serializes_args_kwargs_as_unpickled_values() -> None:

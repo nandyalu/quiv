@@ -207,3 +207,4 @@ If your app needs any of these patterns, `quiv` might be a good fit.
 - [Architecture](architecture.md)
 - [Event Listeners](event-listeners.md)
 - [Exceptions](exceptions.md)
+- [Testing](testing.md)

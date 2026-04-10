@@ -26,6 +26,17 @@ def test_queue_task_for_immediate_run_raises_for_missing_task(
         scheduler.shutdown()
 
 
+def test_delete_task_raises_for_missing_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(TaskNotFoundError):
+            scheduler.persistence.delete_task("missing-id")
+    finally:
+        scheduler.shutdown()
+
+
 def test_pause_and_resume_missing_task_raise(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

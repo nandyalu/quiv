@@ -273,7 +273,11 @@ class PersistenceLayer:
         """
 
         with self._lock, Session(self._engine) as session:
-            job = Job(task_id=task_id, task_name=task_name, status=JobStatus.SCHEDULED)
+            job = Job(
+                task_id=task_id,
+                task_name=task_name,
+                status=JobStatus.SCHEDULED,
+            )
             session.add(job)
             session.commit()
             return job.id
