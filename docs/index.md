@@ -83,7 +83,7 @@ def ping(_progress_hook=None):
         if _progress_hook:
             _progress_hook(message="ping", progress=i, total=30)
 
-# Now the actual progress callback function that we want to run on FastAPI thread
+# Now the actual progress callback function that we want to run on the main asyncio loop
 async def on_progress(**payload):
     # Replace with websocket broadcast, logging, metrics, etc.
     print("progress", payload)
@@ -104,7 +104,8 @@ def start_heartbeat():
 
 ### Run async handlers natively, no `asyncio.run` wrapper
 
-APScheduler has asyncio integrations, but async pipelines can still end up wrapped or bridged when you’re scheduling from a threadpool. `quiv` accepts async handlers directly; each invocation runs in an event loop created on the worker thread for that job. Sync and async handlers coexist in the same scheduler.
+APScheduler has asyncio integrations, but async pipelines can still end up wrapped or bridged when you’re scheduling from a threadpool. `quiv` accepts async handlers directly; each invocation runs in an event loop created on the worker thread for that job. Sync and async handlers coexist in the same scheduler.
+
 
 ```python
 async def fetch_updates(_stop_event=None):
