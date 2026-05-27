@@ -20,31 +20,20 @@
   <a href="https://github.com/nandyalu/quiv/commits/" target="_blank"><img src="https://img.shields.io/github/last-commit/nandyalu/quiv?logo=github" alt="GitHub last commit"></a>
 </p>
 
-`quiv` is a lightweight background task scheduler for Python applications.
+Background tasks for FastAPI apps that need more than `BackgroundTasks` and less than Celery.
 
-It is designed to work especially well with FastAPI apps that need predictable,
-in-process background task orchestration.
+If you've reached for APScheduler inside a FastAPI app, you've probably hit one of these:
+
+- A task is running too long and the user wants to cancel it — but there's no clean way to signal the worker mid-run.
+- A background job needs to push progress to a websocket, and you're writing `run_coroutine_threadsafe` glue to hop back onto the main loop.
+- You want a job id stamped on every log line for one specific run, and you're threading it through call sites by hand.
+- You have a complete async pipeline you want to run in the background, and you're wrapping it in `asyncio.run` just to hand it to a sync-only scheduler.
+
+`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr) — a FastAPI app that outgrew APScheduler for exactly these reasons. It's a single-process, threadpool-backed scheduler with first-class support for cooperative cancellation (`_stop_event`), main-loop progress callbacks (`_progress_hook`), and per-job tracing (`_job_id`).
+
+It is not a Celery replacement. If you need multi-process workers, durable queues, or distributed execution, use Celery or arq. `quiv` is for the in-process case those tools are overkill for.
 
 Supports Python 3.10 through 3.14.
-
-It provides:
-
-- threadpool-backed execution
-- support for sync and async task handlers
-- cooperative cancellation (`_stop_event`)
-- progress callbacks routed to your main async loop (`_progress_hook`)
-- event listeners for task and job lifecycle events
-- persistent task/job state via SQLModel + SQLite
-
-## When to use quiv
-
-Use `quiv` when you need in-process background scheduling for app-level jobs,
-for example:
-
-- polling APIs every N seconds
-- periodic cleanup tasks
-- one-shot delayed jobs
-- progress-aware long-running workloads
 
 ## Install
 
@@ -62,6 +51,8 @@ for example:
 
 ## Quick example
 
+A full FastAPI integration — lifespan startup, an endpoint that schedules work, and progress streaming back to the main loop:
+
 ```python
 from contextlib import asynccontextmanager
 
@@ -69,21 +60,10 @@ from fastapi import FastAPI
 
 from quiv import Quiv
 
+# Create the Quiv scheduler
 scheduler = Quiv(timezone="UTC")
 
-
-def ping(_progress_hook=None):
-    for i in range(30):
-        # do some work
-        if _progress_hook:
-            _progress_hook(message="ping", progress=i, total=30)
-
-
-async def on_progress(**payload):
-    # Replace with websocket broadcast, logging, metrics, etc.
-    print("progress", payload)
-
-
+# Wire it up in FastAPI's lifespan so that it starts and dies with your app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -92,9 +72,23 @@ async def lifespan(app: FastAPI):
     # Shutdown
     scheduler.shutdown()
 
-
+# Create FastAPI app
 app = FastAPI(lifespan=lifespan)
 
+# Create a test function that we can later schedule to broadcast progress
+# sync/async - doesn't matter; quiv handles them all
+def ping(_progress_hook=None):
+    for i in range(30):
+        # do some work
+        if _progress_hook:
+            _progress_hook(message="ping", progress=i, total=30)
+
+# Now the actual progress callback function that we want to run on FastAPI thread
+async def on_progress(**payload):
+    # Replace with websocket broadcast, logging, metrics, etc.
+    print("progress", payload)
+
+# Create the endpoint function that will schedule the task when triggered
 @app.post("/start-heartbeat")
 def start_heartbeat():
     task_id = scheduler.add_task(
@@ -106,21 +100,59 @@ def start_heartbeat():
     return {"task_id": task_id}
 ```
 
-Async handlers work the same way:
+## What you actually get
+
+### Run async handlers natively, no `asyncio.run` wrapper
+
+APScheduler is sync-only — async pipelines have to be wrapped in `asyncio.run(...)` for every invocation, which spins up and tears down an event loop each time. `quiv` accepts async handlers directly; they run in a thread-local event loop managed by the scheduler. Sync and async handlers coexist in the same scheduler.
 
 ```python
 async def fetch_updates(_stop_event=None):
-    # async handlers run in thread-local event loops
     await some_async_api_call()
 
 scheduler.add_task(task_name="fetch", func=fetch_updates, interval=60)
 ```
 
-## FastAPI usage
+### Cancel a running task from an HTTP endpoint
 
-For a full FastAPI integration example (startup/shutdown lifecycle plus
-`_stop_event` and `_progress_hook`), see the FastAPI section in
-[Getting Started](getting-started.md).
+`_stop_event` is a per-job `threading.Event` injected into your handler. Check it at natural breakpoints and exit early when an endpoint calls `scheduler.cancel_job(job_id)` — no thread killing, no exceptions raised across thread boundaries.
+
+```python
+def download(media_id: int, _stop_event=None):
+    for chunk in stream_chunks(media_id):
+        if _stop_event and _stop_event.is_set():
+            return  # cooperative exit
+        write(chunk)
+```
+
+### Stream progress to a websocket without the `run_coroutine_threadsafe` dance
+
+Your handler calls `_progress_hook(**payload)` from inside the threadpool. `quiv` dispatches your registered async callback on the main asyncio loop — where it can broadcast over a websocket, update app state, or push to a metrics client.
+
+```python
+async def on_progress(**payload):
+    await websocket_manager.broadcast(payload)  # runs on the main loop
+
+scheduler.add_task(
+    task_name="download",
+    func=download,
+    progress_callback=on_progress,
+    run_once=True,
+)
+```
+
+### Correlate logs for one job, across threads
+
+Every invocation gets a `_job_id` (UUID). Stamp it into a context var or a `LoggerAdapter` and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
+
+```python
+@with_logging_context  # stores _job_id as trace_id for this run
+def download_trailer(media_id: int, _job_id: str | None = None, _stop_event=None):
+    logger.info("Starting download for media %s", media_id)
+    # every log line below carries the same trace_id
+```
+
+This is the pattern Trailarr uses in production today.
 
 ## Concepts
 
@@ -128,62 +160,6 @@ For a full FastAPI integration example (startup/shutdown lifecycle plus
 - **Job**: one execution record of a task
 - **Task statuses**: `active`, `running`, `paused`
 - **Job statuses**: `scheduled`, `running`, `completed`, `cancelled`, `failed`
-
-## Why quiv?
-
-Python has several task schedulers — [APScheduler](https://pypi.org/project/APScheduler/), [arq](https://github.com/python-arq/arq), [rq](https://python-rq.org/), [sched](https://docs.python.org/3/library/sched.html), [schedule](https://schedule.readthedocs.io/en/stable/index.html), and others. `quiv` was born out of gaps none of them filled well.
-
-### Cooperative cancellation
-I am the developor of [Trailarr](https://github.com/nandyalu/trailarr), an open-source app for downloading and managing trailers for media libraries, Trailarr is a fastapi app at it's core and was using APScheduler for background tasks and things that shouldn't block the main thread/async loop. 
-
-As the app grew, users started requesting a way to stop long-running tasks mid-execution. None of the existing schedulers offered a clean mechanism for this. 
-
-`quiv` solves it with `_stop_event`: a per-job `threading.Event` that is injected into your handler so you can check it at natural breakpoints and exit early when cancellation is requested.
-
-### Progress callbacks across thread boundaries
-Apps with a frontend or any sort of UI often need background tasks to report progress back to the main thread — for
-example, to push websocket messages to a UI.
-
-There was no straightforward way to call an async function on the main event loop from inside a threadpool worker. 
-
-`quiv` solves this with `_progress_hook`: your handler calls it with arbitrary payload data, and the scheduler dispatches your registered callback on the main asyncio loop, where it can broadcast over websockets or update application state.
-
-### Job-level tracing via `_job_id`
-
-When you need to trace exactly what happened during a specific run of a task,
-log correlation is essential. `quiv` injects a unique `_job_id` (UUID string)
-into every handler invocation, giving you a stable identifier you can attach
-to log records, metrics, or spans.
-
-[Trailarr](https://github.com/nandyalu/trailarr) uses this today: every task
-handler receives `_job_id` from quiv and sets it as a `trace_id` on the
-logger. All log lines emitted during that run carry the same trace id, so
-filtering logs by a single job is a one-line query — no matter how many tasks
-ran concurrently.
-
-```python
-import logging
-
-from config.logging_context import with_logging_context
-
-logger = logging.getLogger(__name__)
-
-@with_logging_context
-def download_trailer(
-    media_id: int,
-    _job_id: str | None = None,
-    _stop_event=None,
-):
-    # quiv injects _job_id and with_logging_context decorator stores it as trace_id
-    # logs handler will get it using get_trace_id and adds it to all logs
-    # so logs from the task will be logged with that trace_id
-    # Attach job_id as trace context for this run
-    logger.info("Starting download for media %s", media_id)
-
-    # ... do work, all logs carry the same trace_id ...
-```
-
-If your app needs any of these patterns, `quiv` might be a good fit.
 
 ## Important caveats
 
