@@ -104,7 +104,7 @@ def start_heartbeat():
 
 ### Run async handlers natively, no `asyncio.run` wrapper
 
-APScheduler is sync-only — async pipelines have to be wrapped in `asyncio.run(...)` for every invocation, which spins up and tears down an event loop each time. `quiv` accepts async handlers directly; they run in a thread-local event loop managed by the scheduler. Sync and async handlers coexist in the same scheduler.
+APScheduler has asyncio integrations, but async pipelines can still end up wrapped or bridged when you’re scheduling from a threadpool. `quiv` accepts async handlers directly; each invocation runs in an event loop created on the worker thread for that job. Sync and async handlers coexist in the same scheduler.
 
 ```python
 async def fetch_updates(_stop_event=None):
