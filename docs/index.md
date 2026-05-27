@@ -83,7 +83,7 @@ def ping(_progress_hook=None):
         if _progress_hook:
             _progress_hook(message="ping", progress=i, total=30)
 
-# Now the actual progress callback function that we want to run on the main asyncio loop
+# Now the actual progress callback function that we want to run on the main asyncio loop
 async def on_progress(**payload):
     # Replace with websocket broadcast, logging, metrics, etc.
     print("progress", payload)
@@ -144,16 +144,20 @@ scheduler.add_task(
 
 ### Correlate logs for one job, across threads
 
-Every invocation gets a `_job_id` (UUID). Stamp it into a context var or a `LoggerAdapter` and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
+Every invocation gets a `_job_id` (UUID). Stamp it into a `LoggerAdapter` (or a `ContextVar`) and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
 
 ```python
-@with_logging_context  # stores _job_id as trace_id for this run
+import logging
+
+base_logger = logging.getLogger(__name__)
+
 def download_trailer(media_id: int, _job_id: str | None = None, _stop_event=None):
+    logger = logging.LoggerAdapter(base_logger, {"trace_id": _job_id})
     logger.info("Starting download for media %s", media_id)
-    # every log line below carries the same trace_id
+    # every log line through `logger` below carries trace_id=<_job_id>
 ```
 
-This is the pattern Trailarr uses in production today.
+Trailarr uses a `ContextVar` flavor of this in production so downstream modules pick up the trace id automatically — see [Getting Started](getting-started.md) for that variant.
 
 ## Concepts
 
