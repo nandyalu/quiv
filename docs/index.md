@@ -178,9 +178,11 @@ This is the pattern Trailarr uses in production today.
 
 ## Next pages
 
-- [Getting Started](getting-started.md)
-- [API](api.md)
-- [Architecture](architecture.md)
-- [Event Listeners](event-listeners.md)
-- [Exceptions](exceptions.md)
-- [Testing](testing.md)
+Interested in learning more or ready to start building with `quiv`? The full documentation is here:
+
+- [Getting Started](getting-started.md) — install, scheduler setup, and your first task
+- [API](api.md) — full reference for `Quiv`, `add_task`, and friends
+- [Architecture](architecture.md) — how the scheduler, persistence, and execution layers fit together
+- [Event Listeners](event-listeners.md) — hook into task and job lifecycle events
+- [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
+- [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
