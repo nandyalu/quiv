@@ -32,7 +32,6 @@ class QuivModelBase(SQLModel, registry=quiv_registry):
         If a datetime is naive (common with SQLite), it is treated as UTC.
         If it is timezone-aware, it is converted to UTC.
         """
-        logger.debug(f"Normalizing datetime value '{value}' to UTC.")
         if value is None:
             return value
         if isinstance(value, datetime) and value.tzinfo is None:
@@ -189,7 +188,6 @@ class TaskDB(QuivModelBase, table=True):
             return f"<unserializable: {len(value)} bytes>"  # pragma: no cover
 
 
-
 class Task(BaseModel):
     """Scheduled task model returned by public API methods.
 
@@ -304,4 +302,3 @@ class Job(QuivModelBase, table=True):
     ended_at: datetime | None = None
     duration_seconds: float | None = None
     error_message: str | None = None
-
