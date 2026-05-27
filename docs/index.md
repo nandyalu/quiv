@@ -186,3 +186,13 @@ Interested in learning more or ready to start building with `quiv`? The full doc
 - [Event Listeners](event-listeners.md) — hook into task and job lifecycle events
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
+
+## Ideas, bugs, and contributions
+
+`quiv` started from one app's needs, so the best way it gets better is when other people's apps push it in new directions. If you have a use case it doesn't cover, a rough edge it should smooth out, or a PR you'd like to land — all welcome.
+
+- [Open an issue](https://github.com/nandyalu/quiv/issues) for bugs or feature requests
+- [Start a discussion](https://github.com/nandyalu/quiv/discussions) if you'd like to talk through an idea first
+- PRs are welcome — for anything non-trivial, opening an issue first is usually the fastest path
+
+And if `quiv` saved you some time, a [GitHub star](https://github.com/nandyalu/quiv) is a nice way to let us know it was useful.
