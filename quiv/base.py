@@ -535,6 +535,9 @@ class QuivBase(ABC):
         """Start the scheduler background thread."""
         if self._main_loop is None:
             self._resolve_main_loop()  # pragma: no cover
+        from .context import _register_active
+
+        _register_active(self)
         if not self.thread.is_alive():
             self.thread.start()
         return None
@@ -550,6 +553,9 @@ class QuivBase(ABC):
     def shutdown(self) -> None:
         """Stop scheduler loop, cancel jobs, and release resources."""
 
+        from .context import _unregister_active
+
+        _unregister_active(self)
         self._shutdown = True
         all_jobs = self.get_all_jobs()
         for job in all_jobs:

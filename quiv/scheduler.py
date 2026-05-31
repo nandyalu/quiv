@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .base import QuivBase
 from .config import QuivConfig
+from .context import _current_quiv
 from .exceptions import ConfigurationError
 from .models import Event, JobStatus, TaskDB
 
@@ -295,6 +296,7 @@ class Quiv(QuivBase):
         status = JobStatus.COMPLETED
         job_error: BaseException | None = None
         duration = timedelta()
+        ctx_token = _current_quiv.set(self)
         try:
             self.execution.run_callable(func, args, kwargs)
             end_time = self._now_utc()
@@ -315,6 +317,7 @@ class Quiv(QuivBase):
             )
             status = JobStatus.FAILED
         finally:
+            _current_quiv.reset(ctx_token)
             stop_event = self.stop_events.pop(job_id, None)
             if stop_event is not None and stop_event.is_set():
                 status = JobStatus.CANCELLED

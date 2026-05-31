@@ -240,6 +240,33 @@ dispatch details.
 Remove a previously registered event listener. If the callback is not found,
 the call is silently ignored.
 
+## `run_on_main`
+
+```python
+from quiv import run_on_main
+
+run_on_main(func: Callable[..., Any], *args: Any, **kwargs: Any) -> None
+```
+
+Module-level helper that dispatches `func` onto the active Quiv instance's main event loop. Designed to be called from anywhere in a task handler's call stack — without threading a callback parameter through intermediate functions — and from code already running on the main loop (e.g., FastAPI route handlers that share utilities with task code).
+
+Resolution order for the active instance:
+
+1. A `ContextVar` set by `_run_job` for the duration of a handler invocation (propagates through nested sync calls, the per-job async loop, and `asyncio.create_task`).
+2. A process-level fallback registered by `Quiv.start()` and cleared by `Quiv.shutdown()`.
+
+Behavior:
+
+- Fire-and-forget; returns `None` immediately on cross-thread dispatch.
+- Sync targets run inline when called from the main loop's thread, else via `call_soon_threadsafe`. Async targets are scheduled via `main_loop.create_task` on-loop, else `run_coroutine_threadsafe`.
+- Exceptions raised by `func` are logged on the active Quiv's logger and swallowed.
+
+Raises:
+
+- `RuntimeError` if no active Quiv instance is registered, or if the active instance has no resolvable main event loop.
+
+See [Running on the main event loop](run-on-main.md) for the full walkthrough, dispatch table, and caveats.
+
 ## Hooks and callback injection
 
 When a task is dispatched, `quiv` inspects handler signatures:
@@ -393,6 +420,7 @@ workers were busy, a warning is logged with the delay.
 ## Public methods summary
 
 - `Quiv(...)` — create scheduler instance
+- `run_on_main(func, *args, **kwargs)` — fire-and-forget dispatch onto the active Quiv's main loop
 - `add_task(...)` — schedule a task, returns `task_id`
 - `start()` / `startup()` — start the scheduler loop
 - `shutdown()` / `stop()` — stop scheduler and clean up resources

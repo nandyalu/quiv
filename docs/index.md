@@ -142,6 +142,23 @@ scheduler.add_task(
 )
 ```
 
+### Dispatch to the main loop from anywhere — no parameter threading
+
+When a deeply-nested function inside a task needs to touch a resource that lives on the main event loop (e.g. a WebSocket manager that tracks connected clients), reach for `quiv.run_on_main`. Import it at module level and call it — `quiv` looks up the active instance, finds its main loop, and dispatches your callable. No `_progress_hook` parameter threaded through every layer, no `run_coroutine_threadsafe` glue.
+
+```python
+from quiv import run_on_main
+
+async def broadcast(payload: dict):
+    await ws_manager.broadcast(payload)  # lives on uvicorn's loop
+
+def deeply_nested_step():
+    # Inside a Quiv task — but the broadcast hops to the main loop.
+    run_on_main(broadcast, {"event": "step_done"})
+```
+
+The same `run_on_main` call also works when invoked from a FastAPI route handler on the main loop — it detects the current thread and runs the target in place instead of dispatching cross-thread. One helper, two contexts.
+
 ### Correlate logs for one job, across threads
 
 Every invocation gets a `_job_id` (UUID). Stamp it into a `LoggerAdapter` (or a `ContextVar`) and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
@@ -188,6 +205,7 @@ Interested in learning more or ready to start building with `quiv`? The full doc
 - [Getting Started](getting-started.md) — install, scheduler setup, and your first task
 - [API](api.md) — full reference for `Quiv`, `add_task`, and friends
 - [Architecture](architecture.md) — how the scheduler, persistence, and execution layers fit together
+- [Running on the main event loop](run-on-main.md) — dispatch work to the main loop from anywhere in a task's call stack
 - [Event Listeners](event-listeners.md) — hook into task and job lifecycle events
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
