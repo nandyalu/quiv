@@ -5,6 +5,7 @@ exceptions for convenient imports.
 """
 
 from .config import QuivConfig, resolve_timezone
+from .context import run_on_main
 from .exceptions import (
     ConfigurationError,
     DatabaseInitializationError,
@@ -23,6 +24,7 @@ __all__ = [
     "Quiv",
     "QuivConfig",
     "resolve_timezone",
+    "run_on_main",
     "QuivError",
     "ConfigurationError",
     "InvalidTimezoneError",
