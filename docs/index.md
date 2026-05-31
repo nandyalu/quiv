@@ -157,7 +157,7 @@ def deeply_nested_step():
     run_on_main(broadcast, {"event": "step_done"})
 ```
 
-The same `run_on_main` call also works when invoked from a FastAPI route handler on the main loop — it detects the current thread and runs the target in place instead of dispatching cross-thread. One helper, two contexts.
+The same `run_on_main` call also works when invoked from a FastAPI route handler on the main loop — it detects that the caller is already on the main loop and schedules the work there directly (sync targets run inline, async targets are scheduled with `create_task`) instead of doing a cross-thread hop. One helper, two contexts.
 
 ### Correlate logs for one job, across threads
 
