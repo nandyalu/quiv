@@ -273,6 +273,36 @@ def test_run_on_main_logs_and_swallows_target_exception(
         scheduler.shutdown()
 
 
+def test_run_on_main_on_loop_async_target_exception_is_logged(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    raised = threading.Event()
+
+    async def boom() -> None:
+        raised.set()
+        raise RuntimeError("on-loop async boom")
+
+    async def caller() -> None:
+        run_on_main(boom)
+
+    try:
+        scheduler.start()
+        with caplog.at_level(logging.ERROR, logger="Quiv"):
+            asyncio.run_coroutine_threadsafe(
+                caller(), running_main_loop
+            ).result(timeout=2)
+            assert raised.wait(timeout=2)
+            # Give the done callback a tick to fire.
+            time.sleep(0.1)
+        assert any(
+            "on-loop async boom" in r.message for r in caplog.records
+        )
+    finally:
+        scheduler.shutdown()
+
+
 def test_multiple_active_instances_logs_warning(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
@@ -289,6 +319,131 @@ def test_multiple_active_instances_logs_warning(
     finally:
         second.shutdown()
         first.shutdown()
+
+
+def test_run_on_main_with_unresolvable_main_loop_raises() -> None:
+    scheduler = Quiv()
+    try:
+        scheduler.start()
+        with pytest.raises(RuntimeError, match="resolvable main event loop"):
+            run_on_main(lambda: None)
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_on_main_swallows_cancelled_target(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+
+    async def raises_cancelled() -> None:
+        started.set()
+        raise asyncio.CancelledError("explicit")
+
+    async def caller() -> None:
+        run_on_main(raises_cancelled)
+
+    try:
+        scheduler.start()
+        with caplog.at_level(logging.ERROR, logger="Quiv"):
+            asyncio.run_coroutine_threadsafe(
+                caller(), running_main_loop
+            ).result(timeout=2)
+            assert started.wait(timeout=3)
+            time.sleep(0.2)
+        assert not any(
+            "run_on_main callable" in r.message for r in caplog.records
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_on_main_on_loop_sync_target_returning_coroutine(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    main_thread_id = _main_thread_id(running_main_loop)
+    captured: dict[str, int] = {}
+    done = threading.Event()
+
+    def factory() -> Any:
+        async def inner() -> None:
+            captured["thread_id"] = threading.get_ident()
+            done.set()
+
+        return inner()
+
+    async def caller() -> None:
+        run_on_main(factory)
+
+    try:
+        scheduler.start()
+        asyncio.run_coroutine_threadsafe(
+            caller(), running_main_loop
+        ).result(timeout=2)
+        assert done.wait(timeout=3)
+        assert captured["thread_id"] == main_thread_id
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_on_main_on_loop_sync_target_exception_is_logged(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+
+    def boom() -> None:
+        raise RuntimeError("on-loop sync boom")
+
+    async def caller() -> None:
+        run_on_main(boom)
+
+    try:
+        scheduler.start()
+        with caplog.at_level(logging.ERROR, logger="Quiv"):
+            asyncio.run_coroutine_threadsafe(
+                caller(), running_main_loop
+            ).result(timeout=2)
+        assert any(
+            "on-loop sync boom" in r.message for r in caplog.records
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_on_main_cross_thread_sync_target_returning_coroutine(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    main_thread_id = _main_thread_id(running_main_loop)
+    captured: dict[str, int] = {}
+    done = threading.Event()
+
+    def factory() -> Any:
+        async def inner() -> None:
+            captured["thread_id"] = threading.get_ident()
+            done.set()
+
+        return inner()
+
+    def handler() -> None:
+        run_on_main(factory)
+
+    try:
+        scheduler.add_task(
+            task_name="cross-thread-coro-factory",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert done.wait(timeout=3)
+        assert captured["thread_id"] == main_thread_id
+    finally:
+        scheduler.shutdown()
 
 
 def test_shutdown_unregisters_active_instance(

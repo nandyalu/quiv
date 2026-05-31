@@ -140,6 +140,18 @@ def run_on_main(
     logger = quiv._logger
     is_coro_fn = inspect.iscoroutinefunction(func)
 
+    def _on_done(fut: Any) -> None:
+        try:
+            exc = fut.exception()
+        except asyncio.CancelledError:  # pragma: no cover
+            return
+        if exc is None or isinstance(exc, asyncio.CancelledError):
+            return
+        logger.error(
+            f"run_on_main callable {func!r} failed: {exc}",
+            exc_info=exc,
+        )
+
     try:
         current_loop: asyncio.AbstractEventLoop | None = (
             asyncio.get_running_loop()
@@ -152,12 +164,14 @@ def run_on_main(
             coroutine = cast(
                 Coroutine[Any, Any, Any], func(*args, **kwargs)
             )
-            main_loop.create_task(coroutine)
+            task = main_loop.create_task(coroutine)
+            task.add_done_callback(_on_done)
             return
         try:
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
-                main_loop.create_task(result)
+                task = main_loop.create_task(result)
+                task.add_done_callback(_on_done)
         except Exception as e:
             logger.error(
                 f"run_on_main callable {func!r} failed: {e}", exc_info=True
@@ -167,15 +181,6 @@ def run_on_main(
     if is_coro_fn:
         coroutine = cast(Coroutine[Any, Any, Any], func(*args, **kwargs))
         future = asyncio.run_coroutine_threadsafe(coroutine, main_loop)
-
-        def _on_done(fut: Any) -> None:
-            exc = fut.exception()
-            if exc is not None:
-                logger.error(
-                    f"run_on_main callable {func!r} failed: {exc}",
-                    exc_info=exc,
-                )
-
         future.add_done_callback(_on_done)
         return
 

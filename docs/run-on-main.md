@@ -134,7 +134,7 @@ def run_on_main(
 ```
 
 - `func` may be a sync function or a coroutine function (`async def`). Bare coroutine objects are **not** accepted — pass the function and let `run_on_main` invoke it with `*args, **kwargs`.
-- Returns `None` immediately.
+- Returns `None`. The call returns immediately for all cross-thread dispatch paths and for async targets scheduled on the current loop; the one exception is a **sync** target called from the main loop's thread, which runs inline on the caller's stack and therefore blocks the caller for the duration of the target.
 - Raises `RuntimeError` if no active Quiv instance is registered, or if the active Quiv has no resolvable main loop. These are configuration errors (e.g., `run_on_main` called before `Quiv.start()`).
 
 ## A note on blocking the main loop
