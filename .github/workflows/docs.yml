@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/configure-pages@v6
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Generate Changelog from Releases
         uses: rhysd/changelog-from-release/action@v3
         with:
