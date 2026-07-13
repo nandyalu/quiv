@@ -80,6 +80,28 @@ def test_run_progress_callback_with_closed_main_loop_is_safe() -> None:
         scheduler.shutdown()
 
 
+def test_run_async_finalizes_async_generators_when_handler_raises() -> None:
+    scheduler = Quiv()
+    finalized = threading.Event()
+
+    async def values():
+        try:
+            yield 1
+        finally:
+            finalized.set()
+
+    async def handler() -> None:
+        async for _value in values():
+            raise RuntimeError("handler failed")
+
+    try:
+        with pytest.raises(RuntimeError, match="handler failed"):
+            scheduler.run_async(handler)
+        assert finalized.is_set()
+    finally:
+        scheduler.shutdown()
+
+
 def test_run_progress_callback_handles_async_and_sync_returning_coroutine(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

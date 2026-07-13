@@ -213,8 +213,16 @@ class QuivBase(ABC):
             asyncio.set_event_loop(new_loop)
             new_loop.run_until_complete(task(*(args or ()), **(kwargs or {})))
         finally:
-            asyncio.set_event_loop(None)
-            new_loop.close()
+            try:
+                new_loop.run_until_complete(new_loop.shutdown_asyncgens())
+            finally:
+                try:
+                    new_loop.run_until_complete(
+                        new_loop.shutdown_default_executor()
+                    )
+                finally:
+                    asyncio.set_event_loop(None)
+                    new_loop.close()
 
     def _register_handler(self, task_id: str, func: Callable[..., Any]) -> None:
         """Register a task handler callable.
