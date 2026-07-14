@@ -102,6 +102,30 @@ def test_run_async_finalizes_async_generators_when_handler_raises() -> None:
         scheduler.shutdown()
 
 
+def test_run_async_cancels_pending_tasks_when_handler_raises() -> None:
+    scheduler = Quiv()
+    cancelled = threading.Event()
+
+    async def background() -> None:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def handler() -> None:
+        asyncio.create_task(background())
+        await asyncio.sleep(0)
+        raise RuntimeError("handler failed")
+
+    try:
+        with pytest.raises(RuntimeError, match="handler failed"):
+            scheduler.run_async(handler)
+        assert cancelled.is_set()
+    finally:
+        scheduler.shutdown()
+
+
 def test_run_progress_callback_handles_async_and_sync_returning_coroutine(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
