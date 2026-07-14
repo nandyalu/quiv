@@ -37,7 +37,8 @@ jobs:
         run: uv run pytest tests/ -v --cov=quiv --cov-report=term --cov-report=xml
 
       - name: Upload coverage report
-        if: matrix.python-version == '3.13' && github.event_name == 'pull_request'
+        # GITHUB_TOKEN is read-only for fork PRs, so the coverage comment can only be posted for same-repo PRs
+        if: matrix.python-version == '3.13' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: orgoro/coverage@v3.3
         with:
           coverageFile: coverage.xml
