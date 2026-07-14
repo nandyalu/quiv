@@ -8,6 +8,12 @@ quiv is a lightweight threadpool-backed background scheduler for Python apps (de
 
 Python 3.10–3.14. Dependencies: `sqlmodel`, `tzdata`.
 
+## Roadmap and implementation plans
+
+Work toward v1.0.0 follows a fixed, phased roadmap: `docs/roadmap.md` (what and why) and `plans/` (how — one detailed plan per phase with prescriptive design decisions, tests, pitfalls, and exit checklists; start at `plans/README.md`).
+
+**Before implementing any scheduler change, read the matching phase plan in `plans/` and follow it — the design decisions there are already settled; do not re-derive or deviate from them.** Explicitly rejected (do not propose or implement): cron/calendar scheduling, durable persistence, event-loop reuse in `run_async` (each async invocation must keep its own fresh event loop — isolation requirement), lazy logging. When a phase completes, update `docs/roadmap.md`, `docs/release-notes.md`, the version in `pyproject.toml`, and any CLAUDE.md sections the phase changed.
+
 ## Commands
 
 All commands must be run via `uv`.
