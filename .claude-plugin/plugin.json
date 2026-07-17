@@ -1,0 +1,9 @@
+{
+	"name": "quiv",
+	"displayName": "quiv Scheduler",
+	"description": "Teaches Claude Code how to use quiv — the threadpool-backed background scheduler for Python/FastAPI apps.",
+	"author": { "name": "Uma Nandyala" },
+	"homepage": "https://nandyalu.github.io/quiv",
+	"repository": "https://github.com/nandyalu/quiv",
+	"license": "MIT"
+}

@@ -1,0 +1,33 @@
+# quiv
+
+> quiv is a single-process, threadpool-backed background scheduler for Python apps (built for FastAPI) — recurring and one-shot tasks, sync and async handlers, cooperative cancellation via an injected `_stop_event`, progress callbacks dispatched to the main asyncio loop via `_progress_hook`, and per-job trace IDs via `_job_id`. Python 3.10–3.14, MIT licensed.
+
+Key facts for working with quiv:
+
+- Positioning: more than FastAPI `BackgroundTasks`, less than Celery. Not for multi-process/distributed workers, durable queues, or cron/calendar scheduling.
+- Task/job state lives in a temporary SQLite file deleted on `shutdown()` — nothing persists across restarts.
+- `add_task()` returns a `task_id` (UUID string) that keys all runtime operations; `task_name` is a non-unique display label.
+- `_job_id`, `_stop_event`, and `_progress_hook` are injected only if the handler signature declares them.
+- Cancellation is cooperative: handlers must check `_stop_event.is_set()`.
+- An agent-oriented condensed guide ships inside the installed package at `quiv/AGENTS.md` (in site-packages).
+- A full-text concatenation of these docs is at https://nandyalu.github.io/quiv/llms-full.txt
+
+## Docs
+
+- [Home / overview](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/index.md): what quiv is, quick FastAPI example, caveats
+- [Getting Started](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/getting-started.md): install, scheduler setup, first task, FastAPI lifespan integration, logging, troubleshooting
+- [API reference](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/api.md): `Quiv` constructor, `add_task`, task/job operations, `run_on_main`, models, events, `QuivConfig`, pool sizing
+- [Bigger Applications](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/bigger-applications.md): structuring quiv in multi-module apps
+- [Architecture](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/architecture.md): scheduler / persistence / execution layer design
+- [Progress Callbacks](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/progress-callbacks.md): `_progress_hook` and main-loop dispatch
+- [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere
+- [Event Listeners](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/event-listeners.md): task/job lifecycle events and typed callbacks
+- [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `_stop_event`
+- [Exceptions](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/exceptions.md): the `QuivError` hierarchy
+- [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): patterns for testing handlers and the scheduler
+
+## Optional
+
+- [Release Notes](https://nandyalu.github.io/quiv/release-notes/): changelog per release
+- [Roadmap](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/roadmap.md): plan toward v1.0.0
+- [Source repository](https://github.com/nandyalu/quiv): issues, discussions, contributing

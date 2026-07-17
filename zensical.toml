@@ -59,6 +59,7 @@ nav = [
   { "Cancellation" = "cancellation.md" },
   { "Exceptions" = "exceptions.md" },
   { "Tests" = "testing.md" },
+  { "AI Tools" = "ai-tools.md" },
   { "Release Notes" = "release-notes.md" },
   { "Roadmap" = "roadmap.md" }
 ]
