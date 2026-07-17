@@ -200,7 +200,11 @@ class QuivBase(ABC):
         args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
     ) -> None:
-        """Run an async callable in a thread-local event loop.
+        """Run an async callable in a fresh event loop for this invocation.
+
+        Each invocation gets its own event loop (isolation requirement);
+        ``asyncio.run`` cancels pending tasks and finalizes async generators
+        and the default executor before closing the loop.
 
         Args:
             task (Callable[..., Awaitable[Any]]): Coroutine function to execute.
@@ -208,13 +212,10 @@ class QuivBase(ABC):
             kwargs (dict, Optional=None): Keyword arguments for the callable.
         """
 
-        new_loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(new_loop)
-            new_loop.run_until_complete(task(*(args or ()), **(kwargs or {})))
-        finally:
-            asyncio.set_event_loop(None)
-            new_loop.close()
+        async def invoke() -> Any:
+            return await task(*(args or ()), **(kwargs or {}))
+
+        asyncio.run(invoke())
 
     def _register_handler(self, task_id: str, func: Callable[..., Any]) -> None:
         """Register a task handler callable.
