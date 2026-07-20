@@ -8,6 +8,12 @@ quiv is a lightweight threadpool-backed background scheduler for Python apps (de
 
 Python 3.10–3.14. Dependencies: `sqlmodel`, `tzdata`.
 
+## Roadmap and implementation plans
+
+Work toward v1.0.0 follows a fixed, phased roadmap: `docs/roadmap.md` (what and why) and `plans/` (how — one detailed plan per phase with prescriptive design decisions, tests, pitfalls, and exit checklists; start at `plans/README.md`).
+
+**Before implementing any scheduler change, read the matching phase plan in `plans/` and follow it — the design decisions there are already settled; do not re-derive or deviate from them.** Explicitly rejected (do not propose or implement): cron/calendar scheduling, durable persistence, event-loop reuse in `run_async` (each async invocation must keep its own fresh event loop — isolation requirement), lazy logging. When a phase completes, update `docs/roadmap.md`, `docs/release-notes.md`, the version in `pyproject.toml`, and any CLAUDE.md sections the phase changed.
+
 ## Commands
 
 All commands must be run via `uv`.
@@ -65,6 +71,14 @@ The library has a layered design with four core modules:
 - **Args as tuples**: `add_task()` accepts `args` as a `tuple` (not list) to preserve ordering intent. Args are pickle-serialized for persistence; `ExecutionLayer.prepare_invocation()` unpickles and wraps them in a `tuple` before passing to the handler.
 - **Event listeners**: Global `add_listener(Event, callback)` / `remove_listener(Event, callback)` on `QuivBase`. Listeners are stored in `_event_listeners: dict[Event, list[Callable]]`. `_emit_event()` dispatches to the main loop using the same pattern as progress callbacks (async via `run_coroutine_threadsafe`, sync via `call_soon_threadsafe`, fallback to direct call). Exceptions in listeners are logged and swallowed. `TASK_*` callbacks receive `(event, task: Task)`, `JOB_*` callbacks receive `(event, task: Task, job: Job)`. The `Job` model includes `duration_seconds` and `error_message` fields set during finalization. Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`.
 - **Logging**: The library does not set log levels. The `logger` parameter accepts `logging.Logger` or `logging.LoggerAdapter[Any]`. Applications configure the `"Quiv"` logger themselves.
+
+## AI-tooling artifacts
+
+Three artifacts teach AI assistants how to use quiv; when the public API or key patterns change, update them alongside the docs:
+
+- `quiv/AGENTS.md` — condensed agent-facing reference shipped inside the wheel (lands in site-packages).
+- `docs/llms.txt` — llms.txt index served at the docs site root; `docs/llms-full.txt` is generated (gitignored) by `scripts/generate_llms_full.py`, which CI runs before `zensical build`.
+- `.claude-plugin/` + `skills/quiv/SKILL.md` — the repo doubles as a Claude Code plugin marketplace shipping a `quiv` skill (install: `/plugin marketplace add nandyalu/quiv`, `/plugin install quiv@quiv`). Validate with `claude plugin validate .`. Plugin version is intentionally omitted so each commit counts as a new version.
 
 ## Testing
 

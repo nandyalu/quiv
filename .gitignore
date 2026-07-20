@@ -14,3 +14,4 @@ wheels/
 # zensical generated files
 site/
 docs-help/
+docs/llms-full.txt

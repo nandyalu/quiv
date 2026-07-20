@@ -192,6 +192,16 @@ Interested in learning more or ready to start building with `quiv`? The full doc
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
 
+## Using quiv with AI coding tools
+
+quiv is built to be understood by AI assistants as well as humans:
+
+- **Bundled agent guide** — every install ships a condensed reference at `quiv/AGENTS.md` inside the package (find it in `site-packages`); agents exploring your dependencies pick it up automatically.
+- **llms.txt** — the docs site publishes [llms.txt](https://nandyalu.github.io/quiv/llms.txt) and [llms-full.txt](https://nandyalu.github.io/quiv/llms-full.txt) per the [llms.txt convention](https://llmstxt.org/).
+- **Claude Code plugin** — this repo doubles as a plugin marketplace with a `quiv` skill: `/plugin marketplace add nandyalu/quiv` then `/plugin install quiv@quiv`.
+
+See [AI Tools](https://nandyalu.github.io/quiv/ai-tools/) for details.
+
 ## Ideas, bugs, and contributions
 
 `quiv` started from one app's needs, so the best way it gets better is when other people's apps push it in new directions. If you have a use case it doesn't cover, a rough edge it should smooth out, or a PR you'd like to land — all welcome.

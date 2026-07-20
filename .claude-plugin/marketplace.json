@@ -1,0 +1,12 @@
+{
+	"name": "quiv",
+	"description": "Claude Code skill for the quiv background scheduler — usage patterns, handler injection, cancellation, and FastAPI integration.",
+	"owner": { "name": "Uma Nandyala" },
+	"plugins": [
+		{
+			"name": "quiv",
+			"source": "./",
+			"description": "Usage guide and patterns for the quiv background scheduler (Python/FastAPI)."
+		}
+	]
+}
