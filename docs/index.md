@@ -209,6 +209,7 @@ Interested in learning more or ready to start building with `quiv`? The full doc
 - [Event Listeners](event-listeners.md) — hook into task and job lifecycle events
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
+- [AI Tools](ai-tools.md) — bundled agent guide, llms.txt, and the Claude Code plugin
 
 ## Ideas, bugs, and contributions
 
