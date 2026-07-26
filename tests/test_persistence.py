@@ -392,3 +392,45 @@ def test_finalize_task_wait_between_runs_schedules_from_completion(
         )
     finally:
         scheduler.shutdown()
+
+
+def test_get_next_due_time_returns_utc_aware(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        assert scheduler.persistence.get_next_due_time() is None
+
+        soon_id = scheduler.add_task(
+            task_name="soon", func=lambda: None, interval=60, delay=5
+        )
+        scheduler.add_task(
+            task_name="later", func=lambda: None, interval=60, delay=600
+        )
+
+        next_due = scheduler.persistence.get_next_due_time()
+        assert next_due is not None
+        assert next_due.tzinfo is not None
+        soon_row = scheduler.persistence.get_task(soon_id)
+        assert next_due == soon_row.next_run_at
+
+        scheduler.pause_task(soon_id)
+        next_due = scheduler.persistence.get_next_due_time()
+        assert next_due is not None
+        assert next_due != soon_row.next_run_at
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_next_due_time_none_when_all_paused(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused-only", func=lambda: None, interval=60
+        )
+        scheduler.pause_task(task_id)
+        assert scheduler.persistence.get_next_due_time() is None
+    finally:
+        scheduler.shutdown()

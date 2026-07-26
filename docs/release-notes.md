@@ -1,3 +1,19 @@
+<a id="v0.6.0"></a>
+## [v0.6.0 - Scheduler Core Efficiency](https://github.com/nandyalu/quiv/releases/tag/v0.6.0) - 2026-07-26
+
+Phase 2 of the [roadmap to v1.0.0](roadmap.md): smart sleep loop and handler signature caching.
+
+### What's new
+
+- **Sub-second intervals** — the scheduler loop now sleeps until the next due task on an interruptible wait instead of polling every second. `add_task(interval=0.2)` works; dispatch jitter drops from up to ~1 s to milliseconds.
+- **Zero idle polling** — an idle scheduler issues no database queries (bounded by a 60-second safety-net wake-up). Schedule changes (`add_task`, `run_task_immediately`, `resume_task`, `remove_task`) and job completions wake the loop immediately, so deferred tasks dispatch as soon as a pool slot frees and `shutdown()` returns promptly instead of waiting out the current sleep.
+- **Handler signature caching** — each handler's injectable kwargs (`_job_id`, `_stop_event`, `_progress_hook`) are introspected once per handler lifetime (weakly cached) instead of three `inspect.signature()` calls per dispatch.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.5.0...v0.6.0
+
+[Changes][v0.6.0]
+
+
 <a id="v0.5.0"></a>
 ## [v0.5.0 - Correctness & Stability](https://github.com/nandyalu/quiv/releases/tag/v0.5.0) - 2026-07-26
 
@@ -300,6 +316,7 @@ Initial Release
 [Changes][v0.1.0]
 
 
+[v0.6.0]: https://github.com/nandyalu/quiv/compare/v0.5.0...v0.6.0
 [v0.5.0]: https://github.com/nandyalu/quiv/compare/v0.4.1...v0.5.0
 [v0.4.0]: https://github.com/nandyalu/quiv/compare/v0.3.3...v0.4.0
 [v0.3.3]: https://github.com/nandyalu/quiv/compare/v0.3.2...v0.3.3

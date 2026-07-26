@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import inspect
 import pickle
+import weakref
 from collections.abc import Awaitable
 from typing import Any, Callable
 
 from .exceptions import ConfigurationError
+
+_INJECTABLE_KWARGS = frozenset({"_job_id", "_stop_event", "_progress_hook"})
 
 
 class ExecutionLayer:
@@ -38,31 +41,62 @@ class ExecutionLayer:
 
         self._run_async = run_async
         self._run_progress_callback = run_progress_callback
+        # WeakKeyDictionary so cached entries die with the handler — the
+        # registry drops handlers on remove_task/run-once completion, and a
+        # plain dict would leak them for the scheduler's lifetime.
+        self._injectable_cache: (
+            "weakref.WeakKeyDictionary[Callable[..., Any], frozenset[str]]"
+        ) = weakref.WeakKeyDictionary()
 
-    def _accepts_keyword_arg(
-        self, func: Callable[..., Any], keyword: str
-    ) -> bool:
-        """Check whether a callable accepts a specific keyword argument.
+    def _get_injectable_params(
+        self, func: Callable[..., Any]
+    ) -> frozenset[str]:
+        """Return which injectable kwargs this callable accepts (cached).
 
         Args:
             func (Callable[..., Any]): Target callable.
-            keyword (str): Keyword name to validate.
 
         Returns:
-            bool: ``True`` if the callable accepts the keyword directly \
-                or via ``**kwargs``.
+            frozenset[str]: Accepted injectable keyword names.
+        """
+
+        try:
+            cached = self._injectable_cache.get(func)
+        except TypeError:  # unhashable callable — compute uncached
+            cached = None
+        if cached is not None:
+            return cached
+        accepted = self._compute_injectable_params(func)
+        try:
+            self._injectable_cache[func] = accepted
+        except TypeError:  # unhashable or not weakref-able
+            pass
+        return accepted
+
+    def _compute_injectable_params(
+        self, func: Callable[..., Any]
+    ) -> frozenset[str]:
+        """Introspect which injectable kwargs a callable accepts.
+
+        Args:
+            func (Callable[..., Any]): Target callable.
+
+        Returns:
+            frozenset[str]: Accepted injectable keyword names; all of them
+                when the callable takes ``**kwargs``.
         """
 
         try:
             signature = inspect.signature(func)
         except (ValueError, TypeError):
-            return False
+            return frozenset()
+        accepted = set()
         for parameter in signature.parameters.values():
             if parameter.kind == parameter.VAR_KEYWORD:
-                return True
-            if parameter.name == keyword:
-                return True
-        return False
+                return _INJECTABLE_KWARGS  # **kwargs accepts everything
+            if parameter.name in _INJECTABLE_KWARGS:
+                accepted.add(parameter.name)
+        return frozenset(accepted)
 
     def prepare_invocation(
         self,
@@ -107,13 +141,15 @@ class ExecutionLayer:
                 f"Expected kwargs to be a dict, got {type(f_kwargs).__name__}"
             )
 
-        if self._accepts_keyword_arg(func, "_job_id"):
+        injectable = self._get_injectable_params(func)
+
+        if "_job_id" in injectable:
             f_kwargs["_job_id"] = job_id
 
-        if self._accepts_keyword_arg(func, "_stop_event"):
+        if "_stop_event" in injectable:
             f_kwargs["_stop_event"] = stop_event
 
-        if self._accepts_keyword_arg(func, "_progress_hook"):
+        if "_progress_hook" in injectable:
 
             def _progress_hook(*progress_args: Any, **progress_kwargs: Any) -> None:
                 self._run_progress_callback(

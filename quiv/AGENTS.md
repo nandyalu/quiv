@@ -133,7 +133,7 @@ app = FastAPI(lifespan=lifespan)
 5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `_progress_hook`/`run_on_main` to hop back.
 6. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
 7. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
-8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred to the next 1s tick (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
+8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
 9. **No log output** — quiv never configures logging. Configure the `"Quiv"` logger (or pass `logger=`) to see scheduler logs.
 
 ## Exceptions

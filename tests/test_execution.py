@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import inspect
 import pickle
 import threading
+import weakref
 from typing import cast
 from typing import Any
 
@@ -102,16 +105,16 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
     assert "_progress_hook" not in kwargs
 
 
-def test_accepts_keyword_arg_handles_uninspectable_callable() -> None:
+def test_compute_injectable_params_handles_uninspectable_callable() -> None:
     layer = ExecutionLayer(
         run_async=lambda _f, _a, _k: None,
         run_progress_callback=lambda *_a, **_k: None,
     )
     uninspectable = cast(Any, object())
-    assert layer._accepts_keyword_arg(uninspectable, "_stop_event") is False
+    assert layer._compute_injectable_params(uninspectable) == frozenset()
 
 
-def test_accepts_keyword_arg_returns_false_when_missing_keyword() -> None:
+def test_compute_injectable_params_empty_when_no_injectables() -> None:
     layer = ExecutionLayer(
         run_async=lambda _f, _a, _k: None,
         run_progress_callback=lambda *_a, **_k: None,
@@ -120,10 +123,10 @@ def test_accepts_keyword_arg_returns_false_when_missing_keyword() -> None:
     def handler(value: int) -> int:
         return value
 
-    assert layer._accepts_keyword_arg(handler, "_stop_event") is False
+    assert layer._compute_injectable_params(handler) == frozenset()
 
 
-def test_accepts_keyword_arg_true_for_var_keyword_parameter() -> None:
+def test_injectable_params_var_keyword() -> None:
     layer = ExecutionLayer(
         run_async=lambda _f, _a, _k: None,
         run_progress_callback=lambda *_a, **_k: None,
@@ -132,7 +135,109 @@ def test_accepts_keyword_arg_true_for_var_keyword_parameter() -> None:
     def handler(**_kwargs):
         return None
 
-    assert layer._accepts_keyword_arg(handler, "_stop_event") is True
+    assert layer._compute_injectable_params(handler) == frozenset(
+        {"_job_id", "_stop_event", "_progress_hook"}
+    )
+
+    args, kwargs = layer.prepare_invocation(
+        task_id="var-kw",
+        func=handler,
+        args_pickled=pickle.dumps(()),
+        kwargs_pickled=pickle.dumps({}),
+        stop_event=threading.Event(),
+        job_id="test-uuid-vkw",
+    )
+    assert kwargs["_job_id"] == "test-uuid-vkw"
+    assert "_stop_event" in kwargs
+    assert "_progress_hook" in kwargs
+
+
+def test_injectable_params_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    def handler(_stop_event=None):
+        return None
+
+    calls: dict[str, int] = {"count": 0}
+    real_signature = inspect.signature
+
+    def counting_signature(func: Any, **kwargs: Any) -> Any:
+        calls["count"] += 1
+        return real_signature(func, **kwargs)
+
+    monkeypatch.setattr("quiv.execution.inspect.signature", counting_signature)
+
+    for i in range(3):
+        layer.prepare_invocation(
+            task_id="cached",
+            func=handler,
+            args_pickled=pickle.dumps(()),
+            kwargs_pickled=pickle.dumps({}),
+            stop_event=threading.Event(),
+            job_id=f"test-uuid-{i}",
+        )
+
+    assert calls["count"] == 1
+
+
+def test_injectable_params_unhashable_callable() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    class UnhashableHandler:
+        __hash__ = None  # type: ignore[assignment]
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, UnhashableHandler)
+
+        def __call__(self, _stop_event=None) -> None:
+            return None
+
+    handler = UnhashableHandler()
+    for i in range(2):
+        args, kwargs = layer.prepare_invocation(
+            task_id="unhashable",
+            func=handler,
+            args_pickled=pickle.dumps(()),
+            kwargs_pickled=pickle.dumps({}),
+            stop_event=threading.Event(),
+            job_id=f"test-uuid-{i}",
+        )
+        assert "_stop_event" in kwargs
+    assert len(layer._injectable_cache) == 0
+
+
+def test_cache_does_not_leak_removed_handlers() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    def make_handler() -> Any:
+        def handler(_stop_event=None) -> None:
+            return None
+
+        return handler
+
+    handler = make_handler()
+    layer.prepare_invocation(
+        task_id="leak-check",
+        func=handler,
+        args_pickled=pickle.dumps(()),
+        kwargs_pickled=pickle.dumps({}),
+        stop_event=threading.Event(),
+        job_id="test-uuid-leak",
+    )
+    ref = weakref.ref(handler)
+    del handler
+    gc.collect()
+    assert ref() is None
+    assert len(layer._injectable_cache) == 0
 
 
 def test_prepare_invocation_raises_on_corrupt_args() -> None:

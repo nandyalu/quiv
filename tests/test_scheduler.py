@@ -467,26 +467,28 @@ def test_loop_handles_exceptions_and_retries_sleep(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
-    call_count = {"sleep": 0}
+    wait_timeouts: list[float | None] = []
+    real_wait = scheduler._wake_event.wait
 
     def fake_cleanup_history(*_args, **_kwargs):
         raise RuntimeError("boom")
 
-    def fake_sleep(seconds: float) -> None:
-        call_count["sleep"] += 1
-        if call_count["sleep"] == 1:
-            scheduler._initialized = True
-        if call_count["sleep"] >= 3:
+    def fake_wait(timeout: float | None = None) -> bool:
+        wait_timeouts.append(timeout)
+        if len(wait_timeouts) >= 3:
             scheduler._shutdown = True
+        return real_wait(timeout=0)  # never actually block the test
 
     try:
-        scheduler._initialized = False
         monkeypatch.setattr(
             scheduler.persistence, "cleanup_history", fake_cleanup_history
         )
-        monkeypatch.setattr("quiv.scheduler.time.sleep", fake_sleep)
+        monkeypatch.setattr(scheduler._wake_event, "wait", fake_wait)
         scheduler._loop()
-        assert call_count["sleep"] >= 3
+        assert len(wait_timeouts) >= 3
+        # Every iteration failed in cleanup, so every wait must be the
+        # 5-second error backoff (an interruptible wait, not time.sleep).
+        assert set(wait_timeouts) == {5}
     finally:
         monkeypatch.undo()
         scheduler.shutdown()
@@ -758,3 +760,153 @@ def test_concurrent_runs_prevented(
     finally:
         blocker.set()
         scheduler.shutdown()
+
+
+def test_add_task_wakes_sleeping_loop(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.start()
+        time.sleep(0.3)  # let the idle loop settle into its long sleep
+
+        t0 = scheduler._now_utc()
+        scheduler.add_task(
+            task_name="wake-me",
+            func=lambda: None,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+
+        completed = None
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            jobs = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+            if jobs:
+                completed = jobs[0]
+                break
+            time.sleep(0.02)
+        assert completed is not None, "job did not complete within 2s"
+        latency = (completed.started_at - t0).total_seconds()
+        assert latency < 0.5, f"dispatch latency {latency:.3f}s >= 0.5s"
+    finally:
+        scheduler.shutdown()
+
+
+def test_subsecond_interval_runs_multiple_times(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task(
+            task_name="fast",
+            func=lambda: None,
+            interval=0.2,
+            fixed_interval=False,
+            delay=0,
+        )
+        scheduler.start()
+
+        deadline = time.monotonic() + 5
+        completed_count = 0
+        while time.monotonic() < deadline:
+            completed_count = len(
+                scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+            )
+            if completed_count >= 3:
+                break
+            time.sleep(0.05)
+        assert completed_count >= 3, (
+            f"only {completed_count} sub-second runs completed"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_idle_loop_does_not_poll_db(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    calls: dict[str, int] = {"count": 0}
+    real_get_due_tasks = scheduler.persistence.get_due_tasks
+
+    def counting_get_due_tasks(now: Any) -> Any:
+        calls["count"] += 1
+        return real_get_due_tasks(now)
+
+    scheduler.persistence.get_due_tasks = counting_get_due_tasks  # type: ignore[method-assign]
+    try:
+        scheduler.start()
+        time.sleep(3)
+        assert calls["count"] <= 2, (
+            f"idle loop queried the DB {calls['count']} times in 3s"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_backpressure_deferred_task_dispatches_when_slot_frees(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(pool_size=1, main_loop=running_main_loop)
+    a_started = threading.Event()
+
+    def hold_slot() -> None:
+        a_started.set()
+        time.sleep(1)
+
+    try:
+        scheduler.add_task(
+            task_name="holder",
+            func=hold_slot,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+        scheduler.start()
+        assert a_started.wait(timeout=3)
+
+        scheduler.add_task(
+            task_name="deferred",
+            func=lambda: None,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+
+        deadline = time.monotonic() + 5
+        jobs_by_name: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            completed = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+            jobs_by_name = {job.task_name: job for job in completed}
+            if {"holder", "deferred"} <= jobs_by_name.keys():
+                break
+            time.sleep(0.05)
+        assert {"holder", "deferred"} <= jobs_by_name.keys(), (
+            f"jobs completed: {sorted(jobs_by_name)}"
+        )
+
+        holder_ended = jobs_by_name["holder"].ended_at
+        deferred_started = jobs_by_name["deferred"].started_at
+        assert holder_ended is not None
+        gap = (deferred_started - holder_ended).total_seconds()
+        assert gap < 0.5, f"deferred job started {gap:.3f}s after slot freed"
+    finally:
+        scheduler.shutdown()
+
+
+def test_shutdown_returns_promptly_when_loop_idle(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    scheduler.add_task(
+        task_name="far-future", func=lambda: None, interval=60, delay=3600
+    )
+    scheduler.start()
+    time.sleep(0.3)  # let the loop settle into its long sleep
+
+    begin = time.monotonic()
+    scheduler.shutdown()
+    elapsed = time.monotonic() - begin
+    assert elapsed < 1.0, f"shutdown took {elapsed:.3f}s while loop was idle"

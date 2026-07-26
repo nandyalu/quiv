@@ -31,7 +31,7 @@ sequenceDiagram
     App->>Q: start()
     Note over Q: Scheduler loop thread starts
 
-    loop Every 1 second
+    loop Until next due task (interruptible sleep)
         Q->>Q: Check backpressure
         Q->>DB: SELECT due active tasks
         DB-->>Q: Due tasks
@@ -69,15 +69,16 @@ sequenceDiagram
     - Tasks can be added before `start()`, after `start()`, or at any point while the scheduler is running.
 
 4. `start()` launches scheduler loop thread.
-5. Loop iteration (runs every 1 second):
-    - cleans old job history via SQL-level DELETE (every 60 seconds, not every tick)
+5. Loop iteration (sleeps until the next due task on an interruptible wait — no fixed polling tick):
+    - cleans old job history via SQL-level DELETE (every 60 seconds, via a wall-clock deadline)
     - checks backpressure: skips dispatch if all workers are busy
     - selects due active tasks (`next_run_at <= now`, `status == active`)
     - marks task as `running` — prevents concurrent runs of the same task
     - creates a `Job` row for each due task
-    - prepares invocation args (inject hooks if supported)
+    - prepares invocation args (inject hooks if supported; each handler's signature is introspected once and cached)
     - submits execution to threadpool
     - emits `JOB_STARTED` event
+    - sleeps until the earliest of: next due task, next cleanup deadline, or a 60-second safety ceiling; `add_task()`, `run_task_immediately()`, `resume_task()`, `remove_task()`, job completion, and `shutdown()` wake the loop early, so schedule changes take effect immediately and an idle scheduler issues no database queries. Sub-second intervals are supported.
 6. Job completion:
     - emits `JOB_COMPLETED`, `JOB_FAILED`, or `JOB_CANCELLED` event
     - updates job with terminal status (`completed`, `failed`, `cancelled`)

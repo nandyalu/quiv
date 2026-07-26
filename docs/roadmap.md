@@ -20,6 +20,8 @@ Small, self-contained bug fixes with no behavioral surprises for existing users.
 
 ## Phase 2 — Scheduler Core Efficiency (`v0.6.0`)
 
+**Status: ✅ complete** — implemented 2026-07-26, ships as `v0.6.0`.
+
 1. **Smart sleep loop** — replace the fixed 1-second polling tick with sleep-until-next-due on an interruptible wait, woken by `add_task()`, `run_task_immediately()`, `resume_task()`, and shutdown. This enables sub-second intervals, removes up to ~1 second of scheduling jitter, and reduces idle database polling to zero. History cleanup keeps its own 60-second cadence via the wait-deadline computation.
 2. **Signature cache** — cache each handler's accepted injectable kwargs (`_job_id`, `_stop_event`, `_progress_hook`) so `inspect.signature()` runs once per handler lifetime instead of three times per dispatch.
 

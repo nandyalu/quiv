@@ -60,7 +60,7 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 ### Concurrent execution and backpressure
 
 - Same task is never dispatched concurrently (status set to `running` blocks re-dispatch)
-- When the thread pool is full, due tasks are deferred to the next tick instead of queued unboundedly
+- When the thread pool is full, due tasks are deferred instead of queued unboundedly; they dispatch as soon as a job finishes and frees a slot
 - Deferred tasks execute once a worker becomes available
 - `_active_job_count` decrements correctly after job completion
 - Late-starting jobs (due to pool saturation) log a warning with the delay

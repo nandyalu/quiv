@@ -14,6 +14,10 @@ from .context import _current_quiv
 from .exceptions import ConfigurationError, TaskNotFoundError
 from .models import Event, JobStatus, TaskDB
 
+_CLEANUP_INTERVAL_SECONDS = 60.0
+_MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
+_MAX_SLEEP_SECONDS = 60.0  # ceiling: bounded staleness safety net
+
 
 class Quiv(QuivBase):
     """Public scheduler API and orchestration loop implementation."""
@@ -139,6 +143,7 @@ class Quiv(QuivBase):
         )
         task = self.get_task(task_id)
         self._emit_event(Event.TASK_ADDED, task)
+        self._wake_loop()
         return task_id
 
     def remove_task(self, task_id: str) -> None:
@@ -177,37 +182,64 @@ class Quiv(QuivBase):
             self.progress_callbacks.pop(task_id, None)
         self._logger.info(f"Task '{task_id}' removed")
         self._emit_event(Event.TASK_REMOVED, task)
+        self._wake_loop()
 
     def _loop(self) -> None:
-        """Continuously dispatch due tasks until shutdown is requested."""
+        """Continuously dispatch due tasks until shutdown is requested.
+
+        Sleeps until the next due task (or the next history-cleanup
+        deadline) on an interruptible wait; mutating API calls wake the
+        loop early via ``_wake_loop()``.
+        """
 
         while not getattr(self, "_initialized", False):
             time.sleep(0.1)
 
         self._logger.info("Scheduler loop starting")
-        cleanup_interval = 60
-        ticks_since_cleanup = cleanup_interval  # run on first iteration
+        next_cleanup = time.monotonic()  # run cleanup on first iteration
         while not self._shutdown:
             try:
-                if ticks_since_cleanup >= cleanup_interval:
+                if time.monotonic() >= next_cleanup:
                     self.persistence.cleanup_history(self.history_limit)
-                    ticks_since_cleanup = 0
+                    next_cleanup = (
+                        time.monotonic() + _CLEANUP_INTERVAL_SECONDS
+                    )
 
                 now = self._now_utc()
                 if self._active_job_count < self._pool_size:
-                    due_tasks = self.persistence.get_due_tasks(now)
-                    for task in due_tasks:
+                    for task in self.persistence.get_due_tasks(now):
                         if (
                             self._active_job_count >= self._pool_size
                         ):  # pragma: no cover
                             break
                         self._dispatch_due_task(task, now)
 
-                time.sleep(1)
-                ticks_since_cleanup += 1
+                # Compute the sleep last — dispatching above changes
+                # next_run_at (tasks go RUNNING and leave the due set).
+                sleep_for = self._compute_sleep_seconds(next_cleanup)
+                self._wake_event.wait(timeout=sleep_for)
+                self._wake_event.clear()
             except Exception as e:
                 self._logger.error(f"Error in scheduler loop: {e}")
-                time.sleep(5)
+                self._wake_event.wait(timeout=5)
+                self._wake_event.clear()
+
+    def _compute_sleep_seconds(self, next_cleanup: float) -> float:
+        """Seconds to sleep until the next scheduled wake-up.
+
+        Args:
+            next_cleanup (float): Monotonic deadline of the next history
+                cleanup.
+
+        Returns:
+            float: Bounded sleep duration in seconds.
+        """
+
+        candidates = [next_cleanup - time.monotonic()]
+        next_due = self.persistence.get_next_due_time()
+        if next_due is not None:
+            candidates.append((next_due - self._now_utc()).total_seconds())
+        return max(_MIN_SLEEP_SECONDS, min(min(candidates), _MAX_SLEEP_SECONDS))
 
     def _dispatch_due_task(self, task: TaskDB, now: datetime) -> None:
         """Create and dispatch execution for a due task.
@@ -355,6 +387,9 @@ class Quiv(QuivBase):
             self.persistence.finalize_task_after_job(task_id, start_time)
             with self._job_count_lock:
                 self._active_job_count -= 1
+            # A freed slot lets deferred-due tasks dispatch, and the task's
+            # freshly computed next_run_at may precede the loop's sleep.
+            self._wake_loop()
             if run_once:
                 with self._registries_lock:
                     self.registry.pop(task_id, None)

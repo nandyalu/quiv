@@ -152,6 +152,7 @@ class QuivBase(ABC):
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[str, threading.Event] = {}
         self._registries_lock = threading.Lock()
+        self._wake_event = threading.Event()
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
         self._event_listeners_lock = threading.Lock()
         self._active_job_count = 0
@@ -186,6 +187,11 @@ class QuivBase(ABC):
         """
 
         return value.astimezone(self._timezone)
+
+    def _wake_loop(self) -> None:
+        """Wake the scheduler loop early to re-evaluate due tasks."""
+
+        self._wake_event.set()
 
     @abstractmethod
     def _loop(self) -> None:
@@ -540,6 +546,7 @@ class QuivBase(ABC):
         self._logger.info(
             f"Task '{task_id}' queued for immediate run via scheduler loop."
         )
+        self._wake_loop()
         return count
 
     def start(self) -> None:
@@ -577,6 +584,9 @@ class QuivBase(ABC):
 
         _unregister_active(self)
         self._shutdown = True
+        # Wake the loop so it exits without waiting out its current sleep
+        # (otherwise thread.join below can wait up to the max sleep).
+        self._wake_loop()
 
         # Signal cancellation to RUNNING jobs only.
         for job in self.get_all_jobs(status=JobStatus.RUNNING):
@@ -666,6 +676,7 @@ class QuivBase(ABC):
         self.persistence.resume_task(task_id, delay=delay)
         task = Task.model_validate(self.persistence.get_task(task_id))
         self._emit_event(Event.TASK_RESUMED, task)
+        self._wake_loop()
 
     def cancel_job(self, job_id: str) -> bool:
         """Signal cancellation for a running job.

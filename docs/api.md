@@ -74,7 +74,7 @@ This is the primary way to register tasks. It handles handler registration, prog
 Validation:
 
 - `task_name` must not be empty
-- `interval > 0`
+- `interval > 0` — sub-second intervals (e.g. `interval=0.2`) are supported
 - `delay >= 0`
 
 !!! note "Duplicate task names are allowed"
@@ -374,7 +374,7 @@ Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display ti
 - For mostly I/O-bound workloads, set `pool_size` to 2–3x your expected max concurrent tasks.
 - If the warning appears frequently, increase `pool_size` or check whether tasks are taking longer than expected.
 
-When the pool is full, quiv defers due tasks to the next scheduler tick rather than queuing them unboundedly. If a job starts late because all workers were busy, a warning is logged with the delay.
+When the pool is full, quiv defers due tasks rather than queuing them unboundedly; a finishing job wakes the scheduler loop, so deferred tasks dispatch as soon as a slot frees. If a job starts late because all workers were busy, a warning is logged with the delay.
 
 ## Public methods summary
 

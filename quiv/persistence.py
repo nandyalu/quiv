@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlmodel import Session, select, col
@@ -272,6 +272,28 @@ class PersistenceLayer:
             statement = select(TaskDB).where(TaskDB.next_run_at <= now)
             statement = statement.where(TaskDB.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
+
+    def get_next_due_time(self) -> datetime | None:
+        """Return the earliest ``next_run_at`` among ACTIVE tasks.
+
+        Returns:
+            datetime | None: Earliest UTC-aware due time, or ``None`` when
+                no active task exists.
+        """
+
+        with self._lock, Session(self._engine) as session:
+            statement = (
+                select(TaskDB.next_run_at)
+                .where(TaskDB.status == TaskStatus.ACTIVE)
+                .order_by(col(TaskDB.next_run_at).asc())
+                .limit(1)
+            )
+            value = session.exec(statement).first()
+            # Selecting a bare column bypasses the model reconstructor, so
+            # SQLite returns a naive datetime; normalize like model loads do.
+            if value is not None and value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value
 
     def create_job(self, task_id: str, task_name: str) -> str:
         """Create a scheduled job record for a task.
