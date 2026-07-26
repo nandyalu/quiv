@@ -16,6 +16,8 @@ repository under
 
 ## Phase 1 — Correctness & Stability (`v0.5.0`)
 
+**Status: ✅ complete** — implemented 2026-07-26, ships as `v0.5.0`.
+
 Small, self-contained bug fixes with no behavioral surprises for existing
 users.
 

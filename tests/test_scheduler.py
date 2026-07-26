@@ -11,9 +11,10 @@ from quiv import Quiv, QuivConfig
 from quiv.exceptions import (
     ConfigurationError,
     HandlerNotRegisteredError,
+    TaskNotActiveError,
     TaskNotScheduledError,
 )
-from quiv.models import JobStatus
+from quiv.models import JobStatus, TaskStatus
 
 
 def test_quiv_config_conflict_raises(
@@ -115,6 +116,82 @@ def test_add_task_and_run_task_immediately_queues_task(
         task_id = scheduler.add_task(task_name="demo", func=lambda: None, interval=60)
         count = scheduler.run_task_immediately(task_id)
         assert count >= 1
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_rejects_running_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="busy", func=lambda: None, interval=60
+        )
+        scheduler.persistence.mark_task_running(task_id)
+        with pytest.raises(TaskNotActiveError):
+            scheduler.run_task_immediately(task_id)
+        assert (
+            scheduler.persistence.get_task(task_id).status
+            == TaskStatus.RUNNING
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_rejects_paused_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused", func=lambda: None, interval=60
+        )
+        scheduler.pause_task(task_id)
+        with pytest.raises(TaskNotActiveError):
+            scheduler.run_task_immediately(task_id)
+        assert (
+            scheduler.persistence.get_task(task_id).status
+            == TaskStatus.PAUSED
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_remove_task_racing_dispatch_does_not_stall_loop(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="race", func=lambda: None, interval=60
+        )
+        row = scheduler.persistence.get_task(task_id)
+        scheduler.registry.pop(task_id)
+        scheduler._dispatch_due_task(row, scheduler._now_utc())
+        assert scheduler.get_all_jobs() == []
+        assert (
+            scheduler.persistence.get_task(task_id).status
+            == TaskStatus.ACTIVE
+        )
+        assert scheduler._active_job_count == 0
+    finally:
+        scheduler.shutdown()
+
+
+def test_dispatch_skips_when_task_row_deleted(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="deleted-row", func=lambda: None, interval=60
+        )
+        row = scheduler.persistence.get_task(task_id)
+        scheduler.persistence.delete_task(task_id)
+        scheduler._dispatch_due_task(row, scheduler._now_utc())
+        assert scheduler.get_all_jobs() == []
+        assert scheduler._active_job_count == 0
     finally:
         scheduler.shutdown()
 

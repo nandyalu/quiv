@@ -121,7 +121,7 @@ Starts scheduler background loop thread. Safe to call multiple times.
 !!! success "`startup()` is an alias for `start()`"
     use whichever reads better in your code. `startup()` pairs naturally with `shutdown()`.
 
-### `shutdown() -> None` / `stop() -> None`
+### `shutdown(timeout: float | None = None) -> None` / `stop(...) -> None`
 
 - Stops scheduler loop and worker threads
 - Cancels running jobs via stop events
@@ -129,6 +129,13 @@ Starts scheduler background loop thread. Safe to call multiple times.
 - And removes temporary scheduler SQLite file.
 
 Always call this during app teardown.
+
+With `timeout=None` (default) shutdown waits indefinitely for in-flight jobs
+to finish. Pass a `timeout` (seconds) to bound the wait: jobs that do not
+exit within the deadline are abandoned on their worker threads with a
+warning — useful in FastAPI lifespan teardown where a hung handler must not
+block application shutdown. Abandoned jobs may log errors afterwards (e.g.
+writing to the already-deleted database).
 
 !!! success "`stop()` is an alias for `shutdown()`"
     use whichever reads better in your code. `stop()` pairs naturally with `start()`.
@@ -141,6 +148,8 @@ Raises:
 
 - `HandlerNotRegisteredError` if no registered handler exists for the id
 - `TaskNotScheduledError` if handler exists but no scheduled task row exists
+- `TaskNotActiveError` if the task is `running` (no concurrent second run)
+  or `paused` (use `resume_task()` instead)
 
 Returns number of task rows queued.
 
@@ -423,7 +432,7 @@ workers were busy, a warning is logged with the delay.
 - `run_on_main(func, *args, **kwargs)` — fire-and-forget dispatch onto the active Quiv's main loop
 - `add_task(...)` — schedule a task, returns `task_id`
 - `start()` / `startup()` — start the scheduler loop
-- `shutdown()` / `stop()` — stop scheduler and clean up resources
+- `shutdown(timeout=None)` / `stop(timeout=None)` — stop scheduler and clean up resources
 - `run_task_immediately(task_id)` — trigger a scheduled task now
 - `pause_task(task_id)` — pause a task
 - `resume_task(task_id)` — resume a paused task

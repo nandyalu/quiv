@@ -14,6 +14,7 @@ from .exceptions import (
     InvalidTimezoneError,
     JobNotFoundError,
     QuivError,
+    TaskNotActiveError,
     TaskNotFoundError,
     TaskNotScheduledError,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "HandlerRegistrationError",
     "HandlerNotRegisteredError",
     "TaskNotScheduledError",
+    "TaskNotActiveError",
     "TaskNotFoundError",
     "JobNotFoundError",
     "Event",
