@@ -88,12 +88,9 @@ design requirement). To touch main-loop resources from task code use
    loop thread and temp DB file.
 2. Passing both `config=QuivConfig(...)` and individual kwargs to `Quiv()` —
    raises `ConfigurationError`; pick one.
-3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that
-   never checks `_stop_event` runs to completion. Use `shutdown(timeout=...)`
-   to bound the wait; jobs exceeding it are abandoned with a warning.
+3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `_stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning.
 4. Blocking on main-loop resources inside a handler instead of using
    `_progress_hook` / `run_on_main`.
 5. `timezone=` only affects log formatting — scheduling and persistence are
    always UTC.
-6. Calling `run_task_immediately()` on a `running` or `paused` task raises
-   `TaskNotActiveError` — resume paused tasks with `resume_task()` instead.
+6. Calling `run_task_immediately()` on a `running` or `paused` task raises `TaskNotActiveError` — resume paused tasks with `resume_task()` instead.
