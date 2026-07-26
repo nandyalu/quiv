@@ -55,10 +55,7 @@ exists in the database, for example if it was deleted externally.
 
 ### `TaskNotActiveError`
 
-Raised when an operation requires an `active` task. Currently raised by
-`run_task_immediately()` when the task is `running` (a second concurrent run
-would break the no-overlap guarantee) or `paused` (un-pausing must be an
-explicit `resume_task()` call).
+Raised when an operation requires an `active` task. Currently raised by `run_task_immediately()` when the task is `running` (a second concurrent run would break the no-overlap guarantee) or `paused` (un-pausing must be an explicit `resume_task()` call).
 
 ### `TaskNotFoundError`
 

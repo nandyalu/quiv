@@ -5,28 +5,17 @@ Phase 1 of the [roadmap to v1.0.0](roadmap.md): three concurrency bug fixes.
 
 ### Behavior changes
 
-- `run_task_immediately()` now raises `TaskNotActiveError` when the task is
-  not `active`. Previously a `running` task could be dispatched a second time
-  concurrently (breaking the no-overlap guarantee) and a `paused` task was
-  silently un-paused. Resume paused tasks explicitly with `resume_task()`.
+- `run_task_immediately()` now raises `TaskNotActiveError` when the task is not `active`. Previously a `running` task could be dispatched a second time concurrently (breaking the no-overlap guarantee) and a `paused` task was silently un-paused. Resume paused tasks explicitly with `resume_task()`.
 
 ### What's new
 
-- `shutdown(timeout=...)` / `stop(timeout=...)` — optional bound on how long
-  shutdown waits for the scheduler thread and in-flight jobs. Jobs that do
-  not exit within the deadline are abandoned on their worker threads with a
-  warning, so a hung handler can no longer block application shutdown
-  forever. Default (`timeout=None`) keeps the previous wait-forever behavior.
+- `shutdown(timeout=...)` / `stop(timeout=...)` — optional bound on how long shutdown waits for the scheduler thread and in-flight jobs. Jobs that do not exit within the deadline are abandoned on their worker threads with a warning, so a hung handler can no longer block application shutdown forever. Default (`timeout=None`) keeps the previous wait-forever behavior.
 - New exception `TaskNotActiveError` (exported from `quiv`).
 
 ### Fixes
 
-- `remove_task()` racing the dispatch loop could raise a `KeyError` that
-  stalled the scheduler for 5 seconds; dispatch now skips removed tasks
-  gracefully, and the shared handler/callback/stop-event registries are
-  protected by a lock.
-- `shutdown()` now signals cancellation only to `running` jobs instead of
-  scanning the entire retained job history.
+- `remove_task()` racing the dispatch loop could raise a `KeyError` that stalled the scheduler for 5 seconds; dispatch now skips removed tasks gracefully, and the shared handler/callback/stop-event registries are protected by a lock.
+- `shutdown()` now signals cancellation only to `running` jobs instead of scanning the entire retained job history.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.4.1...v0.5.0
 
