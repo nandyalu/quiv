@@ -49,6 +49,8 @@ task_id = scheduler.add_task(
 scheduler.start()      # alias: startup(). Safe to call multiple times.
 scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs,
                        # disposes the engine, deletes the temp SQLite file.
+                       # shutdown(timeout=5.0) bounds the wait; jobs that do
+                       # not exit in time are abandoned with a warning.
 ```
 
 `add_task()` returns a `task_id` (UUID string) — **hold onto it**; it is the
@@ -168,5 +170,8 @@ app = FastAPI(lifespan=lifespan)
 
 All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`,
 `DatabaseInitializationError`, `HandlerRegistrationError`,
-`HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotFoundError`,
-`JobNotFoundError`.
+`HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotActiveError`,
+`TaskNotFoundError`, `JobNotFoundError`.
+
+`run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no
+concurrent second run) and `paused` tasks (use `resume_task()` instead).

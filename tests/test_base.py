@@ -17,7 +17,7 @@ from quiv.exceptions import (
     JobNotFoundError,
     TaskNotFoundError,
 )
-from quiv.models import JobStatus
+from quiv.models import Event, JobStatus
 
 
 def test_quiv_base_validates_pool_size_and_history(
@@ -454,3 +454,76 @@ def test_quiv_database_does_not_create_user_sqlmodel_tables(
         assert "user_widget" not in table_names
     finally:
         scheduler.shutdown()
+
+
+def test_shutdown_only_cancels_running_jobs(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    quick_done = threading.Event()
+    long_started = threading.Event()
+    cancel_seen = threading.Event()
+    cancelled_job_ids: list[str | None] = []
+
+    def quick() -> None:
+        quick_done.set()
+
+    def long_handler(_stop_event: threading.Event) -> None:
+        long_started.set()
+        _stop_event.wait(timeout=10)
+
+    def on_cancelled(event: Event, task: object, job: object) -> None:
+        cancelled_job_ids.append(getattr(job, "id", None))
+        cancel_seen.set()
+
+    scheduler.add_listener(Event.JOB_CANCELLED, on_cancelled)
+    scheduler.add_task(
+        task_name="quick", func=quick, interval=60, run_once=True
+    )
+    scheduler.start()
+    assert quick_done.wait(timeout=3)
+
+    # Wait for the quick job to be finalized as COMPLETED.
+    completed_ids: list[str | None] = []
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        completed = scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+        if completed:
+            completed_ids = [job.id for job in completed]
+            break
+        time.sleep(0.05)
+    assert completed_ids
+
+    scheduler.add_task(
+        task_name="long", func=long_handler, interval=60, run_once=True
+    )
+    assert long_started.wait(timeout=3)
+
+    scheduler.shutdown()
+    assert cancel_seen.wait(timeout=3)
+    assert cancelled_job_ids
+    assert completed_ids[0] not in cancelled_job_ids
+
+
+def test_shutdown_timeout_with_hung_handler(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+
+    def hung() -> None:
+        started.set()
+        time.sleep(10)
+
+    scheduler.add_task(
+        task_name="hung", func=hung, interval=60, run_once=True
+    )
+    scheduler.start()
+    assert started.wait(timeout=3)
+
+    begin = time.monotonic()
+    scheduler.shutdown(timeout=2.0)
+    elapsed = time.monotonic() - begin
+    assert elapsed < 5.5
+    # The hung job is abandoned; do not assert on its final status and do
+    # not reuse this scheduler instance.
