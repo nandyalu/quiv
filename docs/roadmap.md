@@ -14,7 +14,7 @@ decisions, test lists, pitfalls, and exit checklists — live in the
 repository under
 [`plans/`](https://github.com/nandyalu/quiv/tree/main/plans).
 
-## Phase 1 — Correctness & Stability (`v0.3.0`)
+## Phase 1 — Correctness & Stability (`v0.5.0`)
 
 Small, self-contained bug fixes with no behavioral surprises for existing
 users.
@@ -39,7 +39,7 @@ users.
 `run_task_immediately` during a running job, `remove_task` racing the
 dispatch loop, and shutdown with a deliberately hung handler.
 
-## Phase 2 — Scheduler Core Efficiency (`v0.4.0`)
+## Phase 2 — Scheduler Core Efficiency (`v0.6.0`)
 
 1. **Smart sleep loop** — replace the fixed 1-second polling tick with
    sleep-until-next-due on an interruptible wait, woken by `add_task()`,
@@ -55,7 +55,7 @@ dispatch loop, and shutdown with a deliberately hung handler.
 after a task's due time, correct loop wake-up on each mutating API call, and
 no database queries while the scheduler is idle.
 
-## Phase 3 — Concurrency: Database Locking Rework (`v0.5.0`)
+## Phase 3 — Concurrency: Database Locking Rework (`v0.7.0`)
 
 1. **Finer-grained locking** — the persistence layer currently serializes
    *all* database access behind a single lock, even though WAL mode already
@@ -70,7 +70,7 @@ before and after, verifying both correctness and the throughput gain.
 **Exit criteria:** stress tests pass at `pool_size=32`; the measured
 read-path contention improvement is documented in the release notes.
 
-## Phase 4 — Execution Features (`v0.6.0`)
+## Phase 4 — Execution Features (`v0.8.0`)
 
 These features all touch the `add_task()` signature and the job-finalize
 path, and timeout enforcement rides on Phase 2's deadline-aware loop — so
@@ -94,7 +94,7 @@ they ship together.
 retry sequencing and event emission are covered by tests; the docs gain a
 "Failure handling" page.
 
-## Phase 5 — Management & Observability API (`v0.7.0`)
+## Phase 5 — Management & Observability API (`v0.9.0`)
 
 1. **`update_task()`** — change a task's interval, args/kwargs,
    `fixed_interval`, timeout, retry, and jitter settings, or its progress

@@ -1,4 +1,4 @@
-# Phase 2 — Scheduler Core Efficiency (v0.4.0)
+# Phase 2 — Scheduler Core Efficiency (v0.6.0)
 
 Two changes: (1) replace the fixed 1-second polling tick with an
 interruptible sleep-until-next-due, (2) cache handler signature
@@ -310,6 +310,6 @@ cleanup is driven by a tick counter (`ticks_since_cleanup`).
       second" wording — the loop now sleeps until the next due task and
       wakes on schedule changes. `CLAUDE.md` has the same wording in
       *Architecture* → update it too.
-- [ ] `docs/release-notes.md` v0.4.0 section: sub-second intervals now
+- [ ] `docs/release-notes.md` v0.6.0 section: sub-second intervals now
       supported; idle scheduler no longer polls.
-- [ ] Version `0.4.0` in `pyproject.toml`; roadmap page updated.
+- [ ] Version `0.6.0` in `pyproject.toml`; roadmap page updated.

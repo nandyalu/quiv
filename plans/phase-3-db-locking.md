@@ -1,4 +1,4 @@
-# Phase 3 — Database Locking Rework (v0.5.0)
+# Phase 3 — Database Locking Rework (v0.7.0)
 
 Single change, own phase because it is the riskiest item on the roadmap:
 split `PersistenceLayer`'s one global lock into lock-free reads and a
@@ -111,7 +111,7 @@ finish in a few seconds each).
 Write a throwaway script under the session scratchpad (do not commit):
 time 5,000 mixed operations (70 % reads / 30 % writes) across 16 threads,
 before and after the change. Record both numbers in the release notes for
-v0.5.0. Expect reads to no longer serialize; total wall time should drop
+v0.7.0. Expect reads to no longer serialize; total wall time should drop
 substantially. If it does **not** improve, stop and investigate before
 merging — the likely cause is connection-pool contention, not the lock.
 
@@ -145,8 +145,8 @@ merging — the likely cause is connection-pool contention, not the lock.
 - [ ] All four concurrency tests present and green; full suite green.
 - [ ] `uv run mypy quiv` — zero errors.
 - [ ] Before/after throughput numbers captured in
-      `docs/release-notes.md` v0.5.0 section.
+      `docs/release-notes.md` v0.7.0 section.
 - [ ] `CLAUDE.md` persistence bullet updated ("Thread-safe via
       threading.Lock" → reads are lock-free under WAL; writes serialize
       on a write lock).
-- [ ] Version `0.5.0`; roadmap page updated.
+- [ ] Version `0.7.0`; roadmap page updated.

@@ -1,4 +1,4 @@
-# Phase 1 — Correctness & Stability (v0.3.0)
+# Phase 1 — Correctness & Stability (v0.5.0)
 
 Three independent bug fixes. Implement and test them one at a time, in the
 order below. No new features; the only public-API change is a new optional
@@ -301,8 +301,8 @@ Details:
       `docs/exceptions.md`.
 - [ ] `docs/api.md` updated: `shutdown(timeout=...)`,
       `run_task_immediately` raises documented.
-- [ ] `docs/release-notes.md` gains a `v0.3.0` section listing the three
+- [ ] `docs/release-notes.md` gains a `v0.5.0` section listing the three
       fixes (call out `TaskNotActiveError` as a behavior change:
       previously `run_task_immediately` silently un-paused tasks).
-- [ ] Version bumped to `0.3.0` in `pyproject.toml`.
+- [ ] Version bumped to `0.5.0` in `pyproject.toml`.
 - [ ] `docs/roadmap.md` Phase 1 marked complete.

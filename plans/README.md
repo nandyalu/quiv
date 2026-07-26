@@ -36,9 +36,9 @@ them), lists pitfalls, and ends with a verifiable exit checklist.
 
 | Phase | Version | Plan | Theme |
 |---|---|---|---|
-| 1 | v0.3.0 | [phase-1-correctness.md](phase-1-correctness.md) | Bug fixes: double-run guard, registry race, shutdown hardening |
-| 2 | v0.4.0 | [phase-2-scheduler-efficiency.md](phase-2-scheduler-efficiency.md) | Smart sleep loop, signature cache |
-| 3 | v0.5.0 | [phase-3-db-locking.md](phase-3-db-locking.md) | Finer-grained persistence locking |
-| 4 | v0.6.0 | [phase-4-execution-features.md](phase-4-execution-features.md) | Timeout, retry/backoff, jitter |
-| 5 | v0.7.0 | [phase-5-management-api.md](phase-5-management-api.md) | update_task, rich queries, stats() |
+| 1 | v0.5.0 | [phase-1-correctness.md](phase-1-correctness.md) | Bug fixes: double-run guard, registry race, shutdown hardening |
+| 2 | v0.6.0 | [phase-2-scheduler-efficiency.md](phase-2-scheduler-efficiency.md) | Smart sleep loop, signature cache |
+| 3 | v0.7.0 | [phase-3-db-locking.md](phase-3-db-locking.md) | Finer-grained persistence locking |
+| 4 | v0.8.0 | [phase-4-execution-features.md](phase-4-execution-features.md) | Timeout, retry/backoff, jitter |
+| 5 | v0.9.0 | [phase-5-management-api.md](phase-5-management-api.md) | update_task, rich queries, stats() |
 | 6 | v1.0.0 | [phase-6-release-hardening.md](phase-6-release-hardening.md) | API freeze, docs, benchmarks, soak |

@@ -1,6 +1,6 @@
 # Phase 6 — v1.0.0 Hardening & Release
 
-No features. This phase turns the 0.7.0 codebase into a 1.0.0 release:
+No features. This phase turns the 0.9.0 codebase into a 1.0.0 release:
 API freeze, docs completion, benchmarks, coverage, and a soak test.
 Work through the sections in order; each has its own verifiable output.
 
