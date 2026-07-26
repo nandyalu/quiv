@@ -11,7 +11,11 @@ from typing import Any, Callable
 from .base import QuivBase
 from .config import QuivConfig
 from .context import _current_quiv
-from .exceptions import ConfigurationError, TaskNotFoundError
+from .exceptions import (
+    ConfigurationError,
+    HandlerRegistrationError,
+    TaskNotFoundError,
+)
 from .models import Event, JobStatus, TaskDB
 
 _CLEANUP_INTERVAL_SECONDS = 60.0
@@ -83,6 +87,8 @@ class Quiv(QuivBase):
 
         Raises:
             ConfigurationError: If scheduling parameters are invalid.
+            HandlerRegistrationError: If ``func`` or ``progress_callback``
+                is not callable.
 
         Returns:
             str: Task id string (UUID).
@@ -95,6 +101,15 @@ class Quiv(QuivBase):
         if delay < 0:
             raise ConfigurationError(
                 "delay must be greater than or equal to 0"
+            )
+        # Validate registration inputs BEFORE persisting the task row —
+        # failing later in _register_handler/_register_progress_callback
+        # would leave an orphaned ACTIVE row that can never dispatch.
+        if not callable(func):
+            raise HandlerRegistrationError("func must be callable")
+        if progress_callback is not None and not callable(progress_callback):
+            raise HandlerRegistrationError(
+                "progress callback must be callable"
             )
 
         resolved_args = args if args is not None else ()
@@ -236,9 +251,18 @@ class Quiv(QuivBase):
         """
 
         candidates = [next_cleanup - time.monotonic()]
-        next_due = self.persistence.get_next_due_time()
-        if next_due is not None:
-            candidates.append((next_due - self._now_utc()).total_seconds())
+        with self._job_count_lock:
+            pool_full = self._active_job_count >= self._pool_size
+        # When the pool is saturated, skip the next-due candidate: an
+        # overdue task cannot dispatch anyway, and clamping its negative
+        # delta to the sleep floor would busy-poll the DB at ~100 Hz for
+        # the whole saturation window. A finishing job wakes the loop.
+        if not pool_full:
+            next_due = self.persistence.get_next_due_time()
+            if next_due is not None:
+                candidates.append(
+                    (next_due - self._now_utc()).total_seconds()
+                )
         return max(_MIN_SLEEP_SECONDS, min(min(candidates), _MAX_SLEEP_SECONDS))
 
     def _dispatch_due_task(self, task: TaskDB, now: datetime) -> None:

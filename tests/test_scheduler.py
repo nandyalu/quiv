@@ -11,6 +11,7 @@ from quiv import Quiv, QuivConfig
 from quiv.exceptions import (
     ConfigurationError,
     HandlerNotRegisteredError,
+    HandlerRegistrationError,
     TaskNotActiveError,
     TaskNotScheduledError,
 )
@@ -910,3 +911,77 @@ def test_shutdown_returns_promptly_when_loop_idle(
     scheduler.shutdown()
     elapsed = time.monotonic() - begin
     assert elapsed < 1.0, f"shutdown took {elapsed:.3f}s while loop was idle"
+
+
+def test_add_task_invalid_func_leaves_no_orphan_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(HandlerRegistrationError):
+            scheduler.add_task(
+                task_name="bad-func",
+                func=42,  # type: ignore[arg-type]
+                interval=5,
+            )
+        with pytest.raises(HandlerRegistrationError):
+            scheduler.add_task(
+                task_name="bad-callback",
+                func=lambda: None,
+                interval=5,
+                progress_callback="not callable",  # type: ignore[arg-type]
+            )
+        assert scheduler.get_all_tasks(include_run_once=True) == []
+        assert scheduler.registry == {}
+    finally:
+        scheduler.shutdown()
+
+
+def test_saturated_pool_does_not_busy_poll_db(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(pool_size=1, main_loop=running_main_loop)
+    holder_started = threading.Event()
+    release = threading.Event()
+    calls: dict[str, int] = {"count": 0}
+    real_get_next_due_time = scheduler.persistence.get_next_due_time
+
+    def counting_get_next_due_time() -> Any:
+        calls["count"] += 1
+        return real_get_next_due_time()
+
+    scheduler.persistence.get_next_due_time = counting_get_next_due_time  # type: ignore[method-assign]
+
+    def hold_slot() -> None:
+        holder_started.set()
+        release.wait(timeout=10)
+
+    try:
+        scheduler.add_task(
+            task_name="holder",
+            func=hold_slot,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+        scheduler.start()
+        assert holder_started.wait(timeout=3)
+
+        # An overdue task the saturated pool cannot dispatch.
+        scheduler.add_task(
+            task_name="overdue",
+            func=lambda: None,
+            interval=60,
+            run_once=True,
+            delay=0,
+        )
+        time.sleep(0.2)  # let the loop process the add_task wake
+        calls["count"] = 0
+        time.sleep(1)  # saturation window
+        assert calls["count"] <= 2, (
+            f"loop polled next-due {calls['count']} times in 1s while the"
+            " pool was saturated"
+        )
+    finally:
+        release.set()
+        scheduler.shutdown()
