@@ -1,8 +1,6 @@
 # FastAPI Example App
 
-A complete example showing quiv integrated into a multi-file FastAPI application
-with task scheduling, runtime control via API endpoints, and WebSocket progress
-updates.
+A complete example showing quiv integrated into a multi-file FastAPI application with task scheduling, runtime control via API endpoints, and WebSocket progress updates.
 
 ## Run
 
