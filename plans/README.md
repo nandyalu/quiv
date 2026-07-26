@@ -1,36 +1,20 @@
 # Implementation plans — Roadmap to v1.0.0
 
-One plan per roadmap phase (see [docs/roadmap.md](../docs/roadmap.md)).
-Each plan is self-contained: it names the exact files/functions to change,
-prescribes the design decisions (so the implementer does not have to make
-them), lists pitfalls, and ends with a verifiable exit checklist.
+One plan per roadmap phase (see [docs/roadmap.md](../docs/roadmap.md)). Each plan is self-contained: it names the exact files/functions to change, prescribes the design decisions (so the implementer does not have to make them), lists pitfalls, and ends with a verifiable exit checklist.
 
 ## Rules for implementers
 
-1. **Do the phases in order.** Later phases assume earlier machinery
-   (e.g. Phase 4 timeout enforcement rides on Phase 2's wake-event loop).
-2. **Read the whole plan before writing code.** The Pitfalls section
-   exists because each item was hit or foreseen during design review.
-3. **Do not expand scope.** Cron scheduling, durable persistence,
-   event-loop reuse, and lazy logging were explicitly rejected — see
-   "Out of scope" in [docs/roadmap.md](../docs/roadmap.md). In particular,
-   `run_async` must keep creating a **fresh event loop per invocation**
-   (isolation requirement).
+1. **Do the phases in order.** Later phases assume earlier machinery (e.g. Phase 4 timeout enforcement rides on Phase 2's wake-event loop).
+2. **Read the whole plan before writing code.** The Pitfalls section exists because each item was hit or foreseen during design review.
+3. **Do not expand scope.** Cron scheduling, durable persistence, event-loop reuse, and lazy logging were explicitly rejected — see "Out of scope" in [docs/roadmap.md](../docs/roadmap.md). In particular, `run_async` must keep creating a **fresh event loop per invocation** (isolation requirement).
 4. **Every phase must pass before it ships:**
    ```bash
    uv run pytest            # all tests green
    uv run mypy quiv         # strict mode, zero errors
    uv run zensical build --clean   # docs build clean (when docs change)
    ```
-5. **Tests follow the existing conventions**: most scheduler tests use the
-   `running_main_loop` fixture from `tests/conftest.py`; always call
-   `scheduler.shutdown()` in a `finally` block. Keep timing-sensitive tests
-   generous (CI is slow) — poll-with-deadline, never bare `time.sleep`
-   assertions.
-6. **When a phase is complete**: bump the version in `pyproject.toml`,
-   add a section to `docs/release-notes.md`, and update the phase status
-   in `docs/roadmap.md`. Update `CLAUDE.md` if the phase changed any
-   pattern documented there (events list, add_task params, etc.).
+5. **Tests follow the existing conventions**: most scheduler tests use the `running_main_loop` fixture from `tests/conftest.py`; always call `scheduler.shutdown()` in a `finally` block. Keep timing-sensitive tests generous (CI is slow) — poll-with-deadline, never bare `time.sleep` assertions.
+6. **When a phase is complete**: bump the version in `pyproject.toml`, add a section to `docs/release-notes.md`, and update the phase status in `docs/roadmap.md`. Update `CLAUDE.md` if the phase changed any pattern documented there (events list, add_task params, etc.).
 
 ## Phases
 

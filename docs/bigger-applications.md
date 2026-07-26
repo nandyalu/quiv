@@ -1,9 +1,6 @@
 # Bigger Applications
 
-In larger FastAPI projects, code is split across multiple packages and modules.
-This guide shows how to structure `quiv` in that setup — shared scheduler
-instance, tasks defined in separate files, API endpoints for runtime control,
-WebSocket progress updates, and graceful cancellation.
+In larger FastAPI projects, code is split across multiple packages and modules. This guide shows how to structure `quiv` in that setup — shared scheduler instance, tasks defined in separate files, API endpoints for runtime control, WebSocket progress updates, and graceful cancellation.
 
 ## Project structure
 
@@ -22,8 +19,7 @@ myapp/
 
 ## 1) Create the scheduler instance
 
-Define the `Quiv` instance in its own module so every other file can import it.
-Do **not** call `start()` here — that happens in the FastAPI lifespan.
+Define the `Quiv` instance in its own module so every other file can import it. Do **not** call `start()` here — that happens in the FastAPI lifespan.
 
 ```python
 # myapp/scheduler.py
@@ -36,8 +32,7 @@ scheduler = Quiv(
 )
 ```
 
-Since `Quiv` lazily resolves the asyncio event loop, this works at module level
-before FastAPI or uvicorn creates a loop.
+Since `Quiv` lazily resolves the asyncio event loop, this works at module level before FastAPI or uvicorn creates a loop.
 
 ## 2) Create a logging context (optional)
 
@@ -116,8 +111,7 @@ For full working code with logging context, stop events, and progress hooks, see
 
 ## 3) Define tasks in separate files
 
-Each task file imports the shared scheduler to register its task via
-`add_task()`. Tasks are plain functions — sync or async.
+Each task file imports the shared scheduler to register its task via `add_task()`. Tasks are plain functions — sync or async.
 
 ### Cleanup task (sync, with stop event)
 
@@ -198,9 +192,7 @@ def generate_report(
 
 ## 4) Register tasks and wire up the lifespan
 
-The main module registers tasks, starts the scheduler on startup, and shuts it
-down on teardown. This is also where you set up WebSocket-based progress
-callbacks.
+The main module registers tasks, starts the scheduler on startup, and shuts it down on teardown. This is also where you set up WebSocket-based progress callbacks.
 
 ```python
 # myapp/main.py
@@ -308,8 +300,7 @@ async def progress_websocket(websocket: WebSocket):
 
 ## 5) API endpoints for runtime control
 
-A separate router imports the same scheduler instance to expose task management
-endpoints.
+A separate router imports the same scheduler instance to expose task management endpoints.
 
 ```python
 # myapp/routes/tasks.py
@@ -381,16 +372,9 @@ def cancel_job(job_id: str):
 ```
 
 !!! tip "Task IDs in your API"
-    Since `add_task()` returns a `task_id` (UUID string), you can store it
-    in your application state or return it to clients. All runtime operations
-    (`pause_task`, `resume_task`, `run_task_immediately`, `remove_task`)
-    use `task_id` as the identifier.
+    Since `add_task()` returns a `task_id` (UUID string), you can store it in your application state or return it to clients. All runtime operations (`pause_task`, `resume_task`, `run_task_immediately`, `remove_task`) use `task_id` as the identifier.
 
-`Task` and `Job` are SQLModel objects, so FastAPI serializes them directly —
-no manual conversion needed. All datetime fields (`next_run_at`, `started_at`,
-`ended_at`) are guaranteed to be timezone-aware UTC, so the JSON output will
-include a `+00:00` suffix that browsers can parse and display in the user's
-local timezone.
+`Task` and `Job` are SQLModel objects, so FastAPI serializes them directly — no manual conversion needed. All datetime fields (`next_run_at`, `started_at`, `ended_at`) are guaranteed to be timezone-aware UTC, so the JSON output will include a `+00:00` suffix that browsers can parse and display in the user's local timezone.
 
 Register the router in your app:
 
@@ -403,36 +387,19 @@ app.include_router(tasks_router)
 
 ## Run the full example
 
-A complete runnable version of this app is in the
-[`examples/fastapi_app`](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app)
-directory. From the repository root:
+A complete runnable version of this app is in the [`examples/fastapi_app`](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) directory. From the repository root:
 
 ```bash
 uv run uvicorn examples.fastapi_app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for
-interactive API docs, or connect to `ws://127.0.0.1:8000/ws/progress` for live
-progress updates.
+Then open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for interactive API docs, or connect to `ws://127.0.0.1:8000/ws/progress` for live progress updates.
 
 ## Key takeaways
 
-- **Single instance, shared everywhere.** Create `Quiv` in one module and
-  import it wherever needed. This avoids multiple schedulers and duplicate DB
-  files.
-- **Module-level init is safe.** `Quiv()` does not require a running asyncio
-  loop at creation time. The event loop is resolved lazily when progress
-  callbacks fire.
-- **Lifespan owns the lifecycle.** Call `start()` and `shutdown()` in the
-  FastAPI lifespan so the scheduler is tied to the app process.
-- **Tasks are plain functions.** Define them anywhere. They only need
-  `_stop_event` and `_progress_hook` in their signature if they want
-  cancellation or progress support. See [Cancellation](cancellation.md) and
-  [Progress Callbacks](progress-callbacks.md) for detailed guides.
-- **Progress goes through WebSocket.** Async progress callbacks run on
-  FastAPI's event loop, so they can broadcast to WebSocket clients directly.
-  See [Progress Callbacks](progress-callbacks.md) for dispatch details.
-- **Event listeners for observability.** Use `add_listener()` to react to
-  task and job lifecycle events. Async listeners run on the main loop, so
-  they can broadcast to WebSocket clients alongside progress callbacks.
-  See [Event Listeners](event-listeners.md) for the full event list.
+- **Single instance, shared everywhere.** Create `Quiv` in one module and import it wherever needed. This avoids multiple schedulers and duplicate DB files.
+- **Module-level init is safe.** `Quiv()` does not require a running asyncio loop at creation time. The event loop is resolved lazily when progress callbacks fire.
+- **Lifespan owns the lifecycle.** Call `start()` and `shutdown()` in the FastAPI lifespan so the scheduler is tied to the app process.
+- **Tasks are plain functions.** Define them anywhere. They only need `_stop_event` and `_progress_hook` in their signature if they want cancellation or progress support. See [Cancellation](cancellation.md) and [Progress Callbacks](progress-callbacks.md) for detailed guides.
+- **Progress goes through WebSocket.** Async progress callbacks run on FastAPI's event loop, so they can broadcast to WebSocket clients directly. See [Progress Callbacks](progress-callbacks.md) for dispatch details.
+- **Event listeners for observability.** Use `add_listener()` to react to task and job lifecycle events. Async listeners run on the main loop, so they can broadcast to WebSocket clients alongside progress callbacks. See [Event Listeners](event-listeners.md) for the full event list.

@@ -27,17 +27,13 @@ Parameters:
 
     !!! note "Timezone is for display only"
 
-        `timezone` is only used to format datetime values in quiv's log output.
-        All internal datetime handling (scheduling, persistence, job lifecycle) uses
-        UTC regardless of this setting.
+        `timezone` is only used to format datetime values in quiv's log output. All internal datetime handling (scheduling, persistence, job lifecycle) uses UTC regardless of this setting.
 
 - `logger`: optional custom logger or `LoggerAdapter` instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
 
     !!! note "Logger scope"
 
-        The `logger` is only used for quiv's own internal logs (scheduler loop events,
-        job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed
-        through this logger — use your own loggers inside your task handlers as usual.
+        The `logger` is only used for quiv's own internal logs (scheduler loop events, job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed through this logger — use your own loggers inside your task handlers as usual.
 
 - `main_loop`: optional asyncio event loop for progress callbacks and event listeners. 
     
@@ -65,8 +61,7 @@ add_task(
 
 Adds a scheduled task and returns its task ID (UUID string)[^1].
 
-[^1]: 
-    Hold onto the returned `task_id` — it is the key for all subsequent operations:
+[^1]: Hold onto the returned `task_id` — it is the key for all subsequent operations:
 
     - `remove_task()`
     - `pause_task()`
@@ -74,8 +69,7 @@ Adds a scheduled task and returns its task ID (UUID string)[^1].
     - `run_task_immediately()`
     - `get_task()`.
 
-This is the primary way to register tasks. It handles handler registration,
-progress callback registration, and task persistence in one call.
+This is the primary way to register tasks. It handles handler registration, progress callback registration, and task persistence in one call.
 
 Validation:
 
@@ -84,9 +78,7 @@ Validation:
 - `delay >= 0`
 
 !!! note "Duplicate task names are allowed"
-    Multiple tasks can share the same `task_name`. Each call to `add_task()`
-    returns a unique `task_id` (UUID) which is the identifier used for all
-    task operations. `task_name` is a display label, not a unique key.
+    Multiple tasks can share the same `task_name`. Each call to `add_task()` returns a unique `task_id` (UUID) which is the identifier used for all task operations. `task_name` is a display label, not a unique key.
 
 Behavior:
 
@@ -97,22 +89,13 @@ Behavior:
         The temporary database is trusted internal state and should not be exposed to untrusted input. Doing so might open to attackers injecting untrusted args/kwargs that gets passed to Tasks which could compromise the application.
 
 - if `run_once=True`, task is executed once and then removed from storage
-- if `progress_callback` is provided, it runs on the main loop when available,
-  or directly on the worker thread otherwise
+- if `progress_callback` is provided, it runs on the main loop when available, or directly on the worker thread otherwise
 
     !!! info "`fixed_interval` scheduling modes"
 
-        **`fixed_interval=True`** (default) — Next run is scheduled at fixed
-        intervals from the job **start time**. A task with `interval=3600`
-        runs every 3600 seconds relative to that start-time anchor (for
-        example, if a run starts at 12:00:10, subsequent targets are
-        13:00:10, 14:00:10, etc.), regardless of how long the task takes.
-        If a run exceeds the interval, missed intervals are skipped and the
-        next run lands on the next scheduled time in that cadence.
+        **`fixed_interval=True`** (default) — Next run is scheduled at fixed intervals from the job **start time**. A task with `interval=3600` runs every 3600 seconds relative to that start-time anchor (for example, if a run starts at 12:00:10, subsequent targets are 13:00:10, 14:00:10, etc.), regardless of how long the task takes. If a run exceeds the interval, missed intervals are skipped and the next run lands on the next scheduled time in that cadence.
 
-        **`fixed_interval=False`** — Next run is scheduled `interval` seconds
-        after job **completion**. A task with `interval=3600` that takes 10
-        minutes to run will have 70-minute gaps between start times.
+        **`fixed_interval=False`** — Next run is scheduled `interval` seconds after job **completion**. A task with `interval=3600` that takes 10 minutes to run will have 70-minute gaps between start times.
 
 ### `start() -> None` / `startup() -> None`
 
@@ -202,13 +185,11 @@ Returns persisted task rows as [`Task`](#task) objects.
 
 ### `get_all_jobs(status: str | None = None) -> list[Job]`
 
-Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`,
-`"running"`).
+Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`, `"running"`).
 
 ### `remove_task(task_id: str) -> None`
 
-Removes a scheduled task, its registered handler, and progress callback. If the
-task has a running job, its stop event is set to signal cancellation.
+Removes a scheduled task, its registered handler, and progress callback. If the task has a running job, its stop event is set to signal cancellation.
 
 Raises:
 
@@ -218,30 +199,24 @@ Any previously running job will finish on its own and clean up normally.
 
 ### `add_listener(event: Event, callback: Callable[..., Any]) -> None`
 
-Register an event listener for a scheduler lifecycle event. Multiple listeners
-can be registered for the same event. Both sync and async callbacks are
-supported.
+Register an event listener for a scheduler lifecycle event. Multiple listeners can be registered for the same event. Both sync and async callbacks are supported.
 
 The callback signature depends on the event group:
 
 - **`TASK_*` events**: `callback(event: Event, task: Task)`
 - **`JOB_*` events**: `callback(event: Event, task: Task, job: Job)`
 
-Listeners receive typed `Task` and `Job` model objects with full IDE
-autocomplete — no dict key lookups needed.
+Listeners receive typed `Task` and `Job` model objects with full IDE autocomplete — no dict key lookups needed.
 
 Raises:
 
-- `ConfigurationError` if `event` is not an `Event` enum member or `callback`
-  is not callable.
+- `ConfigurationError` if `event` is not an `Event` enum member or `callback` is not callable.
 
-See [Event Listeners](event-listeners.md) for the full event list and
-dispatch details.
+See [Event Listeners](event-listeners.md) for the full event list and dispatch details.
 
 ### `remove_listener(event: Event, callback: Callable[..., Any]) -> None`
 
-Remove a previously registered event listener. If the callback is not found,
-the call is silently ignored.
+Remove a previously registered event listener. If the callback is not found, the call is silently ignored.
 
 ## `run_on_main`
 
@@ -278,18 +253,15 @@ When a task is dispatched, `quiv` inspects handler signatures:
 - injects `_stop_event` (`threading.Event`) only if accepted
 - injects `_progress_hook` (callable) only if accepted
 
-If your handler does not define those parameters (and does not use `**kwargs`),
-no injection is performed.
+If your handler does not define those parameters (and does not use `**kwargs`), no injection is performed.
 
-Async handlers run in thread-local event loops created per invocation. They do
-not share the main application event loop.
+Async handlers run in thread-local event loops created per invocation. They do not share the main application event loop.
 
 ## Models
 
 ### `Task`
 
-Public API model returned by `get_task()` and `get_all_tasks()`.
-Use directly in FastAPI endpoints — no manual conversion needed.
+Public API model returned by `get_task()` and `get_all_tasks()`. Use directly in FastAPI endpoints — no manual conversion needed.
 
 ```python
 # Methods return Task directly
@@ -322,9 +294,7 @@ Key fields:
     - This is the golden-standard for Browsers as they can easily parse it and display in user's timezone.
 
 !!! info "Internal TaskDB model"
-    Internally, quiv stores `args` and `kwargs` as pickle-encoded bytes in the
-    `TaskDB` model for flexibility. The public API automatically converts to
-    `Task` with unpickled values and correct types for JSON/OpenAPI.
+    Internally, quiv stores `args` and `kwargs` as pickle-encoded bytes in the `TaskDB` model for flexibility. The public API automatically converts to `Task` with unpickled values and correct types for JSON/OpenAPI.
 
 ### `Job`
 
@@ -386,39 +356,25 @@ QuivConfig(
 )
 ```
 
-Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display
-timezone parameter.
+Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display timezone parameter.
 
 ## Choosing a pool size
 
-`pool_size` controls the maximum number of tasks that can run concurrently.
-It is **not** tied to CPU cores — quiv uses threads, not processes, so the
-deciding factor is your workload, not hardware.
+`pool_size` controls the maximum number of tasks that can run concurrently. It is **not** tied to CPU cores — quiv uses threads, not processes, so the deciding factor is your workload, not hardware.
 
 **What to consider:**
 
-- **How many tasks might overlap?** If you have 5 recurring tasks and at most
-  3 could run at the same time, `pool_size=4` is sufficient.
-- **Are tasks I/O-bound or CPU-bound?** I/O-bound tasks (API calls, database
-  queries, file downloads) spend most of their time waiting, so many threads
-  work fine. CPU-bound tasks contend for Python's GIL — more threads won't
-  help and can hurt. For CPU-heavy work, offload to a process pool from within
-  the handler rather than increasing `pool_size`.
-- **Do tasks hold external resources?** Database connections, API rate limits,
-  and file handles create practical caps regardless of thread count.
+- **How many tasks might overlap?** If you have 5 recurring tasks and at most 3 could run at the same time, `pool_size=4` is sufficient.
+- **Are tasks I/O-bound or CPU-bound?** I/O-bound tasks (API calls, database queries, file downloads) spend most of their time waiting, so many threads work fine. CPU-bound tasks contend for Python's GIL — more threads won't help and can hurt. For CPU-heavy work, offload to a process pool from within the handler rather than increasing `pool_size`.
+- **Do tasks hold external resources?** Database connections, API rate limits, and file handles create practical caps regardless of thread count.
 
 **Rules of thumb:**
 
-- Start with the default (`10`) and only adjust if you see the
-  `threadpool was busy` warning in your logs.
-- For mostly I/O-bound workloads, set `pool_size` to 2–3x your expected max
-  concurrent tasks.
-- If the warning appears frequently, increase `pool_size` or check whether
-  tasks are taking longer than expected.
+- Start with the default (`10`) and only adjust if you see the `threadpool was busy` warning in your logs.
+- For mostly I/O-bound workloads, set `pool_size` to 2–3x your expected max concurrent tasks.
+- If the warning appears frequently, increase `pool_size` or check whether tasks are taking longer than expected.
 
-When the pool is full, quiv defers due tasks to the next scheduler tick
-rather than queuing them unboundedly. If a job starts late because all
-workers were busy, a warning is logged with the delay.
+When the pool is full, quiv defers due tasks to the next scheduler tick rather than queuing them unboundedly. If a job starts late because all workers were busy, a warning is logged with the delay.
 
 ## Public methods summary
 

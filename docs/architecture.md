@@ -2,12 +2,10 @@
 
 `quiv` is split into focused layers:
 
-- `base` layer (`quiv/base.py`): runtime lifecycle, DB bootstrap,
-  threadpool, callback plumbing, cancellation controls
+- `base` layer (`quiv/base.py`): runtime lifecycle, DB bootstrap, threadpool, callback plumbing, cancellation controls
 - `scheduler` layer (`quiv/scheduler.py`): public API and scheduling loop
 - `persistence` layer (`quiv/persistence.py`): task/job storage operations
-- `execution` layer (`quiv/execution.py`): invocation preparation and
-  sync/async dispatch
+- `execution` layer (`quiv/execution.py`): invocation preparation and sync/async dispatch
 - `models` layer (`quiv/models.py`): SQLModel entities and status constants
 
 ## Runtime flow
@@ -89,21 +87,17 @@ sequenceDiagram
 
 ## Cancellation model
 
-- each job receives its own `threading.Event` stop signal if handler accepts
-  `_stop_event`
+- each job receives its own `threading.Event` stop signal if handler accepts `_stop_event`
 - `cancel_job(job_id)` sets that event when the job is currently tracked
 - cancellation is cooperative: handler code must check the event
 
-For writing cancellable handlers, shutdown behavior, and status determination
-logic, see [Cancellation](cancellation.md).
+For writing cancellable handlers, shutdown behavior, and status determination logic, see [Cancellation](cancellation.md).
 
 ## Progress callback model
 
 - handlers can receive `_progress_hook` when accepted in signature
-- calling `_progress_hook(...)` dispatches configured progress callback via
-  `_resolve_main_loop()`
-- the main event loop is lazily resolved on first dispatch — `Quiv()` can be
-  instantiated at module level before any asyncio loop exists
+- calling `_progress_hook(...)` dispatches configured progress callback via `_resolve_main_loop()`
+- the main event loop is lazily resolved on first dispatch — `Quiv()` can be instantiated at module level before any asyncio loop exists
 - with an event loop available:
     - async callbacks are dispatched via `run_coroutine_threadsafe`
     - sync callbacks are dispatched via `call_soon_threadsafe`
@@ -111,8 +105,7 @@ logic, see [Cancellation](cancellation.md).
     - sync callbacks run directly on the worker thread
     - async callbacks run in a temporary event loop on the worker thread
 
-For dispatch flow details, async/sync examples, and error handling, see
-[Progress Callbacks](progress-callbacks.md).
+For dispatch flow details, async/sync examples, and error handling, see [Progress Callbacks](progress-callbacks.md).
 
 ## Event listener model
 
@@ -121,32 +114,23 @@ For dispatch flow details, async/sync examples, and error handling, see
 - dispatch uses the same mechanism as progress callbacks:
     - async listeners dispatched via `run_coroutine_threadsafe` on the main loop
     - sync listeners dispatched via `call_soon_threadsafe` on the main loop
-    - without a loop: async listeners run in a temporary event loop,
-      sync listeners run directly
-- listener exceptions are logged and swallowed — they never block the
-  scheduler or fail a job
-- task events (`TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`)
-  fire on the calling thread (whoever called `add_task()`, etc.)
-- job events (`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`)
-  fire from the worker thread executing the job
+    - without a loop: async listeners run in a temporary event loop, sync listeners run directly
+- listener exceptions are logged and swallowed — they never block the scheduler or fail a job
+- task events (`TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`) fire on the calling thread (whoever called `add_task()`, etc.)
+- job events (`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`) fire from the worker thread executing the job
 
-For event types, data payloads, and examples, see
-[Event Listeners](event-listeners.md).
+For event types, data payloads, and examples, see [Event Listeners](event-listeners.md).
 
 ## Async execution model
 
-Async task handlers do not run on the main application event loop. Instead,
-each async invocation creates a dedicated thread-local event loop, runs the
-coroutine to completion, and tears down the loop. This ensures async handlers
-do not interfere with each other or with the main loop.
+Async task handlers do not run on the main application event loop. Instead, each async invocation creates a dedicated thread-local event loop, runs the coroutine to completion, and tears down the loop. This ensures async handlers do not interfere with each other or with the main loop.
 
 ## Persistence model
 
 - tasks and jobs are persisted in internal SQLite tables:
     - `quiv_task`
     - `quiv_job`
-- `quiv` uses a private SQLAlchemy `registry` to keep its metadata separate
-  from user-defined SQLModel models
+- `quiv` uses a private SQLAlchemy `registry` to keep its metadata separate from user-defined SQLModel models
 - datetimes are normalized to UTC-aware values on model load
 - history cleanup removes old finished jobs by retention cutoff
 
@@ -154,11 +138,9 @@ do not interfere with each other or with the main loop.
 
 - the scheduler loop runs in a single daemon thread
 - task handlers execute in the threadpool (`ThreadPoolExecutor`)
-- each handler invocation gets its own stop event and kwargs; there is no
-  shared mutable state between concurrent handler runs
+- each handler invocation gets its own stop event and kwargs; there is no shared mutable state between concurrent handler runs
 - persistence operations use short-lived `Session` scopes
-- progress callbacks are dispatched thread-safely onto the main asyncio loop
-  when available, or run directly on the worker thread when no loop exists
+- progress callbacks are dispatched thread-safely onto the main asyncio loop when available, or run directly on the worker thread when no loop exists
 
 ## Lifecycle and teardown
 

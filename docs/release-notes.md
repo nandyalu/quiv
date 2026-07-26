@@ -27,22 +27,18 @@ Phase 1 of the [roadmap to v1.0.0](roadmap.md): three concurrency bug fixes.
 
 ### Breaking changes
 
-- Default interval scheduling changed to fixed intervals: `fixed_interval` defaults to `True`, meaning next run is now scheduled from the
-job **start time** rather than completion time. Set `fixed_interval=False` to
-restore the previous wait-between-runs behavior.
+- Default interval scheduling changed to fixed intervals: `fixed_interval` defaults to `True`, meaning next run is now scheduled from the job **start time** rather than completion time. Set `fixed_interval=False` to restore the previous wait-between-runs behavior.
 
 ### What's new
 
 - `fixed_interval` per-task scheduling mode: `add_task()` accepts a new `fixed_interval` parameter:
 
-    - **`True`** (default) — next run at fixed intervals from job start time.
-      If a run exceeds the interval, missed intervals are skipped.
+    - **`True`** (default) — next run at fixed intervals from job start time. If a run exceeds the interval, missed intervals are skipped.
     - **`False`** — next run `interval` seconds after job completion (old behavior).
 
 ### Other changes
 
-- `finalize_task_after_job()` accepts `job_started_at` for fixed-interval
-  scheduling.
+- `finalize_task_after_job()` accepts `job_started_at` for fixed-interval scheduling.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.3.2...v0.3.3
 
@@ -54,8 +50,7 @@ restore the previous wait-between-runs behavior.
 
 ### Breaking changes
 
-- Task operations now use `task_id` instead of `task_name`:
-    All public methods that previously accepted a `task_name` string now accept the `task_id` (UUID string) returned by `add_task()`. This removes the uniqueness constraint on task names — multiple tasks can now share the same `task_name`.
+- Task operations now use `task_id` instead of `task_name`: All public methods that previously accepted a `task_name` string now accept the `task_id` (UUID string) returned by `add_task()`. This removes the uniqueness constraint on task names — multiple tasks can now share the same `task_name`.
 
     **Affected methods:**
     - `remove_task(task_id)` — previously `remove_task(task_name)`

@@ -168,17 +168,9 @@ Trailarr uses a `ContextVar` flavor of this in production so downstream modules 
 
 ## Important caveats
 
-- **Temporary database**: each `Quiv` instance creates a temporary SQLite file
-  that is deleted on `shutdown()`. Task/job state does not persist across
-  restarts.
-- **Single-process**: the scheduler runs in-process. It is not designed for
-  distributed or multi-process deployments.
-- **Picklable args**: `args` and `kwargs` passed to `add_task()` are
-  pickle-serialized for persistence. Most Python objects are supported,
-  but lambdas and inner functions are not picklable. The temporary SQLite
-  database is trusted internal state — only your application code writes to
-  it, and it is deleted on `shutdown()`. Do not expose the database file to
-  untrusted input.
+- **Temporary database**: each `Quiv` instance creates a temporary SQLite file that is deleted on `shutdown()`. Task/job state does not persist across restarts.
+- **Single-process**: the scheduler runs in-process. It is not designed for distributed or multi-process deployments.
+- **Picklable args**: `args` and `kwargs` passed to `add_task()` are pickle-serialized for persistence. Most Python objects are supported, but lambdas and inner functions are not picklable. The temporary SQLite database is trusted internal state — only your application code writes to it, and it is deleted on `shutdown()`. Do not expose the database file to untrusted input.
 
 
 ## Next pages
