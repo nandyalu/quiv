@@ -161,8 +161,12 @@ class Quiv(QuivBase):
         # Cancel any running job for this task before deleting
         running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
         for job in running_jobs:
-            if job.task_id == task_id and job.id in self.stop_events:
-                self.stop_events[job.id].set()
+            if job.task_id != task_id or job.id is None:
+                continue
+            with self._registries_lock:
+                stop_event = self.stop_events.get(job.id)
+            if stop_event is not None:
+                stop_event.set()
                 self._logger.info(
                     f"Cancelled running job {job.id} for task '{task_id}'"
                 )

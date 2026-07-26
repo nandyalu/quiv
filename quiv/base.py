@@ -597,17 +597,21 @@ class QuivBase(ABC):
             # Wait up to `timeout` for in-flight jobs to drain
             # cooperatively.
             deadline = time.monotonic() + timeout
-            while (
-                self._active_job_count > 0 and time.monotonic() < deadline
-            ):
+            while time.monotonic() < deadline:
+                with self._job_count_lock:
+                    remaining = self._active_job_count
+                if remaining <= 0:
+                    break
                 time.sleep(0.05)
-            if self._active_job_count > 0:
+            with self._job_count_lock:
+                remaining = self._active_job_count
+            if remaining > 0:
                 undrained = [
                     j.id
                     for j in self.get_all_jobs(status=JobStatus.RUNNING)
                 ]
                 self._logger.warning(
-                    f"{self._active_job_count} job(s) still running after"
+                    f"{remaining} job(s) still running after"
                     f" {timeout}s shutdown timeout: {undrained}."
                     " Abandoning them (threads are daemonic)."
                 )
@@ -674,8 +678,10 @@ class QuivBase(ABC):
                 otherwise ``False``.
         """
 
-        if job_id in self.stop_events:
-            self.stop_events[job_id].set()
+        with self._registries_lock:
+            stop_event = self.stop_events.get(job_id)
+        if stop_event is not None:
+            stop_event.set()
             return True
         return False
 
