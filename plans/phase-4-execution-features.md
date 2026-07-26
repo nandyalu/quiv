@@ -1,4 +1,4 @@
-# Phase 4 — Execution Features (v0.6.0)
+# Phase 4 — Execution Features (v0.8.0)
 
 Three features shipping together because they all touch the `add_task()`
 signature, the `TaskDB`/`Task` models, and the job-finalize path: per-task
@@ -340,4 +340,4 @@ Import `random` at the top of `persistence.py`.
 - [ ] `CLAUDE.md`: events list gains `JOB_RETRYING`; task-lifecycle
       bullet mentions retry/jitter; add a "timeouts are cooperative
       cancellations" line.
-- [ ] Version `0.6.0`; roadmap page updated.
+- [ ] Version `0.8.0`; roadmap page updated.

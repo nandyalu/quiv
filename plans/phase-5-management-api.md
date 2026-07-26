@@ -1,4 +1,4 @@
-# Phase 5 — Management & Observability API (v0.7.0)
+# Phase 5 — Management & Observability API (v0.9.0)
 
 Three additive features: `update_task()`, rich job/task queries, and
 `stats()`. Requires Phases 1–4 merged (update_task mutates fields
@@ -274,4 +274,4 @@ all three").
       bullet mentions `update_task`.
 - [ ] Example app runs: `uv run uvicorn examples.fastapi_app.main:app`
       (or per the example's README) and the three new endpoints respond.
-- [ ] Version `0.7.0`; roadmap page updated.
+- [ ] Version `0.9.0`; roadmap page updated.
