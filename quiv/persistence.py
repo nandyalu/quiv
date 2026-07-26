@@ -188,10 +188,14 @@ class PersistenceLayer:
                     " add_task before running immediately."
                 )
             if task.status != TaskStatus.ACTIVE:
+                hint = (
+                    " Use resume_task() to resume it first."
+                    if task.status == TaskStatus.PAUSED
+                    else ""
+                )
                 raise TaskNotActiveError(
                     f"Task '{task_id}' is {task.status}; only active tasks"
-                    " can be queued for immediate run. Use resume_task()"
-                    " for paused tasks."
+                    f" can be queued for immediate run.{hint}"
                 )
             now = self._now_utc()
             task.next_run_at = now
