@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, cast
@@ -24,7 +25,7 @@ from .exceptions import (
     HandlerRegistrationError,
 )
 from .execution import ExecutionLayer
-from .models import Event, Job, QuivModelBase, Task, TaskDB
+from .models import Event, Job, JobStatus, QuivModelBase, Task, TaskDB
 from .persistence import PersistenceLayer
 
 
@@ -150,6 +151,7 @@ class QuivBase(ABC):
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[str, threading.Event] = {}
+        self._registries_lock = threading.Lock()
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
         self._event_listeners_lock = threading.Lock()
         self._active_job_count = 0
@@ -232,7 +234,8 @@ class QuivBase(ABC):
             raise HandlerRegistrationError("task_id must not be empty")
         if not callable(func):
             raise HandlerRegistrationError("func must be callable")
-        self.registry[task_id] = func
+        with self._registries_lock:
+            self.registry[task_id] = func
 
     def _register_progress_callback(
         self, task_id: str, callback: Callable[..., Any] | None
@@ -249,13 +252,15 @@ class QuivBase(ABC):
         """
 
         if callback is None:
-            self.progress_callbacks.pop(task_id, None)
+            with self._registries_lock:
+                self.progress_callbacks.pop(task_id, None)
             return
         if not callable(callback):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
             )
-        self.progress_callbacks[task_id] = callback
+        with self._registries_lock:
+            self.progress_callbacks[task_id] = callback
 
     def add_listener(self, event: Event, callback: Callable[..., Any]) -> None:
         """Register an event listener for a scheduler lifecycle event.
@@ -520,6 +525,11 @@ class QuivBase(ABC):
 
         Raises:
             HandlerNotRegisteredError: If no handler is registered for the id.
+            TaskNotScheduledError: If no scheduled task exists for the id.
+            TaskNotActiveError: If the task is not in ACTIVE status —
+                running tasks cannot be queued again (no-overlap invariant)
+                and paused tasks must be resumed explicitly via
+                ``resume_task()``.
         """
 
         if task_id not in self.registry:
@@ -551,20 +561,61 @@ class QuivBase(ABC):
 
         self.start()
 
-    def shutdown(self) -> None:
-        """Stop scheduler loop, cancel jobs, and release resources."""
+    def shutdown(self, timeout: float | None = None) -> None:
+        """Stop scheduler loop, cancel jobs, and release resources.
+
+        Args:
+            timeout (float, Optional=None): Maximum seconds to wait for the
+                scheduler thread and in-flight jobs to drain. ``None`` waits
+                indefinitely (previous behavior). With a timeout, jobs that
+                do not exit within the deadline are abandoned on their
+                daemon threads and may log errors afterwards (e.g. writing
+                to the already-deleted database).
+        """
 
         from .context import _unregister_active
 
         _unregister_active(self)
         self._shutdown = True
-        all_jobs = self.get_all_jobs()
-        for job in all_jobs:
+
+        # Signal cancellation to RUNNING jobs only.
+        for job in self.get_all_jobs(status=JobStatus.RUNNING):
             if job.id is not None:
                 self.cancel_job(job.id)
+
         if self.thread.is_alive():
-            self.thread.join()
-        self.executor.shutdown(wait=True)
+            self.thread.join(timeout=timeout)
+            if self.thread.is_alive():
+                self._logger.warning(
+                    "Scheduler loop did not stop within the shutdown"
+                    " timeout."
+                )
+
+        if timeout is None:
+            self.executor.shutdown(wait=True)
+        else:
+            # Wait up to `timeout` for in-flight jobs to drain
+            # cooperatively.
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                with self._job_count_lock:
+                    remaining = self._active_job_count
+                if remaining <= 0:
+                    break
+                time.sleep(0.05)
+            with self._job_count_lock:
+                remaining = self._active_job_count
+            if remaining > 0:
+                undrained = [
+                    j.id
+                    for j in self.get_all_jobs(status=JobStatus.RUNNING)
+                ]
+                self._logger.warning(
+                    f"{remaining} job(s) still running after"
+                    f" {timeout}s shutdown timeout: {undrained}."
+                    " Abandoning them (threads are daemonic)."
+                )
+            self.executor.shutdown(wait=False, cancel_futures=True)
 
         try:
             self._engine.dispose()
@@ -576,13 +627,16 @@ class QuivBase(ABC):
         except Exception as e:
             self._logger.warning(f"Could not cleanup database file: {e}")
 
-    def stop(self) -> None:  # pragma: no cover
+    def stop(self, timeout: float | None = None) -> None:  # pragma: no cover
         """Stop scheduler loop, cancel jobs, and release resources.
 
         Alias for :meth:`shutdown`. Pairs naturally with :meth:`start`.
+
+        Args:
+            timeout (float, Optional=None): See :meth:`shutdown`.
         """
 
-        self.shutdown()
+        self.shutdown(timeout=timeout)
 
     def pause_task(self, task_id: str) -> None:
         """Pause a task by id.
@@ -624,8 +678,10 @@ class QuivBase(ABC):
                 otherwise ``False``.
         """
 
-        if job_id in self.stop_events:
-            self.stop_events[job_id].set()
+        with self._registries_lock:
+            stop_event = self.stop_events.get(job_id)
+        if stop_event is not None:
+            stop_event.set()
             return True
         return False
 

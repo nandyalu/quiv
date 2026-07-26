@@ -11,7 +11,7 @@ from typing import Any, Callable
 from .base import QuivBase
 from .config import QuivConfig
 from .context import _current_quiv
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, TaskNotFoundError
 from .models import Event, JobStatus, TaskDB
 
 
@@ -161,15 +161,20 @@ class Quiv(QuivBase):
         # Cancel any running job for this task before deleting
         running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
         for job in running_jobs:
-            if job.task_id == task_id and job.id in self.stop_events:
-                self.stop_events[job.id].set()
+            if job.task_id != task_id or job.id is None:
+                continue
+            with self._registries_lock:
+                stop_event = self.stop_events.get(job.id)
+            if stop_event is not None:
+                stop_event.set()
                 self._logger.info(
                     f"Cancelled running job {job.id} for task '{task_id}'"
                 )
 
         self.persistence.delete_task(task_id)
-        self.registry.pop(task_id, None)
-        self.progress_callbacks.pop(task_id, None)
+        with self._registries_lock:
+            self.registry.pop(task_id, None)
+            self.progress_callbacks.pop(task_id, None)
         self._logger.info(f"Task '{task_id}' removed")
         self._emit_event(Event.TASK_REMOVED, task)
 
@@ -212,11 +217,34 @@ class Quiv(QuivBase):
             now (datetime): Current UTC timestamp.
         """
 
+        with self._registries_lock:
+            func = self.registry.get(task.id)
+        if func is None:
+            # Task was removed between the due-query and dispatch.
+            self._logger.warning(
+                f"Skipping dispatch for task '{task.id}': handler no longer"
+                " registered (task was likely removed)."
+            )
+            return
+
+        try:
+            self.persistence.mark_task_running(task.id)
+            # Snapshot task for event listeners while it is guaranteed to
+            # exist. The task row may be deleted by finalize_task_after_job
+            # (run-once) or by remove_task() before _run_job emits its events.
+            task_snapshot = self.get_task(task.id)
+        except TaskNotFoundError:
+            self._logger.warning(
+                f"Skipping dispatch for task '{task.id}': task row was"
+                " deleted before dispatch."
+            )
+            return
+
         job_id = self.persistence.create_job(task.id, task.task_name)
         stop_event = threading.Event()
-        self.stop_events[job_id] = stop_event
+        with self._registries_lock:
+            self.stop_events[job_id] = stop_event
 
-        func = self.registry[task.id]
         f_args, f_kwargs = self.execution.prepare_invocation(
             task_id=task.id,
             func=func,
@@ -229,12 +257,6 @@ class Quiv(QuivBase):
         self._logger.info(
             f"Scheduling task '{task.task_name}' (Job ID: {job_id}) to run now"
         )
-        self.persistence.mark_task_running(task.id)
-
-        # Snapshot task for event listeners while it is guaranteed to exist.
-        # The task row may be deleted by finalize_task_after_job (run-once)
-        # or by remove_task() before _run_job emits its events.
-        task_snapshot = self.get_task(task.id)
 
         with self._job_count_lock:
             self._active_job_count += 1
@@ -318,7 +340,8 @@ class Quiv(QuivBase):
             status = JobStatus.FAILED
         finally:
             _current_quiv.reset(ctx_token)
-            stop_event = self.stop_events.pop(job_id, None)
+            with self._registries_lock:
+                stop_event = self.stop_events.pop(job_id, None)
             if stop_event is not None and stop_event.is_set():
                 status = JobStatus.CANCELLED
 
@@ -333,8 +356,9 @@ class Quiv(QuivBase):
             with self._job_count_lock:
                 self._active_job_count -= 1
             if run_once:
-                self.registry.pop(task_id, None)
-                self.progress_callbacks.pop(task_id, None)
+                with self._registries_lock:
+                    self.registry.pop(task_id, None)
+                    self.progress_callbacks.pop(task_id, None)
 
             finalized_job = self.get_job(job_id)
             event_map = {

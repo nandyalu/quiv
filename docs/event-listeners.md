@@ -1,15 +1,10 @@
 # Event Listeners
 
-Event listeners let you react to scheduler lifecycle events — tasks being
-added, removed, paused, or resumed, and jobs starting, completing, failing,
-or being cancelled. This is useful for logging, metrics, alerting, or
-updating UI state.
+Event listeners let you react to scheduler lifecycle events — tasks being added, removed, paused, or resumed, and jobs starting, completing, failing, or being cancelled. This is useful for logging, metrics, alerting, or updating UI state.
 
 ## How it works
 
-Register a callback for one or more `Event` types via `add_listener()`.
-When the event fires, quiv dispatches your callback on the main event loop
-(same dispatch model as [progress callbacks](progress-callbacks.md)).
+Register a callback for one or more `Event` types via `add_listener()`. When the event fires, quiv dispatches your callback on the main event loop (same dispatch model as [progress callbacks](progress-callbacks.md)).
 
 ```mermaid
 flowchart TD
@@ -92,9 +87,7 @@ async def on_job_event(event: Event, task: Task, job: Job) -> None:
 ```
 
 !!! tip "Full type safety"
-    Since listeners receive `Task` and `Job` model objects, you get IDE
-    autocomplete and type checking on every field — no more guessing dict
-    keys at runtime.
+    Since listeners receive `Task` and `Job` model objects, you get IDE autocomplete and type checking on every field — no more guessing dict keys at runtime.
 
 ## Registering listeners
 
@@ -116,8 +109,7 @@ scheduler.add_listener(Event.TASK_ADDED, on_task_added)
 
 ### Multiple listeners
 
-You can register multiple listeners for the same event. They are called in
-registration order:
+You can register multiple listeners for the same event. They are called in registration order:
 
 ```python
 scheduler.add_listener(Event.JOB_FAILED, log_failure)
@@ -150,9 +142,7 @@ If the callback is not found, the call is silently ignored.
 
 ## Async listeners
 
-Async listeners run on the main event loop via `run_coroutine_threadsafe`,
-just like async progress callbacks. This makes them ideal for FastAPI apps
-where you want to broadcast events to WebSocket clients:
+Async listeners run on the main event loop via `run_coroutine_threadsafe`, just like async progress callbacks. This makes them ideal for FastAPI apps where you want to broadcast events to WebSocket clients:
 
 ```python
 from quiv.models import Task, Job
@@ -169,9 +159,7 @@ scheduler.add_listener(Event.JOB_COMPLETED, on_job_completed)
 
 ## Error handling
 
-If a listener raises an exception, quiv logs the error but does **not**
-fail the scheduler or the job. Other listeners for the same event still run.
-This prevents a broken listener from disrupting task execution.
+If a listener raises an exception, quiv logs the error but does **not** fail the scheduler or the job. Other listeners for the same event still run. This prevents a broken listener from disrupting task execution.
 
 ```mermaid
 flowchart TD
@@ -185,8 +173,7 @@ flowchart TD
 
 ## Without an event loop
 
-In scripts without asyncio, sync event listeners work normally — they run
-directly on the calling thread:
+In scripts without asyncio, sync event listeners work normally — they run directly on the calling thread:
 
 ```python
 from quiv import Quiv, Event
@@ -204,14 +191,11 @@ scheduler.add_task("my-task", lambda: None, interval=10)
 # Prints: Added: my-task
 ```
 
-Async listeners also work in this scenario — they run in a temporary event
-loop on the calling thread, so `await` calls inside the listener execute
-correctly.
+Async listeners also work in this scenario — they run in a temporary event loop on the calling thread, so `await` calls inside the listener execute correctly.
 
 ## FastAPI example
 
-A complete example wiring event listeners into a FastAPI app with WebSocket
-notifications:
+A complete example wiring event listeners into a FastAPI app with WebSocket notifications:
 
 ```python
 import logging

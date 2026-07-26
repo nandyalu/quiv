@@ -1,21 +1,12 @@
 # quiv — guide for AI coding agents
 
-This file ships inside the `quiv` package so AI tools can learn the library
-without leaving the project. Full docs: https://nandyalu.github.io/quiv
-(machine-readable index: https://nandyalu.github.io/quiv/llms.txt).
+This file ships inside the `quiv` package so AI tools can learn the library without leaving the project. Full docs: https://nandyalu.github.io/quiv (machine-readable index: https://nandyalu.github.io/quiv/llms.txt).
 
 ## What quiv is (and is not)
 
-quiv is a single-process, threadpool-backed background scheduler for Python
-apps — "more than FastAPI `BackgroundTasks`, less than Celery". Recurring or
-one-shot tasks, sync **and** async handlers, cooperative cancellation,
-progress callbacks dispatched to the main asyncio loop, per-job trace IDs.
-Python 3.10–3.14.
+quiv is a single-process, threadpool-backed background scheduler for Python apps — "more than FastAPI `BackgroundTasks`, less than Celery". Recurring or one-shot tasks, sync **and** async handlers, cooperative cancellation, progress callbacks dispatched to the main asyncio loop, per-job trace IDs. Python 3.10–3.14.
 
-Do NOT reach for quiv when the app needs: multi-process/distributed workers,
-durable queues that survive restarts, or cron/calendar scheduling — use
-Celery/arq/APScheduler for those. Task state lives in a **temporary SQLite
-file that is deleted on `shutdown()`**; nothing persists across restarts.
+Do NOT reach for quiv when the app needs: multi-process/distributed workers, durable queues that survive restarts, or cron/calendar scheduling — use Celery/arq/APScheduler for those. Task state lives in a **temporary SQLite file that is deleted on `shutdown()`**; nothing persists across restarts.
 
 ## Install
 
@@ -49,10 +40,11 @@ task_id = scheduler.add_task(
 scheduler.start()      # alias: startup(). Safe to call multiple times.
 scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs,
                        # disposes the engine, deletes the temp SQLite file.
+                       # shutdown(timeout=5.0) bounds the wait; jobs that do
+                       # not exit in time are abandoned with a warning.
 ```
 
-`add_task()` returns a `task_id` (UUID string) — **hold onto it**; it is the
-key for every runtime operation:
+`add_task()` returns a `task_id` (UUID string) — **hold onto it**; it is the key for every runtime operation:
 
 | Method | Notes |
 |---|---|
@@ -64,15 +56,11 @@ key for every runtime operation:
 | `cancel_job(job_id) -> bool` | cooperative — sets the job's stop event |
 | `add_listener(event, cb)` / `remove_listener(event, cb)` | lifecycle events, see below |
 
-`Task` and `Job` are SQLModel objects safe to return directly from FastAPI
-endpoints (datetimes are UTC-aware). Task statuses: `active`, `running`,
-`paused`. Job statuses: `scheduled`, `running`, `completed`, `cancelled`,
-`failed`. `Job` carries `duration_seconds` and `error_message`.
+`Task` and `Job` are SQLModel objects safe to return directly from FastAPI endpoints (datetimes are UTC-aware). Task statuses: `active`, `running`, `paused`. Job statuses: `scheduled`, `running`, `completed`, `cancelled`, `failed`. `Job` carries `duration_seconds` and `error_message`.
 
 ## Handler injection (signature-based)
 
-quiv inspects the handler signature and injects these kwargs **only if the
-handler declares them** (or takes `**kwargs`):
+quiv inspects the handler signature and injects these kwargs **only if the handler declares them** (or takes `**kwargs`):
 
 - `_job_id: str` — UUID of this run; stamp it into a `LoggerAdapter`/`ContextVar` for per-job log tracing.
 - `_stop_event: threading.Event` — check `_stop_event.is_set()` at natural breakpoints and `return` early. This is the ONLY way cancellation/shutdown stops a handler; threads are never killed.
@@ -88,10 +76,7 @@ def download(media_id: int, _job_id=None, _stop_event=None, _progress_hook=None)
             _progress_hook(step=i, stage="download")
 ```
 
-Async handlers are passed the same way (`func=my_async_handler`) — each
-invocation runs in a **fresh event loop on the worker thread**. Handlers never
-share the main app loop, so never touch main-loop-bound resources directly
-from a handler; use `_progress_hook` or `run_on_main` (below).
+Async handlers are passed the same way (`func=my_async_handler`) — each invocation runs in a **fresh event loop on the worker thread**. Handlers never share the main app loop, so never touch main-loop-bound resources directly from a handler; use `_progress_hook` or `run_on_main` (below).
 
 ## Reaching the main loop from task code
 
@@ -105,9 +90,7 @@ def deeply_nested_step():
     run_on_main(broadcast, {"event": "step_done"})  # fire-and-forget, exceptions logged+swallowed
 ```
 
-Works from anywhere in a task's call stack (no parameter threading) and also
-from main-loop code (e.g. FastAPI routes). Raises `RuntimeError` if no active
-Quiv instance / main loop is resolvable.
+Works from anywhere in a task's call stack (no parameter threading) and also from main-loop code (e.g. FastAPI routes). Raises `RuntimeError` if no active Quiv instance / main loop is resolvable.
 
 ## Event listeners
 
@@ -120,9 +103,7 @@ def on_job_failed(event, task, job):   # JOB_* -> (event, task, job); TASK_* -> 
 scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
-Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`,
-`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`. Sync or async
-callbacks; exceptions in listeners are logged and swallowed.
+Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`. Sync or async callbacks; exceptions in listeners are logged and swallowed.
 
 ## Canonical FastAPI wiring
 
@@ -145,28 +126,18 @@ app = FastAPI(lifespan=lifespan)
 
 ## Pitfalls agents commonly hit
 
-1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite
-   file. In tests, call it in a `finally:` block.
-2. **Expecting persistence** — the DB is temporary by design; re-`add_task`
-   on every startup.
-3. **Unpicklable `args`/`kwargs`** — lambdas, inner functions, open handles
-   fail pickle serialization. Pass plain data; make `func` a module-level callable.
-4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only
-   set the stop event. A handler that never checks `_stop_event` runs to completion.
-5. **Blocking the main loop from a handler** — handlers run on worker threads
-   with their own event loops. Use `_progress_hook`/`run_on_main` to hop back.
+1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite file. In tests, call it in a `finally:` block.
+2. **Expecting persistence** — the DB is temporary by design; re-`add_task` on every startup.
+3. **Unpicklable `args`/`kwargs`** — lambdas, inner functions, open handles fail pickle serialization. Pass plain data; make `func` a module-level callable.
+4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `_stop_event` runs to completion.
+5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `_progress_hook`/`run_on_main` to hop back.
 6. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
-7. **Treating `task_name` as a key** — it is a label; duplicates are allowed.
-   Only `task_id` identifies a task.
-8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are
-   deferred to the next 1s tick (a warning logs the delay). Raise `pool_size`
-   for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
-9. **No log output** — quiv never configures logging. Configure the `"Quiv"`
-   logger (or pass `logger=`) to see scheduler logs.
+7. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
+8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred to the next 1s tick (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
+9. **No log output** — quiv never configures logging. Configure the `"Quiv"` logger (or pass `logger=`) to see scheduler logs.
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`,
-`DatabaseInitializationError`, `HandlerRegistrationError`,
-`HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotFoundError`,
-`JobNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`.
+
+`run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).

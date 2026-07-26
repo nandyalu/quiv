@@ -9,6 +9,7 @@ from sqlmodel import Session, select, col
 
 from .exceptions import (
     JobNotFoundError,
+    TaskNotActiveError,
     TaskNotFoundError,
     TaskNotScheduledError,
 )
@@ -175,6 +176,8 @@ class PersistenceLayer:
 
         Raises:
             TaskNotScheduledError: If no scheduled task exists for the id.
+            TaskNotActiveError: If the task is not in ACTIVE status
+                (e.g. currently running or paused).
         """
 
         with self._lock, Session(self._engine) as session:
@@ -184,8 +187,17 @@ class PersistenceLayer:
                     f"Task '{task_id}' is not scheduled. Add it with"
                     " add_task before running immediately."
                 )
+            if task.status != TaskStatus.ACTIVE:
+                hint = (
+                    " Use resume_task() to resume it first."
+                    if task.status == TaskStatus.PAUSED
+                    else ""
+                )
+                raise TaskNotActiveError(
+                    f"Task '{task_id}' is {task.status}; only active tasks"
+                    f" can be queued for immediate run.{hint}"
+                )
             now = self._now_utc()
-            task.status = TaskStatus.ACTIVE
             task.next_run_at = now
             session.commit()
             return 1

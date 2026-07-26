@@ -1,7 +1,6 @@
 # Getting Started
 
-This guide gets `quiv` running with recurring tasks, progress callbacks,
-and clean shutdown behavior.
+This guide gets `quiv` running with recurring tasks, progress callbacks, and clean shutdown behavior.
 
 ## Install
 
@@ -96,8 +95,7 @@ task_id = scheduler.add_task(
 
 ### Async handler
 
-Async handlers are fully supported. They run in thread-local event loops
-created per invocation, so they do not block the scheduler or main loop.
+Async handlers are fully supported. They run in thread-local event loops created per invocation, so they do not block the scheduler or main loop.
 
 ```python
 import httpx
@@ -121,26 +119,14 @@ scheduler.add_task(
 )
 ```
 
-`_job_id`, `_stop_event`, and `_progress_hook` are injected only if your
-handler accepts those keyword parameters. If your handler signature does not
-include them (and does not use `**kwargs`), they are not injected. See
-[Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md)
-for in-depth guides.
+`_job_id`, `_stop_event`, and `_progress_hook` are injected only if your handler accepts those keyword parameters. If your handler signature does not include them (and does not use `**kwargs`), they are not injected. See [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md) for in-depth guides.
 
 !!! tip "Hold onto `task_id`"
-    `add_task()` returns a `task_id` (UUID string). All runtime operations —
-    `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`,
-    and `get_task()` — use this id. Multiple tasks can share the same
-    `task_name`; each gets its own unique `task_id`.
+    `add_task()` returns a `task_id` (UUID string). All runtime operations — `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`, and `get_task()` — use this id. Multiple tasks can share the same `task_name`; each gets its own unique `task_id`.
 
 ## 3) Add progress callback (optional)
 
-Progress callbacks can be sync or async. When an asyncio event loop is
-available, async callbacks run via `run_coroutine_threadsafe` and sync
-callbacks run via `call_soon_threadsafe` on the main loop. If no event loop
-is available (e.g. in a plain script without asyncio), sync callbacks run
-directly on the worker thread and async callbacks run in a temporary event
-loop on the worker thread.
+Progress callbacks can be sync or async. When an asyncio event loop is available, async callbacks run via `run_coroutine_threadsafe` and sync callbacks run via `call_soon_threadsafe` on the main loop. If no event loop is available (e.g. in a plain script without asyncio), sync callbacks run directly on the worker thread and async callbacks run in a temporary event loop on the worker thread.
 
 ```python
 async def on_progress(**payload):
@@ -156,8 +142,7 @@ scheduler.add_task(
 
 ## 4) Listen for events (optional)
 
-Event listeners let you react to task and job lifecycle events. Register a
-callback with `add_listener()`:
+Event listeners let you react to task and job lifecycle events. Register a callback with `add_listener()`:
 
 ```python
 from quiv import Event
@@ -174,15 +159,9 @@ scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
 !!! info "Typed callbacks"
-    `TASK_*` listeners receive `(event, task)`. `JOB_*` listeners receive
-    `(event, task, job)`. Both use typed model objects with full IDE
-    autocomplete — no dict key lookups.
+    `TASK_*` listeners receive `(event, task)`. `JOB_*` listeners receive `(event, task, job)`. Both use typed model objects with full IDE autocomplete — no dict key lookups.
 
-Listeners follow the same dispatch model as progress callbacks: async listeners
-run on the main loop, sync listeners run via `call_soon_threadsafe` (or
-directly on the calling thread when no loop is available). Exceptions in
-listeners are logged and swallowed. See [Event Listeners](event-listeners.md)
-for the full event list and dispatch details.
+Listeners follow the same dispatch model as progress callbacks: async listeners run on the main loop, sync listeners run via `call_soon_threadsafe` (or directly on the calling thread when no loop is available). Exceptions in listeners are logged and swallowed. See [Event Listeners](event-listeners.md) for the full event list and dispatch details.
 
 ## 5) Start and stop
 
@@ -199,8 +178,7 @@ asyncio.run(main())
 
 Always call `shutdown()` (or `stop()`) when your app exits.
 
-`startup()` / `shutdown()` is the recommended pair, but `start()` / `stop()`
-works identically — they are aliases.
+`startup()` / `shutdown()` is the recommended pair, but `start()` / `stop()` works identically — they are aliases.
 
 ## 6) Operate tasks at runtime
 
@@ -224,8 +202,7 @@ for job in jobs:
     scheduler.cancel_job(job.id)
 ```
 
-Cancellation is cooperative: it sets the job's stop event. The handler must
-check `_stop_event.is_set()` to actually stop.
+Cancellation is cooperative: it sets the job's stop event. The handler must check `_stop_event.is_set()` to actually stop.
 
 ## 8) Inspect state
 
@@ -237,8 +214,7 @@ failed_jobs = scheduler.get_all_jobs(status="failed")
 
 ## FastAPI integration example
 
-`quiv` is intended for app-integrated task scheduling, especially in FastAPI.
-Use the `lifespan` context manager to tie scheduler lifecycle to the app:
+`quiv` is intended for app-integrated task scheduling, especially in FastAPI. Use the `lifespan` context manager to tie scheduler lifecycle to the app:
 
 ```python
 from contextlib import asynccontextmanager
@@ -295,8 +271,7 @@ Why this matters:
 
 ## Logging
 
-`quiv` uses Python's standard `logging` module. If you do not configure
-logging, no output is produced (Python's default `NullHandler` behavior).
+`quiv` uses Python's standard `logging` module. If you do not configure logging, no output is produced (Python's default `NullHandler` behavior).
 
 To see scheduler logs, configure the `"Quiv"` logger:
 
@@ -336,21 +311,13 @@ The library logs at these levels:
 | WARNING | Progress callback skipped (no event loop or main loop closed) |
 | ERROR   | Job failures, scheduler loop errors, progress callback errors |
 
-A separate `"quiv.models"` logger emits DEBUG-level messages for datetime
-normalization. This logger is not configurable via the constructor and follows
-standard Python logging configuration.
+A separate `"quiv.models"` logger emits DEBUG-level messages for datetime normalization. This logger is not configurable via the constructor and follows standard Python logging configuration.
 
 ## Troubleshooting
 
-- **`ConfigurationError` on startup**: check `pool_size > 0` and
-  `history_retention_seconds >= 0`.
-- **`InvalidTimezoneError`**: use a valid IANA timezone name (for example
-  `UTC` or `America/New_York`).
-- **`HandlerNotRegisteredError` for immediate run**: call `add_task(...)`
-  first, and use the returned `task_id`.
-- **`TaskNotScheduledError`**: the task handler is registered, but the
-  scheduled task row no longer exists in the database.
+- **`ConfigurationError` on startup**: check `pool_size > 0` and `history_retention_seconds >= 0`.
+- **`InvalidTimezoneError`**: use a valid IANA timezone name (for example `UTC` or `America/New_York`).
+- **`HandlerNotRegisteredError` for immediate run**: call `add_task(...)` first, and use the returned `task_id`.
+- **`TaskNotScheduledError`**: the task handler is registered, but the scheduled task row no longer exists in the database.
 - **No log output**: configure Python logging (see [Logging](#logging) above).
-- **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most
-  Python objects are supported. If you encounter errors, ensure the objects
-  are picklable (e.g. lambdas and inner functions are not).
+- **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most Python objects are supported. If you encounter errors, ensure the objects are picklable (e.g. lambdas and inner functions are not).

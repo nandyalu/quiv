@@ -30,5 +30,9 @@ class TaskNotFoundError(QuivError):
     """Raised when a task record is not found."""
 
 
+class TaskNotActiveError(QuivError):
+    """Raised when an operation requires an ACTIVE task."""
+
+
 class JobNotFoundError(QuivError):
     """Raised when a job record is not found."""
