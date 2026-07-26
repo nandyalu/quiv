@@ -168,10 +168,6 @@ app = FastAPI(lifespan=lifespan)
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`,
-`DatabaseInitializationError`, `HandlerRegistrationError`,
-`HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotActiveError`,
-`TaskNotFoundError`, `JobNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`.
 
-`run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no
-concurrent second run) and `paused` tasks (use `resume_task()` instead).
+`run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).
