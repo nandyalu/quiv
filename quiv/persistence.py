@@ -108,7 +108,7 @@ class PersistenceLayer:
 
         statement = select(TaskDB)
         if not include_run_once:
-            statement = statement.where(TaskDB.run_once == False)
+            statement = statement.where(col(TaskDB.run_once).is_(False))
         with Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks

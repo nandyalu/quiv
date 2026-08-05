@@ -10,6 +10,15 @@ from quiv import Quiv
 from quiv.models import JobStatus, TaskStatus
 
 
+def _join_all(threads: list[threading.Thread], timeout: float = 15.0) -> None:
+    """Join threads with a shared deadline; fail instead of hanging CI."""
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+    stuck = [t.name for t in threads if t.is_alive()]
+    assert not stuck, f"threads did not finish within {timeout}s: {stuck}"
+
+
 def _seed_task(scheduler: Quiv, name: str = "seed") -> str:
     return scheduler.persistence.create_task(
         task_name=name,
@@ -40,8 +49,7 @@ def test_concurrent_writers_no_lost_updates(
         ]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        _join_all(threads)
 
         assert not errors, f"writer threads raised: {errors[:3]}"
         tasks = scheduler.persistence.get_all_tasks()
@@ -99,8 +107,7 @@ def test_readers_during_writes_see_consistent_rows(
         ]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        _join_all(threads)
 
         assert not errors, f"threads raised: {errors[:3]}"
     finally:
@@ -155,7 +162,7 @@ def test_full_scheduler_under_load(
                 break
             time.sleep(0.05)
         stop.set()
-        poller.join()
+        _join_all([poller], timeout=5.0)
 
         assert completed == 32, f"only {completed}/32 jobs completed"
         failed = scheduler.get_all_jobs(status=JobStatus.FAILED)
@@ -194,8 +201,7 @@ def test_pause_resume_race_yields_valid_status(
         ]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        _join_all(threads)
 
         assert not errors, f"flipper threads raised: {errors[:3]}"
         task = persistence.get_task(task_id)
