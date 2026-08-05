@@ -913,6 +913,41 @@ def test_shutdown_returns_promptly_when_loop_idle(
     assert elapsed < 1.0, f"shutdown took {elapsed:.3f}s while loop was idle"
 
 
+def test_fast_interval_throughput_and_prompt_shutdown(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task(
+            task_name="smoke",
+            func=lambda: None,
+            interval=0.1,
+            fixed_interval=False,
+            delay=0,
+        )
+        scheduler.start()
+
+        deadline = time.monotonic() + 5
+        completed_count = 0
+        while time.monotonic() < deadline:
+            completed_count = len(
+                scheduler.get_all_jobs(status=JobStatus.COMPLETED)
+            )
+            if completed_count >= 10:
+                break
+            time.sleep(0.05)
+        assert completed_count >= 10, (
+            f"only {completed_count} jobs completed at interval=0.1"
+        )
+    finally:
+        begin = time.monotonic()
+        scheduler.shutdown()
+        elapsed = time.monotonic() - begin
+    assert elapsed < 1.0, (
+        f"shutdown took {elapsed:.3f}s with a fast task active"
+    )
+
+
 def test_add_task_invalid_func_leaves_no_orphan_task(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
