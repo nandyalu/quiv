@@ -1,3 +1,23 @@
+<a id="v0.7.0"></a>
+## [v0.7.0 - Database Locking Rework](https://github.com/nandyalu/quiv/releases/tag/v0.7.0) - 2026-08-04
+
+Phase 3 of the [roadmap to v1.0.0](roadmap.md): lock-free reads under SQLite WAL.
+
+### What's new
+
+- **Lock-free reads** — read queries (`get_task`, `get_job`, `get_all_tasks`, `get_all_jobs`, due-task queries) no longer serialize behind the persistence layer's global lock; SQLite WAL mode provides the reader/writer coordination. Read-modify-write operations (task/job lifecycle transitions, pause/resume, cleanup) still serialize on a dedicated write lock, preserving the no-lost-update guarantees.
+- **SQLite pragmas** — connections now set `synchronous=NORMAL` (the standard WAL pairing: fsync on checkpoint instead of per-commit; the DB is an ephemeral temp file, so durability-on-crash was never a goal) and an explicit `busy_timeout=10000` matching the existing driver-level timeout.
+
+### Performance
+
+With a writer and a heavy `get_all_jobs` reader running concurrently, p99 latency of a small `get_task` read drops from ~89 ms to ~1.1 ms (~80×) — small reads no longer queue behind large scans or writes on a global lock. Aggregate wall time on a synthetic hammer benchmark (5,000 mixed ops, 70% reads / 30% writes, 16 threads) measured 31.0 s before vs 44.5 s after: with every thread busy-looping CPU-bound ORM deserialization, CPython's GIL makes convoy-free serialized execution faster in aggregate — an artifact of the synthetic saturation workload, not of realistic loads, and one that disappears on free-threaded builds. The `synchronous=NORMAL` pragma alone improves write throughput ~20% (31.0 s → 24.6 s with reads still serialized).
+
+### Housekeeping
+
+- New concurrency stress-test suite (`tests/test_persistence_concurrency.py`): concurrent writers with no lost updates, readers seeing consistent rows during writes, a full scheduler run at `pool_size=32` under constant read load, and a pause/resume race. Docs and version updated to `0.7.0`.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.6.0...v0.7.0
+
 <a id="v0.6.0"></a>
 ## [v0.6.0 - Scheduler Core Efficiency](https://github.com/nandyalu/quiv/releases/tag/v0.6.0) - 2026-07-26
 

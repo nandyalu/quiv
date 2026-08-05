@@ -29,6 +29,8 @@ Small, self-contained bug fixes with no behavioral surprises for existing users.
 
 ## Phase 3 — Concurrency: Database Locking Rework (`v0.7.0`)
 
+**Status: ✅ complete** — implemented 2026-08-04, ships as `v0.7.0`.
+
 1. **Finer-grained locking** — the persistence layer currently serializes *all* database access behind a single lock, even though WAL mode already allows concurrent readers. Reads will run without the global lock while writes serialize on a writer lock, with `SQLITE_BUSY` / busy-timeout handling.
 
 This is the riskiest change on the roadmap, so it gets its own phase with a dedicated stress-test suite (many concurrent writer and reader threads) run before and after, verifying both correctness and the throughput gain.

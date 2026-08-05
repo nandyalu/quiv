@@ -46,7 +46,7 @@ The library has a layered design with four core modules:
 
 - **`base.py`** (`QuivBase`) — Abstract base with lifecycle management. Owns the `ThreadPoolExecutor`, SQLite engine (temp file), handler/callback/event-listener registries, and stop events dict. Handles async execution bridge (`run_async` creates thread-local event loops), progress callback dispatch, and event listener dispatch to the main event loop.
 
-- **`persistence.py`** (`PersistenceLayer`) — All SQLModel/SQLAlchemy database operations. Task CRUD (`create_task`/`delete_task`), task lifecycle (`mark_task_running`/`finalize_task_after_job`), job lifecycle transitions, due-task queries, history cleanup (SQL-level, runs every 60s). Uses `col()` wrapper for typed SQLModel WHERE clauses. Thread-safe via `threading.Lock`.
+- **`persistence.py`** (`PersistenceLayer`) — All SQLModel/SQLAlchemy database operations. Task CRUD (`create_task`/`delete_task`), task lifecycle (`mark_task_running`/`finalize_task_after_job`), job lifecycle transitions, due-task queries, history cleanup (SQL-level, runs every 60s). Uses `col()` wrapper for typed SQLModel WHERE clauses. Reads are lock-free (SQLite WAL provides reader/writer coordination); read-modify-write operations serialize on `_write_lock`.
 
 - **`execution.py`** (`ExecutionLayer`) — Invocation preparation and callable dispatch. Introspects handler signatures to conditionally inject `_stop_event` and `_progress_hook` kwargs. Handles both sync and async callables. `prepare_invocation()` deserializes pickled args back into a `tuple` to preserve the type contract from `add_task()`.
 

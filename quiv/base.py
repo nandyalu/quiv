@@ -126,9 +126,13 @@ class QuivBase(ABC):
         from sqlalchemy import event
 
         @event.listens_for(self._engine, "connect")
-        def _set_sqlite_wal(dbapi_conn: Any, connection_record: Any) -> None:
+        def _set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
+            # WAL pairing: fsync on checkpoint, not per-commit — the DB is
+            # an ephemeral temp file, durability-on-crash is not a goal.
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=10000")
             cursor.close()
 
         try:

@@ -36,7 +36,9 @@ class PersistenceLayer:
 
         self._engine = engine
         self._now_utc = now_utc
-        self._lock = threading.Lock()
+        # Serializes read-modify-write transactions; reads run lock-free
+        # under SQLite WAL (concurrent readers alongside one writer).
+        self._write_lock = threading.Lock()
 
     def create_task(
         self,
@@ -62,7 +64,7 @@ class PersistenceLayer:
             str: Task id string (UUID).
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             task = TaskDB(
                 task_name=task_name,
                 interval_seconds=interval,
@@ -86,7 +88,7 @@ class PersistenceLayer:
             TaskNotFoundError: If no task with that id exists.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -107,7 +109,7 @@ class PersistenceLayer:
         statement = select(TaskDB)
         if not include_run_once:
             statement = statement.where(TaskDB.run_once == False)
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks
 
@@ -124,7 +126,7 @@ class PersistenceLayer:
             TaskNotFoundError: If no task with that ID exists.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -143,7 +145,7 @@ class PersistenceLayer:
             JobNotFoundError: If no job with that ID exists.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
                 raise JobNotFoundError(f"Job '{job_id}' was not found")
@@ -159,7 +161,7 @@ class PersistenceLayer:
             list[Job]: A list of job records.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             statement = select(Job)
             if status:
                 statement = statement.where(Job.status == status)
@@ -180,7 +182,7 @@ class PersistenceLayer:
                 (e.g. currently running or paused).
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotScheduledError(
@@ -212,7 +214,7 @@ class PersistenceLayer:
             TaskNotFoundError: If task does not exist.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -230,7 +232,7 @@ class PersistenceLayer:
             TaskNotFoundError: If task does not exist.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -247,7 +249,7 @@ class PersistenceLayer:
 
         cutoff = self._now_utc() - timedelta(seconds=history_limit_seconds)
         terminal = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             statement = (
                 select(Job)
                 .where(col(Job.ended_at).is_not(None))
@@ -268,7 +270,7 @@ class PersistenceLayer:
             list[TaskDB]: A list of active due tasks.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             statement = select(TaskDB).where(TaskDB.next_run_at <= now)
             statement = statement.where(TaskDB.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
@@ -281,7 +283,7 @@ class PersistenceLayer:
                 no active task exists.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with Session(self._engine) as session:
             statement = (
                 select(TaskDB.next_run_at)
                 .where(TaskDB.status == TaskStatus.ACTIVE)
@@ -306,7 +308,7 @@ class PersistenceLayer:
             str: Newly created job id (UUID string).
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             job = Job(
                 task_id=task_id,
                 task_name=task_name,
@@ -326,7 +328,7 @@ class PersistenceLayer:
             TaskNotFoundError: If task does not exist.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             existing = session.get(TaskDB, task_id)
             if existing is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
@@ -354,7 +356,7 @@ class PersistenceLayer:
             job_started_at (datetime): UTC time when the job started.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             existing = session.get(TaskDB, task_id)
             if existing is None:
                 return  # run-once task already deleted, or task was removed
@@ -384,7 +386,7 @@ class PersistenceLayer:
             JobNotFoundError: If job does not exist.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
                 raise JobNotFoundError(f"Job '{job_id}' should exist")
@@ -411,7 +413,7 @@ class PersistenceLayer:
             JobNotFoundError: If job does not exist.
         """
 
-        with self._lock, Session(self._engine) as session:
+        with self._write_lock, Session(self._engine) as session:
             job = session.get(Job, job_id)
             if job is None:
                 raise JobNotFoundError(f"Job '{job_id}' should exist")
