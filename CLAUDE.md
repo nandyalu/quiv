@@ -48,6 +48,8 @@ The library has a layered design with four core modules:
 
 - **`persistence.py`** (`PersistenceLayer`) — All SQLModel/SQLAlchemy database operations. Task CRUD (`create_task`/`delete_task`), task lifecycle (`mark_task_running`/`finalize_task_after_job`), job lifecycle transitions, due-task queries, history cleanup (SQL-level, runs every 60s). Uses `col()` wrapper for typed SQLModel WHERE clauses. Reads are lock-free (SQLite WAL provides reader/writer coordination); read-modify-write operations serialize on `_write_lock`.
 
+  **SQLAlchemy predicate conventions**: never compare columns to literal booleans or `None` with `==`/`!=` — use `col(Model.field).is_(False)`, `.is_not(None)`, `.in_(...)`. Plain value comparisons (`Job.status == status`, `TaskDB.next_run_at <= now`) stay bare. `col()` is applied exactly where needed: nullable columns (narrows `Optional` for mypy strict) and method-style operators (`is_`, `is_not`, `in_`); do not wrap non-nullable value comparisons.
+
 - **`execution.py`** (`ExecutionLayer`) — Invocation preparation and callable dispatch. Introspects handler signatures to conditionally inject `_stop_event` and `_progress_hook` kwargs. Handles both sync and async callables. `prepare_invocation()` deserializes pickled args back into a `tuple` to preserve the type contract from `add_task()`.
 
 - **`models.py`** — `Task` and `Job` SQLModel table classes with a private `quiv_registry` to isolate metadata from user models. `Event`/`TaskStatus`/`JobStatus` are `str, Enum` enums. Model validators force UTC on datetime fields loaded from SQLite.
