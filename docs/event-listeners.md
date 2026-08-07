@@ -44,6 +44,7 @@ All events are defined in the `Event` enum:
 | `JOB_STARTED` | When a job begins execution | `event`, `task`, `job` |
 | `JOB_COMPLETED` | When a job finishes successfully | `event`, `task`, `job` |
 | `JOB_FAILED` | When a job ends with an exception | `event`, `task`, `job` |
+| `JOB_RETRYING` | After `JOB_FAILED`, when a retry has been scheduled for the failed job's task | `event`, `task`, `job` |
 | `JOB_CANCELLED` | When a job is cancelled via stop event | `event`, `task`, `job` |
 
 [^1]: For `TASK_REMOVED`, the `task` object is a snapshot taken before deletion.

@@ -65,6 +65,10 @@ class Quiv(QuivBase):
         delay: float = 0,
         run_once: bool = False,
         fixed_interval: bool = True,
+        timeout: float | None = None,
+        max_retries: int = 0,
+        retry_backoff: float = 30.0,
+        jitter: float = 0.0,
         args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
@@ -81,6 +85,22 @@ class Quiv(QuivBase):
                 scheduled at fixed intervals from the job start time. If
                 ``False``, next run is scheduled ``interval`` seconds after
                 job completion.
+            timeout (float, Optional=None): Cooperative per-job timeout in
+                seconds. When a job exceeds it, quiv sets the job's stop
+                event — exactly as ``cancel_job()`` would — and the job
+                finalizes as ``cancelled`` with a timeout error message.
+                Handlers that ignore their stop event keep occupying their
+                pool thread (quiv never kills threads). ``None`` disables.
+            max_retries (int, Optional=0): Maximum consecutive retries
+                after failed jobs. Applies to ``failed`` jobs only —
+                cancelled jobs (including timeouts) never retry.
+            retry_backoff (float, Optional=30.0): Base delay in seconds
+                for exponential retry backoff: first retry after
+                ``retry_backoff``, then 2x, 4x, and so on.
+            jitter (float, Optional=0.0): Adds ``uniform(0, jitter)``
+                seconds to each recurring next-run time to de-synchronize
+                tasks sharing interval boundaries. Not applied to the
+                initial ``delay`` nor to retry backoff.
             args (tuple[Any, ...], Optional=None): Positional arguments for handler.
             kwargs (dict[str, Any], Optional=None): Keyword arguments for handler.
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
@@ -101,6 +121,18 @@ class Quiv(QuivBase):
         if delay < 0:
             raise ConfigurationError(
                 "delay must be greater than or equal to 0"
+            )
+        if timeout is not None and timeout <= 0:
+            raise ConfigurationError("timeout must be greater than 0")
+        if max_retries < 0:
+            raise ConfigurationError(
+                "max_retries must be greater than or equal to 0"
+            )
+        if retry_backoff <= 0:
+            raise ConfigurationError("retry_backoff must be greater than 0")
+        if jitter < 0:
+            raise ConfigurationError(
+                "jitter must be greater than or equal to 0"
             )
         # Validate registration inputs BEFORE persisting the task row —
         # failing later in _register_handler/_register_progress_callback
@@ -146,6 +178,10 @@ class Quiv(QuivBase):
             next_run_at=next_run,
             args_pickled=args_pickled,
             kwargs_pickled=kwargs_pickled,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_backoff=retry_backoff,
+            jitter=jitter,
         )
 
         self._register_handler(task_id, func)
@@ -220,6 +256,8 @@ class Quiv(QuivBase):
                         time.monotonic() + _CLEANUP_INTERVAL_SECONDS
                     )
 
+                self._enforce_timeouts()
+
                 now = self._now_utc()
                 if self._active_job_count < self._pool_size:
                     for task in self.persistence.get_due_tasks(now):
@@ -239,6 +277,25 @@ class Quiv(QuivBase):
                 self._wake_event.wait(timeout=5)
                 self._wake_event.clear()
 
+    def _enforce_timeouts(self) -> None:
+        """Set stop events for jobs past their deadline."""
+
+        now = time.monotonic()
+        with self._registries_lock:
+            expired = [
+                job_id
+                for job_id, deadline in self._job_deadlines.items()
+                if now >= deadline
+            ]
+            for job_id in expired:
+                del self._job_deadlines[job_id]
+                self._timed_out_jobs.add(job_id)
+        for job_id in expired:
+            if self.cancel_job(job_id):
+                self._logger.warning(
+                    f"Job {job_id} exceeded its timeout; stop event set."
+                )
+
     def _compute_sleep_seconds(self, next_cleanup: float) -> float:
         """Seconds to sleep until the next scheduled wake-up.
 
@@ -251,6 +308,14 @@ class Quiv(QuivBase):
         """
 
         candidates = [next_cleanup - time.monotonic()]
+        with self._registries_lock:
+            soonest_deadline = (
+                min(self._job_deadlines.values())
+                if self._job_deadlines
+                else None
+            )
+        if soonest_deadline is not None:
+            candidates.append(soonest_deadline - time.monotonic())
         with self._job_count_lock:
             pool_full = self._active_job_count >= self._pool_size
         # When the pool is saturated, skip the next-due candidate: an
@@ -296,10 +361,16 @@ class Quiv(QuivBase):
             )
             return
 
-        job_id = self.persistence.create_job(task.id, task.task_name)
+        job_id = self.persistence.create_job(
+            task.id, task.task_name, attempt=task.retry_attempt + 1
+        )
         stop_event = threading.Event()
         with self._registries_lock:
             self.stop_events[job_id] = stop_event
+            if task.timeout_seconds is not None:
+                self._job_deadlines[job_id] = (
+                    time.monotonic() + task.timeout_seconds
+                )
 
         f_args, f_kwargs = self.execution.prepare_invocation(
             task_id=task.id,
@@ -398,23 +469,40 @@ class Quiv(QuivBase):
             _current_quiv.reset(ctx_token)
             with self._registries_lock:
                 stop_event = self.stop_events.pop(job_id, None)
+                self._job_deadlines.pop(job_id, None)
+                timed_out = job_id in self._timed_out_jobs
+                self._timed_out_jobs.discard(job_id)
             if stop_event is not None and stop_event.is_set():
                 status = JobStatus.CANCELLED
+            # Cancelled overrides failed (above) — a job that both raised
+            # and was cancelled must not retry.
+            job_failed = status == JobStatus.FAILED
 
             error_message = str(job_error) if job_error is not None else None
+            if (
+                timed_out
+                and status == JobStatus.CANCELLED
+                and error_message is None
+            ):
+                error_message = (
+                    "Job exceeded timeout of"
+                    f" {task_snapshot.timeout_seconds}s"
+                )
             self.persistence.finalize_job(
                 job_id,
                 status,
                 duration_seconds=duration.total_seconds(),
                 error_message=error_message,
             )
-            self.persistence.finalize_task_after_job(task_id, start_time)
+            will_retry = self.persistence.finalize_task_after_job(
+                task_id, start_time, job_failed
+            )
             with self._job_count_lock:
                 self._active_job_count -= 1
             # A freed slot lets deferred-due tasks dispatch, and the task's
             # freshly computed next_run_at may precede the loop's sleep.
             self._wake_loop()
-            if run_once:
+            if run_once and not will_retry:
                 with self._registries_lock:
                     self.registry.pop(task_id, None)
                     self.progress_callbacks.pop(task_id, None)
@@ -428,4 +516,8 @@ class Quiv(QuivBase):
             if status in event_map:
                 self._emit_event(
                     event_map[status], task_snapshot, finalized_job
+                )
+            if will_retry:
+                self._emit_event(
+                    Event.JOB_RETRYING, task_snapshot, finalized_job
                 )

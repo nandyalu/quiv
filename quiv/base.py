@@ -155,6 +155,8 @@ class QuivBase(ABC):
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
         self.stop_events: dict[str, threading.Event] = {}
+        self._job_deadlines: dict[str, float] = {}  # job_id -> monotonic
+        self._timed_out_jobs: set[str] = set()
         self._registries_lock = threading.Lock()
         self._wake_event = threading.Event()
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}

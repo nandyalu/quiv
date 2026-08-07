@@ -39,6 +39,8 @@ This is the riskiest change on the roadmap, so it gets its own phase with a dedi
 
 ## Phase 4 — Execution Features (`v0.8.0`)
 
+**Status: ✅ complete** — implemented 2026-08-06, ships as `v0.8.0`.
+
 These features all touch the `add_task()` signature and the job-finalize path, and timeout enforcement rides on Phase 2's deadline-aware loop — so they ship together.
 
 1. **Per-task timeout** — a `timeout` parameter on `add_task()`. The scheduler loop tracks running-job deadlines; on expiry it sets the job's stop event so the handler can exit cooperatively, consistent with the existing cancellation model.
