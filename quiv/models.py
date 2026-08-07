@@ -99,6 +99,8 @@ class Event(str, Enum):
         JOB_COMPLETED (str): Fired when a job finishes successfully.
         JOB_FAILED (str): Fired when a job ends with an exception.
         JOB_CANCELLED (str): Fired when a job is cancelled via stop event.
+        JOB_RETRYING (str): Fired after ``JOB_FAILED`` when a retry has
+            been scheduled for the failed job's task.
     """
 
     TASK_ADDED = "task_added"
@@ -109,6 +111,7 @@ class Event(str, Enum):
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
     JOB_CANCELLED = "job_cancelled"
+    JOB_RETRYING = "job_retrying"
 
 
 class TaskStatus(str, Enum):
@@ -162,6 +165,13 @@ class TaskDB(QuivModelBase, table=True):
         run_once (bool): Whether task should execute only once.
         status (str): Task status string.
         next_run_at (datetime): Next scheduled UTC run timestamp.
+        timeout_seconds (float, Optional=None): Cooperative timeout for
+            each job; ``None`` disables timeout enforcement.
+        max_retries (int): Maximum consecutive retries after failures.
+        retry_backoff_seconds (float): Base delay for exponential backoff.
+        retry_attempt (int): Consecutive-failure counter (internal).
+        jitter_seconds (float): Upper bound of random offset added to each
+            recurring next-run time.
     """
 
     __tablename__: str = "quiv_task"  # type: ignore
@@ -175,6 +185,11 @@ class TaskDB(QuivModelBase, table=True):
     run_once: bool = False
     status: str = TaskStatus.ACTIVE
     next_run_at: datetime = Field(default_factory=next_run_time)
+    timeout_seconds: float | None = None
+    max_retries: int = 0
+    retry_backoff_seconds: float = 30.0
+    retry_attempt: int = 0
+    jitter_seconds: float = 0.0
 
     @field_serializer("args", "kwargs")
     @classmethod
@@ -211,6 +226,14 @@ class Task(BaseModel):
         run_once (bool): Whether task executes only once.
         status (str): Task status string.
         next_run_at (datetime): Next scheduled UTC run timestamp.
+        timeout_seconds (float, Optional=None): Cooperative timeout for
+            each job; ``None`` disables timeout enforcement.
+        max_retries (int): Maximum consecutive retries after failures.
+        retry_backoff_seconds (float): Base delay for exponential backoff.
+        retry_attempt (int): Consecutive-failure counter; resets to 0 on
+            success or when retries are exhausted.
+        jitter_seconds (float): Upper bound of random offset added to each
+            recurring next-run time.
     """
 
     model_config = {"from_attributes": True}
@@ -224,6 +247,11 @@ class Task(BaseModel):
     run_once: bool
     status: str
     next_run_at: datetime
+    timeout_seconds: float | None = None
+    max_retries: int = 0
+    retry_backoff_seconds: float = 30.0
+    retry_attempt: int = 0
+    jitter_seconds: float = 0.0
 
     @model_validator(mode="before")
     @classmethod
@@ -272,6 +300,11 @@ class Task(BaseModel):
                 "next_run_at": QuivModelBase.set_timezone_to_utc(
                     data.next_run_at
                 ),
+                "timeout_seconds": data.timeout_seconds,
+                "max_retries": data.max_retries,
+                "retry_backoff_seconds": data.retry_backoff_seconds,
+                "retry_attempt": data.retry_attempt,
+                "jitter_seconds": data.jitter_seconds,
             }
 
         return data
@@ -290,6 +323,8 @@ class Job(QuivModelBase, table=True):
         ended_at (datetime, Optional=None): UTC end timestamp when available.
         duration_seconds (float, Optional=None): Job duration in seconds.
         error_message (str, Optional=None): Error message if job failed.
+        attempt (int): Attempt number for the task's current run cycle;
+            1 = first try, 2 = first retry, and so on.
     """
 
     __tablename__: str = "quiv_job"  # type: ignore
@@ -302,3 +337,4 @@ class Job(QuivModelBase, table=True):
     ended_at: datetime | None = None
     duration_seconds: float | None = None
     error_message: str | None = None
+    attempt: int = 1

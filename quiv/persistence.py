@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -49,6 +50,10 @@ class PersistenceLayer:
         next_run_at: datetime,
         args_pickled: bytes,
         kwargs_pickled: bytes,
+        timeout: float | None = None,
+        max_retries: int = 0,
+        retry_backoff: float = 30.0,
+        jitter: float = 0.0,
     ) -> str:
         """Insert a new scheduled task.
 
@@ -60,6 +65,10 @@ class PersistenceLayer:
             next_run_at (datetime): Next UTC run timestamp.
             args_pickled (bytes): Pickle-encoded positional args.
             kwargs_pickled (bytes): Pickle-encoded keyword args.
+            timeout (float, Optional=None): Cooperative per-job timeout.
+            max_retries (int, Optional=0): Maximum consecutive retries.
+            retry_backoff (float, Optional=30.0): Base backoff delay.
+            jitter (float, Optional=0.0): Random next-run offset bound.
         Returns:
             str: Task id string (UUID).
         """
@@ -73,6 +82,10 @@ class PersistenceLayer:
                 fixed_interval=fixed_interval,
                 args=args_pickled,
                 kwargs=kwargs_pickled,
+                timeout_seconds=timeout,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff,
+                jitter_seconds=jitter,
             )
             session.add(task)
             session.commit()
@@ -297,12 +310,16 @@ class PersistenceLayer:
                 value = value.replace(tzinfo=timezone.utc)
             return value
 
-    def create_job(self, task_id: str, task_name: str) -> str:
+    def create_job(
+        self, task_id: str, task_name: str, attempt: int = 1
+    ) -> str:
         """Create a scheduled job record for a task.
 
         Args:
             task_id (str): Source task identifier.
             task_name (str): Name of the task.
+            attempt (int, Optional=1): Attempt number; 1 = first try,
+                2 = first retry, and so on.
 
         Returns:
             str: Newly created job id (UUID string).
@@ -313,6 +330,7 @@ class PersistenceLayer:
                 task_id=task_id,
                 task_name=task_name,
                 status=JobStatus.SCHEDULED,
+                attempt=attempt,
             )
             session.add(job)
             session.commit()
@@ -336,12 +354,20 @@ class PersistenceLayer:
             session.commit()
 
     def finalize_task_after_job(
-        self, task_id: str, job_started_at: datetime
-    ) -> None:
+        self, task_id: str, job_started_at: datetime, job_failed: bool
+    ) -> bool:
         """Update task state after job completion.
 
-        For run-once tasks, deletes the task row. For recurring tasks,
-        sets status back to active and schedules the next run.
+        On failure with retries remaining, schedules the next run at
+        ``now + retry_backoff * 2**(failures_so_far - 1)`` (exponential
+        backoff) and increments the consecutive-failure counter. A
+        successful run — or exhausting retries — resets the counter;
+        exhausted recurring tasks fall back to their normal interval
+        schedule.
+
+        Otherwise, for run-once tasks, deletes the task row. For
+        recurring tasks, sets status back to active and schedules the
+        next run.
 
         When ``fixed_interval`` is ``True``, the next run is aligned to
         the next interval boundary after now, measured from
@@ -351,30 +377,57 @@ class PersistenceLayer:
         When ``fixed_interval`` is ``False``, the next run is simply
         ``now + interval``.
 
+        When ``jitter_seconds > 0``, adds ``uniform(0, jitter_seconds)``
+        to the recurring next-run time (not to retry backoff).
+
         Args:
             task_id (str): Task identifier.
             job_started_at (datetime): UTC time when the job started.
+            job_failed (bool): Whether the job ended in FAILED status.
+
+        Returns:
+            bool: ``True`` when a retry was scheduled.
         """
 
         with self._write_lock, Session(self._engine) as session:
             existing = session.get(TaskDB, task_id)
             if existing is None:
-                return  # run-once task already deleted, or task was removed
+                # run-once task already deleted, or task was removed
+                return False
+
+            now = self._now_utc()
+            if job_failed and existing.retry_attempt < existing.max_retries:
+                existing.retry_attempt += 1
+                backoff = existing.retry_backoff_seconds * (
+                    2 ** (existing.retry_attempt - 1)
+                )
+                existing.status = TaskStatus.ACTIVE
+                existing.next_run_at = now + timedelta(seconds=backoff)
+                session.commit()
+                return True
+
+            existing.retry_attempt = 0
             if existing.run_once:
                 session.delete(existing)
+                session.commit()
+                return False
+
+            existing.status = TaskStatus.ACTIVE
+            interval = existing.interval_seconds
+            if existing.fixed_interval:
+                elapsed = (now - job_started_at).total_seconds()
+                periods = math.ceil(elapsed / interval)
+                existing.next_run_at = job_started_at + timedelta(
+                    seconds=periods * interval
+                )
             else:
-                existing.status = TaskStatus.ACTIVE
-                now = self._now_utc()
-                interval = existing.interval_seconds
-                if existing.fixed_interval:
-                    elapsed = (now - job_started_at).total_seconds()
-                    periods = math.ceil(elapsed / interval)
-                    existing.next_run_at = job_started_at + timedelta(
-                        seconds=periods * interval
-                    )
-                else:
-                    existing.next_run_at = now + timedelta(seconds=interval)
+                existing.next_run_at = now + timedelta(seconds=interval)
+            if existing.jitter_seconds > 0:
+                existing.next_run_at += timedelta(
+                    seconds=random.uniform(0, existing.jitter_seconds)
+                )
             session.commit()
+            return False
 
     def mark_job_running(self, job_id: str) -> None:
         """Transition a job to running state and set start time.

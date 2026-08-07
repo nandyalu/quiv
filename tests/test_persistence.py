@@ -86,7 +86,7 @@ def test_finalize_task_after_job_run_once_removes_task(
             run_once=True,
         )
         assert task_id is not None
-        scheduler.persistence.finalize_task_after_job(task_id, scheduler._now_utc())
+        scheduler.persistence.finalize_task_after_job(task_id, scheduler._now_utc(), job_failed=False)
         tasks = scheduler.get_all_tasks(include_run_once=True)
         assert all(task.id != task_id for task in tasks)
     finally:
@@ -228,7 +228,7 @@ def test_finalize_task_after_job_updates_recurring_next_run(
         )
         assert task_id is not None
         start_time = scheduler._now_utc()
-        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time, job_failed=False)
         tasks = scheduler.get_all_tasks(include_run_once=True)
         task = next(item for item in tasks if item.id == task_id)
         task_next = (
@@ -264,7 +264,7 @@ def test_finalize_task_fixed_interval_schedules_from_start(
 
         # Simulate job that started 5s ago
         start_time = scheduler._now_utc() - timedelta(seconds=5)
-        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time, job_failed=False)
 
         task_after = next(
             t for t in scheduler.get_all_tasks(include_run_once=True)
@@ -305,7 +305,7 @@ def test_finalize_task_fixed_interval_skips_missed_intervals(
 
         # Simulate job that started 70s ago (missed one interval)
         start_time = scheduler._now_utc() - timedelta(seconds=70)
-        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time, job_failed=False)
 
         task_after = next(
             t for t in scheduler.get_all_tasks(include_run_once=True)
@@ -323,7 +323,7 @@ def test_finalize_task_fixed_interval_skips_missed_intervals(
         # Simulate job that started 130s ago (missed two intervals)
         scheduler.persistence.mark_task_running(task_id)
         start_time_2 = scheduler._now_utc() - timedelta(seconds=130)
-        scheduler.persistence.finalize_task_after_job(task_id, start_time_2)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time_2, job_failed=False)
 
         task_after_2 = next(
             t for t in scheduler.get_all_tasks(include_run_once=True)
@@ -363,7 +363,7 @@ def test_finalize_task_wait_between_runs_schedules_from_completion(
 
         now_before = scheduler._now_utc()
         start_time = now_before - timedelta(seconds=5)
-        scheduler.persistence.finalize_task_after_job(task_id, start_time)
+        scheduler.persistence.finalize_task_after_job(task_id, start_time, job_failed=False)
         now_after = scheduler._now_utc()
 
         task_after = next(
@@ -432,5 +432,56 @@ def test_get_next_due_time_none_when_all_paused(
         )
         scheduler.pause_task(task_id)
         assert scheduler.persistence.get_next_due_time() is None
+    finally:
+        scheduler.shutdown()
+
+
+def test_jitter_offsets_next_run(
+    running_main_loop: asyncio.AbstractEventLoop,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import quiv.persistence as persistence_module
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="jittered",
+            func=lambda: None,
+            interval=100,
+            jitter=5,
+            delay=0,
+        )
+        monkeypatch.setattr(
+            persistence_module.random, "uniform", lambda a, b: 3.25
+        )
+        start_time = scheduler._now_utc()
+        scheduler.persistence.finalize_task_after_job(
+            task_id, start_time, job_failed=False
+        )
+        task = scheduler.get_task(task_id)
+        expected = start_time + timedelta(seconds=100 + 3.25)
+        assert abs((task.next_run_at - expected).total_seconds()) < 0.001
+    finally:
+        scheduler.shutdown()
+
+
+def test_zero_jitter_next_run_exactly_on_boundary(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="no-jitter",
+            func=lambda: None,
+            interval=100,
+            delay=0,
+        )
+        start_time = scheduler._now_utc()
+        scheduler.persistence.finalize_task_after_job(
+            task_id, start_time, job_failed=False
+        )
+        task = scheduler.get_task(task_id)
+        expected = start_time + timedelta(seconds=100)
+        assert abs((task.next_run_at - expected).total_seconds()) < 0.001
     finally:
         scheduler.shutdown()

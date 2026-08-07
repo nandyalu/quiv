@@ -53,6 +53,10 @@ add_task(
     delay: float = 0,
     run_once: bool = False,
     fixed_interval: bool = True,
+    timeout: float | None = None,
+    max_retries: int = 0,
+    retry_backoff: float = 30.0,
+    jitter: float = 0.0,
     args: tuple | None = None,
     kwargs: dict | None = None,
     progress_callback: Callable[..., Any] | None = None,
@@ -76,6 +80,12 @@ Validation:
 - `task_name` must not be empty
 - `interval > 0` — sub-second intervals (e.g. `interval=0.2`) are supported
 - `delay >= 0`
+- `timeout > 0` when provided
+- `max_retries >= 0`
+- `retry_backoff > 0`
+- `jitter >= 0`
+
+Failure handling: `timeout` cooperatively cancels jobs that run too long, `max_retries`/`retry_backoff` re-run failed jobs with exponential backoff, and `jitter` de-synchronizes recurring schedules — see [Failure Handling](failure-handling.md) for full semantics.
 
 !!! note "Duplicate task names are allowed"
     Multiple tasks can share the same `task_name`. Each call to `add_task()` returns a unique `task_id` (UUID) which is the identifier used for all task operations. `task_name` is a display label, not a unique key.

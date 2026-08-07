@@ -32,6 +32,11 @@ task_id = scheduler.add_task(
     run_once=False,            # True = run once, then the task row is deleted
     fixed_interval=True,       # True: next run aligned to start-time cadence (missed slots skipped)
                                # False: next run = completion time + interval
+    timeout=None,              # seconds; cooperative — sets the job's stop event,
+                               # job finalizes as cancelled with a timeout message
+    max_retries=0,             # retries for FAILED jobs only (cancelled never retries)
+    retry_backoff=30.0,        # base seconds; exponential: 1x, 2x, 4x, ...
+    jitter=0.0,                # adds uniform(0, jitter)s to recurring next-run times
     args=(),                   # tuple, pickle-serialized (no lambdas/inner functions)
     kwargs={},
     progress_callback=None,    # sync or async; runs on the main asyncio loop
@@ -103,7 +108,7 @@ def on_job_failed(event, task, job):   # JOB_* -> (event, task, job); TASK_* -> 
 scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
-Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`. Sync or async callbacks; exceptions in listeners are logged and swallowed.
+Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_RETRYING` (fires after `JOB_FAILED` when a retry was scheduled). Sync or async callbacks; exceptions in listeners are logged and swallowed.
 
 ## Canonical FastAPI wiring
 

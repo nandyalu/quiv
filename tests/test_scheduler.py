@@ -1020,3 +1020,418 @@ def test_saturated_pool_does_not_busy_poll_db(
     finally:
         release.set()
         scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: timeout / retry / jitter
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_jobs(
+    scheduler: Quiv,
+    status: JobStatus,
+    count: int,
+    timeout: float = 5.0,
+) -> list[Any]:
+    deadline = time.monotonic() + timeout
+    jobs: list[Any] = []
+    while time.monotonic() < deadline:
+        jobs = scheduler.get_all_jobs(status=status)
+        if len(jobs) >= count:
+            break
+        time.sleep(0.05)
+    return jobs
+
+
+def test_add_task_validates_execution_params(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        for bad_kwargs in (
+            {"timeout": 0},
+            {"timeout": -1},
+            {"max_retries": -1},
+            {"retry_backoff": 0},
+            {"jitter": -0.1},
+        ):
+            with pytest.raises(ConfigurationError):
+                scheduler.add_task(
+                    task_name="bad",
+                    func=lambda: None,
+                    interval=5,
+                    **bad_kwargs,
+                )
+    finally:
+        scheduler.shutdown()
+
+
+def test_new_task_fields_round_trip(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="full-featured",
+            func=lambda: None,
+            interval=60,
+            timeout=12.5,
+            max_retries=4,
+            retry_backoff=1.5,
+            jitter=2.0,
+        )
+        for task in (scheduler.get_task(task_id), *[
+            t for t in scheduler.get_all_tasks() if t.id == task_id
+        ]):
+            assert task.timeout_seconds == 12.5
+            assert task.max_retries == 4
+            assert task.retry_backoff_seconds == 1.5
+            assert task.jitter_seconds == 2.0
+            assert task.retry_attempt == 0
+    finally:
+        scheduler.shutdown()
+
+
+def test_timeout_cancels_cooperative_handler(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def cooperative(_stop_event: threading.Event) -> None:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if _stop_event.wait(0.05):
+                    return
+
+        t0 = time.monotonic()
+        scheduler.add_task(
+            task_name="slow-cooperative",
+            func=cooperative,
+            interval=60,
+            run_once=True,
+            timeout=0.5,
+        )
+        scheduler.start()
+
+        jobs = _wait_for_jobs(scheduler, JobStatus.CANCELLED, 1)
+        elapsed = time.monotonic() - t0
+        assert len(jobs) == 1, "job was not cancelled by timeout"
+        assert jobs[0].error_message is not None
+        assert "timeout" in jobs[0].error_message
+        assert elapsed < 3, f"timeout cancellation took {elapsed:.2f}s"
+    finally:
+        scheduler.shutdown()
+
+
+def test_timeout_fires_promptly_during_long_loop_sleep(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        cancelled_at: dict[str, float] = {}
+
+        def cooperative(_stop_event: threading.Event) -> None:
+            if _stop_event.wait(10):
+                cancelled_at["t"] = time.monotonic()
+
+        scheduler.add_task(
+            task_name="lonely",
+            func=cooperative,
+            interval=3600,
+            run_once=True,
+            timeout=0.6,
+        )
+        t0 = time.monotonic()
+        scheduler.start()
+
+        jobs = _wait_for_jobs(scheduler, JobStatus.CANCELLED, 1)
+        assert len(jobs) == 1, "job was not cancelled by timeout"
+        latency = cancelled_at["t"] - t0
+        assert 0.3 < latency < 1.3, (
+            f"timeout fired {latency:.2f}s after start; expected ~0.6s"
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_no_timeout_means_no_deadline(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        running = threading.Event()
+
+        def handler(_stop_event: threading.Event) -> None:
+            running.set()
+            _stop_event.wait(2)
+
+        scheduler.add_task(
+            task_name="no-timeout",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert running.wait(timeout=3)
+        with scheduler._registries_lock:
+            assert not scheduler._job_deadlines
+    finally:
+        scheduler.shutdown(timeout=1)
+
+
+def test_timeout_ignoring_handler_still_finalizes_cancelled(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task(
+            task_name="stubborn",
+            func=lambda: time.sleep(1),
+            interval=60,
+            run_once=True,
+            timeout=0.2,
+        )
+        scheduler.start()
+
+        jobs = _wait_for_jobs(scheduler, JobStatus.CANCELLED, 1)
+        assert len(jobs) == 1, "job did not finalize as cancelled"
+        assert jobs[0].error_message is not None
+        assert "timeout" in jobs[0].error_message
+    finally:
+        scheduler.shutdown()
+
+
+def test_failed_job_retries_then_succeeds(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    calls: list[int] = []
+    try:
+        def flaky() -> None:
+            calls.append(len(calls) + 1)
+            if len(calls) < 3:
+                raise RuntimeError(f"boom {len(calls)}")
+
+        task_id = scheduler.add_task(
+            task_name="flaky",
+            func=flaky,
+            interval=60,
+            run_once=True,
+            max_retries=3,
+            retry_backoff=0.1,
+        )
+        scheduler.start()
+
+        completed = _wait_for_jobs(scheduler, JobStatus.COMPLETED, 1)
+        assert len(completed) == 1
+        failed = scheduler.get_all_jobs(status=JobStatus.FAILED)
+        assert len(failed) == 2
+        attempts = sorted(
+            job.attempt for job in (*failed, *completed)
+        )
+        assert attempts == [1, 2, 3]
+        from quiv.exceptions import TaskNotFoundError
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                scheduler.get_task(task_id)
+                time.sleep(0.05)
+            except TaskNotFoundError:
+                break
+        with pytest.raises(TaskNotFoundError):
+            scheduler.get_task(task_id)
+    finally:
+        scheduler.shutdown()
+
+
+def test_retries_exhausted_run_once_deletes_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def always_fails() -> None:
+            raise RuntimeError("always")
+
+        task_id = scheduler.add_task(
+            task_name="doomed",
+            func=always_fails,
+            interval=60,
+            run_once=True,
+            max_retries=1,
+            retry_backoff=0.1,
+        )
+        scheduler.start()
+
+        failed = _wait_for_jobs(scheduler, JobStatus.FAILED, 2)
+        assert len(failed) == 2
+        from quiv.exceptions import TaskNotFoundError
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                scheduler.get_task(task_id)
+                time.sleep(0.05)
+            except TaskNotFoundError:
+                break
+        with pytest.raises(TaskNotFoundError):
+            scheduler.get_task(task_id)
+    finally:
+        scheduler.shutdown()
+
+
+def test_retries_exhausted_recurring_returns_to_schedule(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def always_fails() -> None:
+            raise RuntimeError("always")
+
+        task_id = scheduler.add_task(
+            task_name="doomed-recurring",
+            func=always_fails,
+            interval=0.3,
+            max_retries=1,
+            retry_backoff=0.1,
+        )
+        scheduler.start()
+
+        failed = _wait_for_jobs(scheduler, JobStatus.FAILED, 2)
+        assert len(failed) >= 2
+
+        deadline = time.monotonic() + 3
+        task = None
+        while time.monotonic() < deadline:
+            task = scheduler.get_task(task_id)
+            if task.retry_attempt == 0 and task.status == TaskStatus.ACTIVE:
+                break
+            time.sleep(0.05)
+        assert task is not None
+        assert task.status == TaskStatus.ACTIVE
+        assert task.retry_attempt == 0
+    finally:
+        scheduler.shutdown()
+
+
+def test_job_retrying_event_emitted(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import Event
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    payloads: list[tuple[Any, ...]] = []
+    try:
+        def listener(event: Any, task: Any, job: Any) -> None:
+            payloads.append((event, task, job))
+
+        scheduler.add_listener(Event.JOB_RETRYING, listener)
+
+        def always_fails() -> None:
+            raise RuntimeError("always")
+
+        scheduler.add_task(
+            task_name="retry-events",
+            func=always_fails,
+            interval=60,
+            run_once=True,
+            max_retries=2,
+            retry_backoff=0.1,
+        )
+        scheduler.start()
+
+        failed = _wait_for_jobs(scheduler, JobStatus.FAILED, 3)
+        assert len(failed) == 3
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and len(payloads) < 2:
+            time.sleep(0.05)
+        # 3 failures, 2 scheduled retries -> exactly 2 JOB_RETRYING events
+        assert len(payloads) == 2
+        for event, _task, job in payloads:
+            assert event == Event.JOB_RETRYING
+            assert job.status == JobStatus.FAILED
+    finally:
+        scheduler.shutdown()
+
+
+def test_cancelled_job_does_not_retry(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        started = threading.Event()
+
+        def cooperative(_stop_event: threading.Event) -> None:
+            started.set()
+            _stop_event.wait(5)
+            raise RuntimeError("raised after cancel")
+
+        task_id = scheduler.add_task(
+            task_name="cancel-no-retry",
+            func=cooperative,
+            interval=60,
+            max_retries=3,
+            retry_backoff=0.1,
+        )
+        scheduler.start()
+        assert started.wait(timeout=3)
+
+        running_jobs = scheduler.get_all_jobs(status=JobStatus.RUNNING)
+        assert running_jobs, "no running job found"
+        assert running_jobs[0].id is not None
+        assert scheduler.cancel_job(running_jobs[0].id)
+
+        cancelled = _wait_for_jobs(scheduler, JobStatus.CANCELLED, 1)
+        assert len(cancelled) == 1
+
+        task = scheduler.get_task(task_id)
+        assert task.retry_attempt == 0
+        # next_run_at follows the normal interval, not the 0.1s backoff:
+        # no FAILED job may ever appear.
+        assert not scheduler.get_all_jobs(status=JobStatus.FAILED)
+    finally:
+        scheduler.shutdown()
+
+
+def test_backoff_delay_grows(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def always_fails() -> None:
+            raise RuntimeError("always")
+
+        task_id = scheduler.add_task(
+            task_name="growing-backoff",
+            func=always_fails,
+            interval=60,
+            run_once=True,
+            max_retries=2,
+            retry_backoff=0.2,
+        )
+        scheduler.start()
+
+        gaps: list[float] = []
+        seen_attempts: set[int] = set()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and len(seen_attempts) < 2:
+            try:
+                task = scheduler.get_task(task_id)
+            except Exception:
+                break
+            if task.retry_attempt > 0 and task.retry_attempt not in seen_attempts:
+                seen_attempts.add(task.retry_attempt)
+                failed = scheduler.get_all_jobs(status=JobStatus.FAILED)
+                latest = max(failed, key=lambda j: j.ended_at or j.started_at)
+                assert latest.ended_at is not None
+                gaps.append(
+                    (task.next_run_at - latest.ended_at).total_seconds()
+                )
+            time.sleep(0.02)
+
+        assert len(gaps) == 2, f"observed retry gaps: {gaps}"
+        assert 0.05 <= gaps[0] <= 0.35, f"first backoff {gaps[0]:.3f}s"
+        assert 0.25 <= gaps[1] <= 0.55, f"second backoff {gaps[1]:.3f}s"
+    finally:
+        scheduler.shutdown()
