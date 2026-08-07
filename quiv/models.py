@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import pickle
@@ -95,6 +96,7 @@ class Event(str, Enum):
         TASK_REMOVED (str): Fired after a task is removed via ``remove_task()``.
         TASK_PAUSED (str): Fired after a task is paused via ``pause_task()``.
         TASK_RESUMED (str): Fired after a task is resumed via ``resume_task()``.
+        TASK_UPDATED (str): Fired after a task is mutated via ``update_task()``.
         JOB_STARTED (str): Fired when a job begins execution.
         JOB_COMPLETED (str): Fired when a job finishes successfully.
         JOB_FAILED (str): Fired when a job ends with an exception.
@@ -107,6 +109,7 @@ class Event(str, Enum):
     TASK_REMOVED = "task_removed"
     TASK_PAUSED = "task_paused"
     TASK_RESUMED = "task_resumed"
+    TASK_UPDATED = "task_updated"
     JOB_STARTED = "job_started"
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
@@ -308,6 +311,29 @@ class Task(BaseModel):
             }
 
         return data
+
+
+@dataclass(frozen=True)
+class QuivStats:
+    """Point-in-time scheduler statistics snapshot.
+
+    Attributes:
+        active_jobs (int): Jobs currently executing.
+        pool_size (int): Thread-pool size.
+        pool_utilization (float): ``active_jobs / pool_size``, 0.0-1.0.
+        tasks_by_status (dict[str, int]): Task counts keyed by status,
+            e.g. ``{"active": 3, "paused": 1}``.
+        next_run_at (datetime | None): Earliest upcoming run (UTC), or
+            ``None`` when no active task exists.
+        job_history_count (int): Job rows currently retained.
+    """
+
+    active_jobs: int
+    pool_size: int
+    pool_utilization: float
+    tasks_by_status: dict[str, int]
+    next_run_at: datetime | None
+    job_history_count: int
 
 
 class Job(QuivModelBase, table=True):

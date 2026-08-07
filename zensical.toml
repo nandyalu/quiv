@@ -58,6 +58,7 @@ nav = [
   { "Event Listeners" = "event-listeners.md" },
   { "Cancellation" = "cancellation.md" },
   { "Failure Handling" = "failure-handling.md" },
+  { "Observability" = "observability.md" },
   { "Exceptions" = "exceptions.md" },
   { "Tests" = "testing.md" },
   { "AI Tools" = "ai-tools.md" },

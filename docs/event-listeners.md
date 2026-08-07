@@ -41,6 +41,7 @@ All events are defined in the `Event` enum:
 | `TASK_REMOVED` | After `remove_task()` completes | `event`, `task`[^1] |
 | `TASK_PAUSED` | After `pause_task()` completes | `event`, `task` |
 | `TASK_RESUMED` | After `resume_task()` completes | `event`, `task` |
+| `TASK_UPDATED` | After a task is mutated via `update_task()` (payload carries the post-update task) | `event`, `task` |
 | `JOB_STARTED` | When a job begins execution | `event`, `task`, `job` |
 | `JOB_COMPLETED` | When a job finishes successfully | `event`, `task`, `job` |
 | `JOB_FAILED` | When a job ends with an exception | `event`, `task`, `job` |

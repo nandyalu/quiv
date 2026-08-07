@@ -487,6 +487,147 @@ def test_zero_jitter_next_run_exactly_on_boundary(
         scheduler.shutdown()
 
 
+# ---------------------------------------------------------------------------
+# Phase 5: rich job/task queries
+# ---------------------------------------------------------------------------
+
+
+def _seed_jobs_at_controlled_times(scheduler: Quiv) -> tuple[str, str, list[str]]:
+    """Create two tasks and four finalized jobs at stepped timestamps.
+
+    Returns (task_a_id, task_b_id, job_ids ordered by started_at asc).
+    """
+    from datetime import datetime, timezone
+
+    from quiv.persistence import PersistenceLayer
+
+    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    current = {"now": base}
+    fake_persistence = PersistenceLayer(
+        scheduler._engine, lambda: current["now"]
+    )
+
+    task_a = scheduler.add_task(
+        task_name="query-a", func=lambda: None, interval=60
+    )
+    task_b = scheduler.add_task(
+        task_name="query-b", func=lambda: None, interval=60
+    )
+
+    job_ids = []
+    for i, (task_id, status) in enumerate(
+        [
+            (task_a, JobStatus.COMPLETED),
+            (task_a, JobStatus.FAILED),
+            (task_b, JobStatus.COMPLETED),
+            (task_b, JobStatus.COMPLETED),
+        ]
+    ):
+        current["now"] = base + timedelta(minutes=i)
+        job_id = fake_persistence.create_job(task_id, "seeded")
+        fake_persistence.mark_job_running(job_id)
+        fake_persistence.finalize_job(job_id, status)
+        job_ids.append(job_id)
+    return task_a, task_b, job_ids
+
+
+def test_get_all_jobs_filters_by_task_and_window(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from datetime import datetime, timezone
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_a, task_b, job_ids = _seed_jobs_at_controlled_times(scheduler)
+        base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        by_task = scheduler.get_all_jobs(task_id=task_a)
+        assert {job.id for job in by_task} == set(job_ids[:2])
+
+        windowed = scheduler.get_all_jobs(
+            since=base + timedelta(minutes=1),
+            until=base + timedelta(minutes=2),
+        )
+        assert {job.id for job in windowed} == set(job_ids[1:3])
+
+        combined = scheduler.get_all_jobs(
+            status=JobStatus.COMPLETED, task_id=task_b
+        )
+        assert {job.id for job in combined} == set(job_ids[2:])
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_jobs_ordering_and_validation(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.exceptions import ConfigurationError
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        _, _, job_ids = _seed_jobs_at_controlled_times(scheduler)
+
+        ascending = scheduler.get_all_jobs(
+            order_by="started_at", descending=False
+        )
+        assert [job.id for job in ascending] == job_ids
+
+        descending = scheduler.get_all_jobs(order_by="started_at")
+        assert [job.id for job in descending] == list(reversed(job_ids))
+
+        by_ended = scheduler.get_all_jobs(
+            order_by="ended_at", descending=False
+        )
+        assert [job.id for job in by_ended] == job_ids
+
+        with pytest.raises(ConfigurationError):
+            scheduler.get_all_jobs(order_by="task_name")
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_jobs_limit_offset_slice(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        _, _, job_ids = _seed_jobs_at_controlled_times(scheduler)
+        middle = scheduler.get_all_jobs(
+            order_by="started_at", descending=False, limit=2, offset=1
+        )
+        assert [job.id for job in middle] == job_ids[1:3]
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_tasks_status_filter_and_pagination(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import TaskStatus
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        ids = [
+            scheduler.add_task(
+                task_name=f"page-{i}",
+                func=lambda: None,
+                interval=60,
+                delay=i * 10,
+            )
+            for i in range(4)
+        ]
+        scheduler.pause_task(ids[3])
+
+        paused = scheduler.get_all_tasks(status=TaskStatus.PAUSED)
+        assert [task.id for task in paused] == [ids[3]]
+
+        # Ordered by next_run_at ascending; slice the middle two.
+        page = scheduler.get_all_tasks(limit=2, offset=1)
+        assert [task.id for task in page] == ids[1:3]
+    finally:
+        scheduler.shutdown()
+
+
 def test_fixed_interval_next_run_is_strictly_future_at_boundaries(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

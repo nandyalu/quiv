@@ -1490,3 +1490,168 @@ def test_timeout_message_leads_when_handler_also_raises(
         assert "aborted by handler" in message
     finally:
         scheduler.shutdown()
+
+# ---------------------------------------------------------------------------
+# Phase 5: update_task
+def test_update_task_changes_interval_and_reschedules(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="slow-cadence",
+            func=lambda: None,
+            interval=100,
+            delay=100,
+        )
+        scheduler.start()
+        time.sleep(0.2)  # loop settles into a long sleep
+
+        scheduler.update_task(task_id, interval=0.2)
+
+        jobs = _wait_for_jobs(scheduler, JobStatus.COMPLETED, 1, timeout=2.0)
+        assert jobs, "no job completed within 2s after interval update"
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_partial_leaves_other_fields(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="partial",
+            func=lambda: None,
+            interval=77,
+            args=(1, 2),
+            kwargs={"a": "b"},
+            max_retries=2,
+        )
+        scheduler.update_task(task_id, jitter=3.5)
+        task = scheduler.get_task(task_id)
+        assert task.jitter_seconds == 3.5
+        assert task.task_name == "partial"
+        assert task.interval_seconds == 77
+        assert task.args == (1, 2)
+        assert task.kwargs == {"a": "b"}
+        assert task.max_retries == 2
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_clears_timeout_with_none(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="had-timeout",
+            func=lambda: None,
+            interval=60,
+            timeout=5,
+        )
+        assert scheduler.get_task(task_id).timeout_seconds == 5
+        scheduler.update_task(task_id, timeout=None)
+        assert scheduler.get_task(task_id).timeout_seconds is None
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_swaps_and_clears_progress_callback(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def original(progress: Any) -> None: ...
+
+        def replacement(progress: Any) -> None: ...
+
+        task_id = scheduler.add_task(
+            task_name="cb",
+            func=lambda: None,
+            interval=60,
+            progress_callback=original,
+        )
+        assert scheduler.progress_callbacks[task_id] is original
+
+        scheduler.update_task(task_id, progress_callback=replacement)
+        assert scheduler.progress_callbacks[task_id] is replacement
+
+        scheduler.update_task(task_id, progress_callback=None)
+        assert task_id not in scheduler.progress_callbacks
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_validates_like_add_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="validated", func=lambda: None, interval=60
+        )
+        for bad_kwargs in (
+            {"interval": 0},
+            {"max_retries": -1},
+            {"args": [1]},
+            {"task_name": "  "},
+            {"timeout": -5},
+            {"retry_backoff": 0},
+            {"jitter": -1},
+        ):
+            with pytest.raises(ConfigurationError):
+                scheduler.update_task(task_id, **bad_kwargs)  # type: ignore[arg-type]
+        # Failed validation must not have mutated anything.
+        task = scheduler.get_task(task_id)
+        assert task.interval_seconds == 60
+        assert task.task_name == "validated"
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_unknown_id_raises(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.exceptions import TaskNotFoundError
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(TaskNotFoundError):
+            scheduler.update_task("missing-id", interval=5)
+        with pytest.raises(TaskNotFoundError):
+            scheduler.update_task("missing-id")
+    finally:
+        scheduler.shutdown()
+
+
+def test_task_updated_event_emitted(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import Event
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    payloads: list[tuple[Any, ...]] = []
+    try:
+        def listener(event: Any, task: Any) -> None:
+            payloads.append((event, task))
+
+        scheduler.add_listener(Event.TASK_UPDATED, listener)
+        task_id = scheduler.add_task(
+            task_name="event-source", func=lambda: None, interval=60
+        )
+        scheduler.update_task(task_id, task_name="renamed", jitter=1.5)
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not payloads:
+            time.sleep(0.02)
+        assert len(payloads) == 1
+        event, task = payloads[0]
+        assert event == Event.TASK_UPDATED
+        # Post-update task on the payload:
+        assert task.task_name == "renamed"
+        assert task.jitter_seconds == 1.5
+    finally:
+        scheduler.shutdown()
+

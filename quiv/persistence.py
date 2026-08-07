@@ -6,15 +6,22 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from sqlalchemy import func
 from sqlmodel import Session, select, col
 
 from .exceptions import (
+    ConfigurationError,
     JobNotFoundError,
     TaskNotActiveError,
     TaskNotFoundError,
     TaskNotScheduledError,
 )
 from .models import Job, JobStatus, TaskDB, TaskStatus
+
+_JOB_ORDER_COLUMNS = {
+    "started_at": Job.started_at,
+    "ended_at": Job.ended_at,
+}
 
 
 class PersistenceLayer:
@@ -108,12 +115,21 @@ class PersistenceLayer:
             session.delete(task)
             session.commit()
 
-    def get_all_tasks(self, include_run_once: bool = False) -> list[TaskDB]:
-        """Fetch all persisted tasks.
+    def get_all_tasks(
+        self,
+        include_run_once: bool = False,
+        status: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[TaskDB]:
+        """Fetch persisted tasks, ordered by ``next_run_at`` ascending.
 
         Args:
             include_run_once (bool, Optional=False):
                 Include single-run tasks when ``True``.
+            status (str, Optional=None): Optional task status filter.
+            limit (int, Optional=None): Maximum rows to return.
+            offset (int, Optional=0): Rows to skip.
 
         Returns:
             list[TaskDB]: A list of task records.
@@ -122,6 +138,13 @@ class PersistenceLayer:
         statement = select(TaskDB)
         if not include_run_once:
             statement = statement.where(col(TaskDB.run_once).is_(False))
+        if status:
+            statement = statement.where(TaskDB.status == status)
+        statement = statement.order_by(col(TaskDB.next_run_at).asc())
+        if limit is not None:
+            statement = statement.limit(limit)
+        if offset > 0:
+            statement = statement.offset(offset)
         with Session(self._engine) as session:
             tasks = list(session.exec(statement).all())
             return tasks
@@ -164,21 +187,118 @@ class PersistenceLayer:
                 raise JobNotFoundError(f"Job '{job_id}' was not found")
             return job
 
-    def get_all_jobs(self, status: str | None = None) -> list[Job]:
-        """Fetch job records, optionally filtered by status.
+    def get_all_jobs(
+        self,
+        status: str | None = None,
+        task_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        order_by: str = "started_at",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Job]:
+        """Fetch job records with optional filters and pagination.
 
         Args:
             status (str, Optional=None): Optional job status filter.
+            task_id (str, Optional=None): Only jobs of this task.
+            since (datetime, Optional=None): Only jobs with
+                ``started_at >= since`` (aware UTC).
+            until (datetime, Optional=None): Only jobs with
+                ``started_at <= until`` (aware UTC).
+            order_by (str, Optional="started_at"): Sort column —
+                ``"started_at"`` or ``"ended_at"``.
+            descending (bool, Optional=True): Sort direction.
+            limit (int, Optional=None): Maximum rows to return.
+            offset (int, Optional=0): Rows to skip.
 
         Returns:
             list[Job]: A list of job records.
+
+        Raises:
+            ConfigurationError: If ``order_by`` is not a supported column.
         """
 
+        if order_by not in _JOB_ORDER_COLUMNS:
+            valid = ", ".join(sorted(_JOB_ORDER_COLUMNS))
+            raise ConfigurationError(
+                f"order_by must be one of: {valid} (got '{order_by}')"
+            )
+        order_column = col(_JOB_ORDER_COLUMNS[order_by])
         with Session(self._engine) as session:
             statement = select(Job)
             if status:
                 statement = statement.where(Job.status == status)
+            if task_id is not None:
+                statement = statement.where(Job.task_id == task_id)
+            if since is not None:
+                statement = statement.where(Job.started_at >= since)
+            if until is not None:
+                statement = statement.where(Job.started_at <= until)
+            statement = statement.order_by(
+                order_column.desc() if descending else order_column.asc()
+            )
+            if limit is not None:
+                statement = statement.limit(limit)
+            if offset > 0:
+                statement = statement.offset(offset)
             return list(session.exec(statement).all())
+
+    def update_task(self, task_id: str, **column_updates: Any) -> None:
+        """Apply concrete column updates to a task row.
+
+        When ``interval_seconds`` is among the updates, ``next_run_at``
+        is rescheduled to ``now + interval``. Callers resolve any
+        not-passed sentinels before this method — it only ever receives
+        concrete column values.
+
+        Args:
+            task_id (str): Task identifier.
+            **column_updates (Any): ``TaskDB`` column names to new values.
+
+        Raises:
+            TaskNotFoundError: If no task with that id exists.
+        """
+
+        with self._write_lock, Session(self._engine) as session:
+            task = session.get(TaskDB, task_id)
+            if task is None:
+                raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            for column, value in column_updates.items():
+                setattr(task, column, value)
+            if "interval_seconds" in column_updates:
+                task.next_run_at = self._now_utc() + timedelta(
+                    seconds=column_updates["interval_seconds"]
+                )
+            session.commit()
+
+    def count_tasks_by_status(self) -> dict[str, int]:
+        """Count task rows grouped by status.
+
+        Returns:
+            dict[str, int]: Task counts keyed by status value.
+        """
+
+        with Session(self._engine) as session:
+            statement = select(TaskDB.status, func.count()).group_by(
+                TaskDB.status
+            )
+            return {
+                status: count
+                for status, count in session.exec(statement).all()
+            }
+
+    def count_jobs(self) -> int:
+        """Count all retained job rows.
+
+        Returns:
+            int: Number of job rows.
+        """
+
+        with Session(self._engine) as session:
+            statement = select(func.count()).select_from(Job)
+            return int(session.exec(statement).one())
 
     def queue_task_for_immediate_run(self, task_id: str) -> int:
         """Mark a scheduled task for immediate execution.

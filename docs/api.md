@@ -110,6 +110,36 @@ Behavior:
 
         **`fixed_interval=False`** — Next run is scheduled `interval` seconds after job **completion**. A task with `interval=3600` that takes 10 minutes to run will have 70-minute gaps between start times.
 
+### `update_task(...)`
+
+```python
+update_task(
+    task_id: str,
+    *,
+    task_name: str = ...,
+    interval: float = ...,
+    fixed_interval: bool = ...,
+    args: tuple = ...,
+    kwargs: dict = ...,
+    timeout: float | None = ...,
+    max_retries: int = ...,
+    retry_backoff: float = ...,
+    jitter: float = ...,
+    progress_callback: Callable[..., Any] | None = ...,
+) -> Task
+```
+
+Mutates a scheduled task in place, preserving its `task_id`. Only the parameters you pass change; everything else is untouched. If `interval` is changed, the next run is rescheduled to `now + interval`. Updating a `running` task is allowed — the changes take effect from the next run. Emits `Event.TASK_UPDATED` with the post-update `Task`.
+
+Because `None` is meaningful (`timeout=None` disables the timeout; `progress_callback=None` clears it), "not passed" is tracked with an internal sentinel — simply omit parameters you don't want to change.
+
+Not updatable: `run_once`, `delay` (initial delay is a creation-time concept), and the handler `func` (remove and re-add the task to change its handler).
+
+Raises:
+
+- `TaskNotFoundError` for unknown ids
+- `ConfigurationError` for invalid values (same rules as `add_task`)
+
 ### `start() -> None` / `startup() -> None`
 
 Starts scheduler background loop thread. Safe to call multiple times.
@@ -189,16 +219,21 @@ Raises:
 
 - `JobNotFoundError` if no job with that ID exists.
 
-### `get_all_tasks(include_run_once: bool = False) -> list[Task]`
+### `get_all_tasks(include_run_once: bool = False, status: str | None = None, limit: int | None = None, offset: int = 0) -> list[Task]`
 
-Returns persisted task rows as [`Task`](#task) objects.
+Returns persisted task rows as [`Task`](#task) objects, ordered by `next_run_at` ascending.
 
 - when `include_run_once=False`, run-once tasks are excluded
 - when `include_run_once=True`, all persisted tasks are returned
+- `status` filters by task status (e.g. `"paused"`); `limit`/`offset` paginate
 
-### `get_all_jobs(status: str | None = None) -> list[Job]`
+### `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0) -> list[Job]`
 
-Returns persisted jobs, optionally filtered by status string (e.g. `"failed"`, `"running"`).
+Returns persisted jobs with optional filters and pagination — see [Observability](observability.md) for details. `status` filters by status string (e.g. `"failed"`, `"running"`); `task_id` restricts to one task; `since`/`until` bound `started_at` (pass aware UTC datetimes); `order_by` accepts `"started_at"` or `"ended_at"` (anything else raises `ConfigurationError`).
+
+### `stats() -> QuivStats`
+
+Returns a point-in-time statistics snapshot: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, and `job_history_count`. `QuivStats` is a frozen dataclass (exported from `quiv`) — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
 
 ### `remove_task(task_id: str) -> None`
 
@@ -299,6 +334,11 @@ Key fields:
 - `run_once: bool` — if `True`, task runs once then is removed
 - `status: str` — `"active"`, `"running"`, or `"paused"`
 - `next_run_at: datetime` — next scheduled run (UTC-aware)
+- `timeout_seconds: float | None` — cooperative per-job timeout; `None` when disabled
+- `max_retries: int` — retry limit for failed jobs
+- `retry_backoff_seconds: float` — base delay for exponential retry backoff
+- `retry_attempt: int` — consecutive-failure counter (0 unless mid-retry)
+- `jitter_seconds: float` — random offset bound added to recurring next-run times
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`next_run_at`) are always returned as a UTC-aware datetime.
@@ -321,6 +361,7 @@ Key fields:
 - `ended_at: datetime | None` — UTC-aware end timestamp
 - `duration_seconds: float | None` — job duration in seconds (set on completion)
 - `error_message: str | None` — error description if job failed
+- `attempt: int` — attempt number; `1` = first try, `2` = first retry, and so on
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`started_at`, `ended_at`) are always returned as UTC-aware datetimes. 
@@ -336,10 +377,12 @@ Key fields:
 - `task_removed` — fired after a task is removed
 - `task_paused` — fired after a task is paused
 - `task_resumed` — fired after a task is resumed
+- `task_updated` — fired after a task is mutated via `update_task()`
 - `job_started` — fired when a job begins execution
 - `job_completed` — fired when a job finishes successfully
 - `job_failed` — fired when a job ends with an exception
 - `job_cancelled` — fired when a job is cancelled
+- `job_retrying` — fired after `job_failed` when a retry has been scheduled
 
 See [Event Listeners](event-listeners.md) for the data each event carries.
 

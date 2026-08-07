@@ -25,7 +25,15 @@ from .exceptions import (
     HandlerRegistrationError,
 )
 from .execution import ExecutionLayer
-from .models import Event, Job, JobStatus, QuivModelBase, Task, TaskDB
+from .models import (
+    Event,
+    Job,
+    JobStatus,
+    QuivModelBase,
+    QuivStats,
+    Task,
+    TaskDB,
+)
 from .persistence import PersistenceLayer
 
 
@@ -733,30 +741,93 @@ class QuivBase(ABC):
 
         return self.persistence.get_job(job_id)
 
-    def get_all_tasks(self, include_run_once: bool = False) -> list[Task]:
-        """Retrieve persisted task records.
+    def get_all_tasks(
+        self,
+        include_run_once: bool = False,
+        status: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Task]:
+        """Retrieve persisted task records, ordered by ``next_run_at``.
 
         Args:
             include_run_once (bool, Optional=False):
                 Include single-run tasks when ``True``.
+            status (str, Optional=None): Optional task status filter.
+            limit (int, Optional=None): Maximum rows to return.
+            offset (int, Optional=0): Rows to skip.
 
         Returns:
             list[Task]: List of tasks with unpickled args/kwargs.
         """
 
         tasks = self.persistence.get_all_tasks(
-            include_run_once=include_run_once
+            include_run_once=include_run_once,
+            status=status,
+            limit=limit,
+            offset=offset,
         )
         return [Task.model_validate(t) for t in tasks]
 
-    def get_all_jobs(self, status: str | None = None) -> list[Job]:
-        """Retrieve persisted job records.
+    def get_all_jobs(
+        self,
+        status: str | None = None,
+        task_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        order_by: str = "started_at",
+        descending: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Job]:
+        """Retrieve persisted job records with filters and pagination.
 
         Args:
             status (str, Optional=None): Optional status filter.
+            task_id (str, Optional=None): Only jobs of this task.
+            since (datetime, Optional=None): Only jobs with
+                ``started_at >= since`` (aware UTC).
+            until (datetime, Optional=None): Only jobs with
+                ``started_at <= until`` (aware UTC).
+            order_by (str, Optional="started_at"): Sort column —
+                ``"started_at"`` or ``"ended_at"``.
+            descending (bool, Optional=True): Sort direction.
+            limit (int, Optional=None): Maximum rows to return.
+            offset (int, Optional=0): Rows to skip.
 
         Returns:
             list[Job]: List of jobs.
+
+        Raises:
+            ConfigurationError: If ``order_by`` is not a supported column.
         """
 
-        return self.persistence.get_all_jobs(status=status)
+        return self.persistence.get_all_jobs(
+            status=status,
+            task_id=task_id,
+            since=since,
+            until=until,
+            order_by=order_by,
+            descending=descending,
+            limit=limit,
+            offset=offset,
+        )
+
+    def stats(self) -> QuivStats:
+        """Return a point-in-time scheduler statistics snapshot.
+
+        Returns:
+            QuivStats: Active-job count, pool utilization, task counts
+                by status, earliest upcoming run, and retained job rows.
+        """
+
+        with self._job_count_lock:
+            active = self._active_job_count
+        return QuivStats(
+            active_jobs=active,
+            pool_size=self._pool_size,
+            pool_utilization=active / self._pool_size,
+            tasks_by_status=self.persistence.count_tasks_by_status(),
+            next_run_at=self.persistence.get_next_due_time(),
+            job_history_count=self.persistence.count_jobs(),
+        )

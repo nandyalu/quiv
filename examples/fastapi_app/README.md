@@ -21,6 +21,9 @@ uv run uvicorn examples.fastapi_app.main:app --reload
 | POST   | `/tasks/{task_id}/pause`    | Pause a task                 |
 | POST   | `/tasks/{task_id}/resume`   | Resume a paused task         |
 | POST   | `/tasks/jobs/{job_id}/cancel` | Cancel a running job       |
+| GET    | `/tasks/stats`              | Scheduler statistics snapshot |
+| GET    | `/tasks/{task_id}/jobs?limit=&offset=` | One task's jobs, newest first |
+| PATCH  | `/tasks/{task_id}`          | Update a task's interval/jitter |
 | WS     | `/ws/progress`              | WebSocket for live progress  |
 
 ## Try it

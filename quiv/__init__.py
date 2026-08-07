@@ -18,7 +18,7 @@ from .exceptions import (
     TaskNotFoundError,
     TaskNotScheduledError,
 )
-from .models import Event, Job, JobStatus, Task, TaskStatus
+from .models import Event, Job, JobStatus, QuivStats, Task, TaskStatus
 from .scheduler import Quiv
 
 __all__ = [
@@ -41,4 +41,5 @@ __all__ = [
     "TaskStatus",
     "Job",
     "JobStatus",
+    "QuivStats",
 ]

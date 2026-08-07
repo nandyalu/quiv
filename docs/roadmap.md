@@ -51,6 +51,8 @@ These features all touch the `add_task()` signature and the job-finalize path, a
 
 ## Phase 5 — Management & Observability API (`v0.9.0`)
 
+**Status: ✅ complete** — implemented 2026-08-06, ships as `v0.9.0`.
+
 1. **`update_task()`** — change a task's interval, args/kwargs, `fixed_interval`, timeout, retry, and jitter settings, or its progress callback, in place — preserving the `task_id` instead of requiring remove-and-re-add. Emits a new `TASK_UPDATED` event and wakes the scheduler loop.
 2. **Rich job queries** — `get_all_jobs()` grows `task_id`, time-range, ordering, and `limit`/`offset` parameters (with the same treatment for `get_all_tasks()`), so admin views no longer need to load the entire history into memory.
 3. **`stats()`** — a single introspection method returning active job count, pool size and utilization, task counts by status, next due time, and job-history size — ready for dashboards and health checks.

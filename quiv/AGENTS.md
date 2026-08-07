@@ -109,7 +109,13 @@ def on_job_failed(event, task, job):   # JOB_* -> (event, task, job); TASK_* -> 
 scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
-Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_RETRYING` (fires after `JOB_FAILED` when a retry was scheduled). Sync or async callbacks; exceptions in listeners are logged and swallowed.
+Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `TASK_UPDATED`, `JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`, `JOB_RETRYING` (fires after `JOB_FAILED` when a retry was scheduled). Sync or async callbacks; exceptions in listeners are logged and swallowed.
+
+## Management & observability
+
+- `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. Not updatable: `run_once`, `delay`, `func`.
+- `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0)` — filters + pagination; `order_by` is `"started_at"` or `"ended_at"` only. `get_all_tasks(include_run_once=False, status=None, limit=None, offset=0)` orders by `next_run_at`.
+- `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`. Serialize with `dataclasses.asdict()`.
 
 ## Canonical FastAPI wiring
 

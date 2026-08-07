@@ -1,3 +1,17 @@
+<a id="v0.9.0"></a>
+## [v0.9.0 - Management & Observability API](https://github.com/nandyalu/quiv/releases/tag/v0.9.0) - 2026-08-06
+
+Phase 5 of the [roadmap to v1.0.0](roadmap.md): `update_task()`, rich job/task queries, and `stats()` — see the new [Observability](observability.md) docs page.
+
+### What's new
+
+- **`update_task()`** — mutate a scheduled task in place, preserving its `task_id`: name, interval, scheduling mode, args/kwargs, timeout, retry settings, jitter, and progress callback (keyword-only; omit what you don't change — `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules the next run to `now + interval`; updating a `running` task takes effect from its next run. Emits the new `Event.TASK_UPDATED` with the post-update `Task`. `run_once`, `delay`, and the handler `func` are deliberately not updatable.
+- **Rich job/task queries** — `get_all_jobs()` gains `task_id`, `since`/`until` (aware-UTC window on `started_at`), `order_by` (`"started_at"` or `"ended_at"`, whitelisted), `descending`, and `limit`/`offset` pagination. `get_all_tasks()` gains `status`, `limit`, and `offset`, ordered by `next_run_at`.
+- **`stats()`** — point-in-time `QuivStats` snapshot (frozen dataclass, exported from `quiv`): active jobs, pool size and utilization, task counts by status, earliest upcoming run, and retained job-history count.
+- The FastAPI example app gained `GET /tasks/stats`, `GET /tasks/{task_id}/jobs?limit=&offset=`, and `PATCH /tasks/{task_id}`.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.8.0...v0.9.0
+
 <a id="v0.8.0"></a>
 ## [v0.8.0 - Execution Features](https://github.com/nandyalu/quiv/releases/tag/v0.8.0) - 2026-08-06
 

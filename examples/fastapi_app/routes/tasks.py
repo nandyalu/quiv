@@ -1,8 +1,49 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from quiv.exceptions import ConfigurationError, TaskNotFoundError
 
 from examples.fastapi_app.scheduler import scheduler
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+class TaskUpdate(BaseModel):
+    """PATCH body for updating a task; omitted fields stay unchanged."""
+
+    interval: float | None = None
+    jitter: float | None = None
+
+
+@router.get("/stats")
+def get_stats():
+    """Point-in-time scheduler statistics snapshot."""
+    return asdict(scheduler.stats())
+
+
+@router.get("/{task_id}/jobs")
+def list_task_jobs(task_id: str, limit: int | None = None, offset: int = 0):
+    """List a single task's jobs, newest first, with pagination."""
+    return scheduler.get_all_jobs(task_id=task_id, limit=limit, offset=offset)
+
+
+@router.patch("/{task_id}")
+def update_task(task_id: str, update: TaskUpdate):
+    """Update a task's interval and/or jitter in place."""
+    changes = update.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(
+            status_code=422, detail="Provide at least one field to update"
+        )
+    try:
+        task = scheduler.update_task(task_id, **changes)
+    except TaskNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ConfigurationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return task
 
 
 @router.post("/{task_name}/run")

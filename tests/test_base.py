@@ -527,3 +527,77 @@ def test_shutdown_timeout_with_hung_handler(
     assert elapsed < 5.5
     # The hung job is abandoned; do not assert on its final status and do
     # not reuse this scheduler instance.
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: stats()
+# ---------------------------------------------------------------------------
+
+
+def test_stats_idle(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(pool_size=4, main_loop=running_main_loop)
+    try:
+        stats = scheduler.stats()
+        assert stats.active_jobs == 0
+        assert stats.pool_size == 4
+        assert stats.pool_utilization == 0.0
+        assert stats.tasks_by_status == {}
+        assert stats.next_run_at is None
+        assert stats.job_history_count == 0
+    finally:
+        scheduler.shutdown()
+
+
+def test_stats_counts_running_job(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    import threading
+    import time
+
+    scheduler = Quiv(pool_size=4, main_loop=running_main_loop)
+    try:
+        started = threading.Event()
+        release = threading.Event()
+
+        def handler(_stop_event: threading.Event) -> None:
+            started.set()
+            release.wait(5)
+
+        scheduler.add_task(
+            task_name="stats-running",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert started.wait(timeout=3)
+
+        stats = scheduler.stats()
+        assert stats.active_jobs == 1
+        assert stats.pool_utilization == 1 / 4
+        assert stats.tasks_by_status.get("running") == 1
+        assert stats.job_history_count >= 1
+        release.set()
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_stats_next_run_at_matches_earliest_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task(
+            task_name="later", func=lambda: None, interval=60, delay=500
+        )
+        early_id = scheduler.add_task(
+            task_name="sooner", func=lambda: None, interval=60, delay=100
+        )
+        stats = scheduler.stats()
+        early = scheduler.get_task(early_id)
+        assert stats.next_run_at == early.next_run_at
+    finally:
+        scheduler.shutdown()

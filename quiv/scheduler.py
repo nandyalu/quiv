@@ -16,11 +16,76 @@ from .exceptions import (
     HandlerRegistrationError,
     TaskNotFoundError,
 )
-from .models import Event, JobStatus, TaskDB
+from .models import Event, JobStatus, Task, TaskDB
 
 _CLEANUP_INTERVAL_SECONDS = 60.0
 _MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
 _MAX_SLEEP_SECONDS = 60.0  # ceiling: bounded staleness safety net
+
+
+class _Unset:
+    """Sentinel for update_task parameters that were not passed."""
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "<UNSET>"
+
+
+_UNSET = _Unset()
+
+
+def _validate_task_name(value: str) -> None:
+    if not value.strip():
+        raise ConfigurationError("task_name must not be empty")
+
+
+def _validate_interval(value: float) -> None:
+    if value <= 0:
+        raise ConfigurationError("interval must be greater than 0")
+
+
+def _validate_timeout(value: float | None) -> None:
+    if value is not None and value <= 0:
+        raise ConfigurationError("timeout must be greater than 0")
+
+
+def _validate_max_retries(value: int) -> None:
+    if value < 0:
+        raise ConfigurationError(
+            "max_retries must be greater than or equal to 0"
+        )
+
+
+def _validate_retry_backoff(value: float) -> None:
+    if value <= 0:
+        raise ConfigurationError("retry_backoff must be greater than 0")
+
+
+def _validate_jitter(value: float) -> None:
+    if value < 0:
+        raise ConfigurationError("jitter must be greater than or equal to 0")
+
+
+def _validate_args_type(value: tuple[Any, ...]) -> None:
+    if not isinstance(value, tuple):
+        raise ConfigurationError(
+            f"args must be a tuple, got {type(value).__name__}"
+        )
+
+
+def _validate_kwargs_type(value: dict[str, Any]) -> None:
+    if not isinstance(value, dict):
+        raise ConfigurationError(
+            f"kwargs must be a dict, got {type(value).__name__}"
+        )
+
+
+def _pickle_or_raise(value: Any, label: str) -> bytes:
+    try:
+        return pickle.dumps(value)
+    except Exception as e:
+        raise ConfigurationError(
+            f"Failed to serialize task {label}: {e}"
+        ) from e
 
 
 class Quiv(QuivBase):
@@ -117,26 +182,16 @@ class Quiv(QuivBase):
             str: Task id string (UUID).
         """
 
-        if not task_name.strip():
-            raise ConfigurationError("task_name must not be empty")
-        if interval <= 0:
-            raise ConfigurationError("interval must be greater than 0")
+        _validate_task_name(task_name)
+        _validate_interval(interval)
         if delay < 0:
             raise ConfigurationError(
                 "delay must be greater than or equal to 0"
             )
-        if timeout is not None and timeout <= 0:
-            raise ConfigurationError("timeout must be greater than 0")
-        if max_retries < 0:
-            raise ConfigurationError(
-                "max_retries must be greater than or equal to 0"
-            )
-        if retry_backoff <= 0:
-            raise ConfigurationError("retry_backoff must be greater than 0")
-        if jitter < 0:
-            raise ConfigurationError(
-                "jitter must be greater than or equal to 0"
-            )
+        _validate_timeout(timeout)
+        _validate_max_retries(max_retries)
+        _validate_retry_backoff(retry_backoff)
+        _validate_jitter(jitter)
         # Validate registration inputs BEFORE persisting the task row —
         # failing later in _register_handler/_register_progress_callback
         # would leave an orphaned ACTIVE row that can never dispatch.
@@ -150,27 +205,10 @@ class Quiv(QuivBase):
         resolved_args = args if args is not None else ()
         resolved_kwargs = kwargs if kwargs is not None else {}
 
-        if not isinstance(resolved_args, tuple):
-            raise ConfigurationError(
-                f"args must be a tuple, got {type(resolved_args).__name__}"
-            )
-        if not isinstance(resolved_kwargs, dict):
-            raise ConfigurationError(
-                f"kwargs must be a dict, got {type(resolved_kwargs).__name__}"
-            )
-
-        try:
-            args_pickled = pickle.dumps(resolved_args)
-        except Exception as e:
-            raise ConfigurationError(
-                f"Failed to serialize task args: {e}"
-            ) from e
-        try:
-            kwargs_pickled = pickle.dumps(resolved_kwargs)
-        except Exception as e:  # pragma: no cover
-            raise ConfigurationError(
-                f"Failed to serialize task kwargs: {e}"
-            ) from e
+        _validate_args_type(resolved_args)
+        _validate_kwargs_type(resolved_kwargs)
+        args_pickled = _pickle_or_raise(resolved_args, "args")
+        kwargs_pickled = _pickle_or_raise(resolved_kwargs, "kwargs")
 
         next_run = self._now_utc() + timedelta(seconds=delay)
         task_id = self.persistence.create_task(
@@ -199,6 +237,111 @@ class Quiv(QuivBase):
         self._emit_event(Event.TASK_ADDED, task)
         self._wake_loop()
         return task_id
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        task_name: str | _Unset = _UNSET,
+        interval: float | _Unset = _UNSET,
+        fixed_interval: bool | _Unset = _UNSET,
+        args: tuple[Any, ...] | _Unset = _UNSET,
+        kwargs: dict[str, Any] | _Unset = _UNSET,
+        timeout: float | None | _Unset = _UNSET,
+        max_retries: int | _Unset = _UNSET,
+        retry_backoff: float | _Unset = _UNSET,
+        jitter: float | _Unset = _UNSET,
+        progress_callback: Callable[..., Any] | None | _Unset = _UNSET,
+    ) -> Task:
+        """Mutate a scheduled task in place, preserving its ``task_id``.
+
+        Only the parameters you pass change; everything else is
+        untouched. If ``interval`` is changed, the next run is
+        rescheduled to ``now + interval``. Updating a ``RUNNING`` task
+        is allowed — the changes take effect from the next run. Emits
+        ``Event.TASK_UPDATED`` with the post-update :class:`Task`.
+
+        Not updatable: ``run_once``, ``delay`` (initial delay is a
+        creation-time concept), and the handler ``func`` (remove and
+        re-add the task to change its handler).
+
+        Args:
+            task_id (str): Task identifier (UUID string).
+            task_name (str, Optional): New display name.
+            interval (float, Optional): New interval in seconds; also
+                reschedules the next run to ``now + interval``.
+            fixed_interval (bool, Optional): New scheduling mode.
+            args (tuple[Any, ...], Optional): New positional arguments.
+            kwargs (dict[str, Any], Optional): New keyword arguments.
+            timeout (float | None, Optional): New cooperative timeout;
+                ``None`` disables timeout enforcement.
+            max_retries (int, Optional): New retry limit.
+            retry_backoff (float, Optional): New base backoff delay.
+            jitter (float, Optional): New jitter bound.
+            progress_callback (Callable | None, Optional): New progress
+                callback; ``None`` clears the existing one.
+
+        Raises:
+            TaskNotFoundError: If no task with that id exists.
+            ConfigurationError: If a provided value is invalid (same
+                rules as ``add_task``).
+            HandlerRegistrationError: If ``progress_callback`` is not
+                callable.
+
+        Returns:
+            Task: The post-update task record.
+        """
+
+        updates: dict[str, Any] = {}
+        if not isinstance(task_name, _Unset):
+            _validate_task_name(task_name)
+            updates["task_name"] = task_name
+        if not isinstance(interval, _Unset):
+            _validate_interval(interval)
+            updates["interval_seconds"] = interval
+        if not isinstance(fixed_interval, _Unset):
+            updates["fixed_interval"] = fixed_interval
+        if not isinstance(args, _Unset):
+            _validate_args_type(args)
+            updates["args"] = _pickle_or_raise(args, "args")
+        if not isinstance(kwargs, _Unset):
+            _validate_kwargs_type(kwargs)
+            updates["kwargs"] = _pickle_or_raise(kwargs, "kwargs")
+        if not isinstance(timeout, _Unset):
+            _validate_timeout(timeout)
+            updates["timeout_seconds"] = timeout
+        if not isinstance(max_retries, _Unset):
+            _validate_max_retries(max_retries)
+            updates["max_retries"] = max_retries
+        if not isinstance(retry_backoff, _Unset):
+            _validate_retry_backoff(retry_backoff)
+            updates["retry_backoff_seconds"] = retry_backoff
+        if not isinstance(jitter, _Unset):
+            _validate_jitter(jitter)
+            updates["jitter_seconds"] = jitter
+        if (
+            not isinstance(progress_callback, _Unset)
+            and progress_callback is not None
+            and not callable(progress_callback)
+        ):
+            raise HandlerRegistrationError(
+                "progress callback must be callable"
+            )
+
+        if updates:
+            self.persistence.update_task(task_id, **updates)
+        else:
+            # Nothing to write — still surface unknown ids.
+            self.persistence.get_task(task_id)
+        if not isinstance(progress_callback, _Unset):
+            self._register_progress_callback(task_id, progress_callback)
+
+        self._wake_loop()
+        task = self.get_task(task_id)
+        updated = ", ".join(updates) if updates else "progress_callback"
+        self._logger.info(f"Task '{task_id}' updated ({updated})")
+        self._emit_event(Event.TASK_UPDATED, task)
+        return task
 
     def remove_task(self, task_id: str) -> None:
         """Remove a scheduled task and its handler/callback registrations.
