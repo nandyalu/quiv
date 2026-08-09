@@ -74,7 +74,8 @@ Adds a scheduled task and returns its task ID (UUID string)[^1].
     - `pause_task()`
     - `resume_task()`
     - `run_task_immediately()`
-    - `get_task()`.
+    - `get_task()`
+    - `update_task()`.
 
 This is the primary way to register tasks. It handles handler registration, progress callback registration, and task persistence in one call.
 

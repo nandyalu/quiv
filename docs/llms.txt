@@ -24,6 +24,7 @@ Key facts for working with quiv:
 - [Event Listeners](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/event-listeners.md): task/job lifecycle events and typed callbacks
 - [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `_stop_event`
 - [Failure Handling](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/failure-handling.md): per-task cooperative timeouts, retry with exponential backoff, jitter
+- [Observability](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/observability.md): `stats()` snapshot, filtered/paginated job and task queries, admin endpoints
 - [Exceptions](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/exceptions.md): the `QuivError` hierarchy
 - [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): patterns for testing handlers and the scheduler
 
