@@ -480,14 +480,18 @@ class Quiv(QuivBase):
             job_failed = status == JobStatus.FAILED
 
             error_message = str(job_error) if job_error is not None else None
-            if (
-                timed_out
-                and status == JobStatus.CANCELLED
-                and error_message is None
-            ):
-                error_message = (
+            if timed_out and status == JobStatus.CANCELLED:
+                # The timeout message always leads so timed-out jobs stay
+                # distinguishable from manual cancellations and failures,
+                # even when the handler also raised.
+                timeout_message = (
                     "Job exceeded timeout of"
                     f" {task_snapshot.timeout_seconds}s"
+                )
+                error_message = (
+                    timeout_message
+                    if error_message is None
+                    else f"{timeout_message} (handler raised: {error_message})"
                 )
             self.persistence.finalize_job(
                 job_id,

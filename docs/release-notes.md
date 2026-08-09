@@ -14,6 +14,11 @@ Phase 4 of the [roadmap to v1.0.0](roadmap.md): per-task timeout, retry with exp
 - **Jitter** — `add_task(..., jitter=5)` adds `uniform(0, jitter)` seconds to each recurring next-run time to de-synchronize tasks sharing interval boundaries (thundering herd). Re-rolled every run; never applied to the initial `delay` or retry backoff.
 - `Task` exposes the new per-task fields (`timeout_seconds`, `max_retries`, `retry_backoff_seconds`, `retry_attempt`, `jitter_seconds`); `Job` exposes `attempt`.
 
+### Fixes
+
+- Fixed-interval scheduling could compute a `next_run_at` equal to the job's start time (for jobs finishing within clock resolution) or exactly equal to `now` (elapsed landing on an interval boundary), causing an immediate re-dispatch; the next run is now always the next strictly-future interval boundary.
+- A timed-out job whose handler also raised finalized with the handler's exception as `error_message`, hiding the timeout; the timeout message now always leads, with the handler's exception appended.
+
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.7.0...v0.8.0
 
 <a id="v0.7.0"></a>

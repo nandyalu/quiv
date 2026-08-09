@@ -485,3 +485,39 @@ def test_zero_jitter_next_run_exactly_on_boundary(
         assert abs((task.next_run_at - expected).total_seconds()) < 0.001
     finally:
         scheduler.shutdown()
+
+
+def test_fixed_interval_next_run_is_strictly_future_at_boundaries(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from datetime import datetime, timezone
+
+    from quiv.persistence import PersistenceLayer
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        frozen = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        current = {"now": frozen}
+        fake_persistence = PersistenceLayer(
+            scheduler._engine, lambda: current["now"]
+        )
+        task_id = scheduler.add_task(
+            task_name="boundary", func=lambda: None, interval=100
+        )
+
+        # elapsed == 0: job finished within clock resolution of its start.
+        fake_persistence.finalize_task_after_job(
+            task_id, frozen, job_failed=False
+        )
+        task = scheduler.get_task(task_id)
+        assert task.next_run_at == frozen + timedelta(seconds=100)
+
+        # elapsed == exactly one interval: also must be strictly future.
+        current["now"] = frozen + timedelta(seconds=100)
+        fake_persistence.finalize_task_after_job(
+            task_id, frozen, job_failed=False
+        )
+        task = scheduler.get_task(task_id)
+        assert task.next_run_at == frozen + timedelta(seconds=200)
+    finally:
+        scheduler.shutdown()

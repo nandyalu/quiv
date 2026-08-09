@@ -1448,3 +1448,31 @@ def test_add_task_params_after_fixed_interval_are_keyword_only(
             )
     finally:
         scheduler.shutdown()
+
+
+def test_timeout_message_leads_when_handler_also_raises(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        def raises_on_cancel(_stop_event: threading.Event) -> None:
+            _stop_event.wait(10)
+            raise RuntimeError("aborted by handler")
+
+        scheduler.add_task(
+            task_name="timeout-and-raise",
+            func=raises_on_cancel,
+            interval=60,
+            run_once=True,
+            timeout=0.3,
+        )
+        scheduler.start()
+
+        jobs = _wait_for_jobs(scheduler, JobStatus.CANCELLED, 1)
+        assert len(jobs) == 1, "job did not finalize as cancelled"
+        message = jobs[0].error_message
+        assert message is not None
+        assert message.startswith("Job exceeded timeout of")
+        assert "aborted by handler" in message
+    finally:
+        scheduler.shutdown()

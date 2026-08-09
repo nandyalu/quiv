@@ -4,7 +4,7 @@ quiv provides three per-task knobs for handling slow, failing, or synchronized t
 
 ## Timeouts
 
-Timeout is **cooperative**: when a job exceeds `timeout` seconds, quiv sets its stop event — exactly as `cancel_job()` would. A handler that checks `_stop_event` exits promptly and the job finalizes as `cancelled` with `error_message = "Job exceeded timeout of {timeout}s"`. A handler that ignores its stop event keeps occupying its pool thread (quiv never kills threads); it still finalizes as `cancelled` when it eventually returns. There is no separate job status for timeouts — they are cancellations with an error message.
+Timeout is **cooperative**: when a job exceeds `timeout` seconds, quiv sets its stop event — exactly as `cancel_job()` would. A handler that checks `_stop_event` exits promptly and the job finalizes as `cancelled` with `error_message = "Job exceeded timeout of {timeout}s"`. A handler that ignores its stop event keeps occupying its pool thread (quiv never kills threads); it still finalizes as `cancelled` when it eventually returns. There is no separate job status for timeouts — they are cancellations with an error message. If a timed-out handler also raises, the timeout message still leads and the handler's exception is appended (`... (handler raised: ...)`), so timeouts stay distinguishable from failures and manual cancellations.
 
 ```python
 def poll_api(_stop_event):

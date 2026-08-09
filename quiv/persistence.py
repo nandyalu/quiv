@@ -416,7 +416,11 @@ class PersistenceLayer:
             interval = existing.interval_seconds
             if existing.fixed_interval:
                 elapsed = (now - job_started_at).total_seconds()
-                periods = math.ceil(elapsed / interval)
+                # floor+1, not ceil: when elapsed lands exactly on a
+                # boundary (including 0 for sub-clock-resolution jobs),
+                # ceil yields next_run_at == now and the task re-dispatches
+                # immediately. The next run must be strictly in the future.
+                periods = math.floor(elapsed / interval) + 1
                 existing.next_run_at = job_started_at + timedelta(
                     seconds=periods * interval
                 )
