@@ -65,6 +65,7 @@ class Quiv(QuivBase):
         delay: float = 0,
         run_once: bool = False,
         fixed_interval: bool = True,
+        *,
         timeout: float | None = None,
         max_retries: int = 0,
         retry_backoff: float = 30.0,

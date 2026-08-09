@@ -3,6 +3,10 @@
 
 Phase 4 of the [roadmap to v1.0.0](roadmap.md): per-task timeout, retry with exponential backoff, and jitter — see the new [Failure Handling](failure-handling.md) docs page.
 
+### Behavior changes
+
+- `add_task()` parameters after `fixed_interval` (`timeout`, `max_retries`, `retry_backoff`, `jitter`, `args`, `kwargs`, `progress_callback`) are now **keyword-only**. Calls passing `args`, `kwargs`, or `progress_callback` positionally must switch to keywords — this raises an immediate `TypeError` rather than silently binding values to the new parameters.
+
 ### What's new
 
 - **Per-task timeout** — `add_task(..., timeout=30)` cooperatively cancels jobs that exceed the deadline: quiv sets the job's stop event exactly as `cancel_job()` would, and the job finalizes as `cancelled` with a timeout error message. Handlers that ignore their stop event keep occupying their pool thread (quiv never kills threads). Enforcement rides the deadline-aware scheduler loop, so timeouts fire with millisecond latency even while the loop would otherwise sleep.
