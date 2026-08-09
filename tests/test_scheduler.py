@@ -1435,3 +1435,16 @@ def test_backoff_delay_grows(
         assert 0.25 <= gaps[1] <= 0.55, f"second backoff {gaps[1]:.3f}s"
     finally:
         scheduler.shutdown()
+
+
+def test_add_task_params_after_fixed_interval_are_keyword_only(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(TypeError):
+            scheduler.add_task(  # type: ignore[misc]
+                "positional", lambda: None, 60, 0, False, True, (1, 2)
+            )
+    finally:
+        scheduler.shutdown()

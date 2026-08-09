@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
-`add_task(task_name, func, interval, delay=0, run_once=False, fixed_interval=True, timeout=None, max_retries=0, retry_backoff=30.0, jitter=0.0, args=(), kwargs={}, progress_callback=None) -> task_id`. `timeout` cooperatively cancels overlong jobs (sets the stop event; job ends `cancelled`); `max_retries`/`retry_backoff` retry FAILED jobs with exponential backoff (cancelled jobs never retry); `jitter` adds `uniform(0, jitter)` seconds to recurring next-run times. The returned `task_id` (UUID string) keys everything: `pause_task`, `resume_task`, `run_task_immediately`, `remove_task`, `get_task`. `task_name` is a non-unique display label — never treat it as a key. `args`/`kwargs` are pickled: no lambdas or inner functions.
+`add_task(task_name, func, interval, delay=0, run_once=False, fixed_interval=True, *, timeout=None, max_retries=0, retry_backoff=30.0, jitter=0.0, args=(), kwargs={}, progress_callback=None) -> task_id` (everything after `fixed_interval` is keyword-only). `timeout` cooperatively cancels overlong jobs (sets the stop event; job ends `cancelled`); `max_retries`/`retry_backoff` retry FAILED jobs with exponential backoff (cancelled jobs never retry); `jitter` adds `uniform(0, jitter)` seconds to recurring next-run times. The returned `task_id` (UUID string) keys everything: `pause_task`, `resume_task`, `run_task_immediately`, `remove_task`, `get_task`. `task_name` is a non-unique display label — never treat it as a key. `args`/`kwargs` are pickled: no lambdas or inner functions.
 
 ## Handler injection
 
