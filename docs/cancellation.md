@@ -6,6 +6,8 @@ quiv uses cooperative cancellation via `threading.Event`. This gives handlers fu
 
 Each job gets its own `threading.Event` stop signal. When cancellation is requested, the event is set. The handler checks the event and decides how to respond.
 
+Three things set a job's stop event: `cancel_job(job_id)`, `remove_task()`/`shutdown()` for running jobs, and per-task timeouts (`add_task(..., timeout=30)`) — timeouts are cancellations through this exact mechanism, see [Failure Handling](failure-handling.md).
+
 ```mermaid
 sequenceDiagram
     participant App as Application

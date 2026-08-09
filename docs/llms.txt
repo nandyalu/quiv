@@ -23,6 +23,7 @@ Key facts for working with quiv:
 - [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere
 - [Event Listeners](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/event-listeners.md): task/job lifecycle events and typed callbacks
 - [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `_stop_event`
+- [Failure Handling](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/failure-handling.md): per-task cooperative timeouts, retry with exponential backoff, jitter
 - [Exceptions](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/exceptions.md): the `QuivError` hierarchy
 - [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): patterns for testing handlers and the scheduler
 
