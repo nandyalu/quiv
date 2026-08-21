@@ -53,16 +53,18 @@ add_task(
     delay: float = 0,
     run_once: bool = False,
     fixed_interval: bool = True,
+    args: tuple | None = None,
+    kwargs: dict | None = None,
+    progress_callback: Callable[..., Any] | None = None,
     *,
     timeout: float | None = None,
     max_retries: int = 0,
     retry_backoff: float = 30.0,
     jitter: float = 0.0,
-    args: tuple | None = None,
-    kwargs: dict | None = None,
-    progress_callback: Callable[..., Any] | None = None,
 ) -> str
 ```
+
+The pre-existing parameters keep their positional order from earlier releases; the failure-handling options (`timeout`, `max_retries`, `retry_backoff`, `jitter`) are keyword-only.
 
 Adds a scheduled task and returns its task ID (UUID string)[^1].
 

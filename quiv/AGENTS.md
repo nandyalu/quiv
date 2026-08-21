@@ -32,14 +32,15 @@ task_id = scheduler.add_task(
     run_once=False,            # True = run once, then the task row is deleted
     fixed_interval=True,       # True: next run aligned to start-time cadence (missed slots skipped)
                                # False: next run = completion time + interval
+    args=(),                   # tuple, pickle-serialized (no lambdas/inner functions)
+    kwargs={},
+    progress_callback=None,    # sync or async; runs on the main asyncio loop
+    # -- keyword-only from here --
     timeout=None,              # seconds; cooperative — sets the job's stop event,
                                # job finalizes as cancelled with a timeout message
     max_retries=0,             # retries for FAILED jobs only (cancelled never retries)
     retry_backoff=30.0,        # base seconds; exponential: 1x, 2x, 4x, ...
     jitter=0.0,                # adds uniform(0, jitter)s to recurring next-run times
-    args=(),                   # tuple, pickle-serialized (no lambdas/inner functions)
-    kwargs={},
-    progress_callback=None,    # sync or async; runs on the main asyncio loop
 )
 
 scheduler.start()      # alias: startup(). Safe to call multiple times.

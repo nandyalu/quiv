@@ -65,14 +65,14 @@ class Quiv(QuivBase):
         delay: float = 0,
         run_once: bool = False,
         fixed_interval: bool = True,
+        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, Any] | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         *,
         timeout: float | None = None,
         max_retries: int = 0,
         retry_backoff: float = 30.0,
         jitter: float = 0.0,
-        args: tuple[Any, ...] | None = None,
-        kwargs: dict[str, Any] | None = None,
-        progress_callback: Callable[..., Any] | None = None,
     ) -> str:
         """Schedule a callable to run at a fixed interval.
 
@@ -86,25 +86,27 @@ class Quiv(QuivBase):
                 scheduled at fixed intervals from the job start time. If
                 ``False``, next run is scheduled ``interval`` seconds after
                 job completion.
-            timeout (float, Optional=None): Cooperative per-job timeout in
-                seconds. When a job exceeds it, quiv sets the job's stop
-                event — exactly as ``cancel_job()`` would — and the job
-                finalizes as ``cancelled`` with a timeout error message.
-                Handlers that ignore their stop event keep occupying their
-                pool thread (quiv never kills threads). ``None`` disables.
-            max_retries (int, Optional=0): Maximum consecutive retries
-                after failed jobs. Applies to ``failed`` jobs only —
-                cancelled jobs (including timeouts) never retry.
-            retry_backoff (float, Optional=30.0): Base delay in seconds
-                for exponential retry backoff: first retry after
-                ``retry_backoff``, then 2x, 4x, and so on.
-            jitter (float, Optional=0.0): Adds ``uniform(0, jitter)``
-                seconds to each recurring next-run time to de-synchronize
-                tasks sharing interval boundaries. Not applied to the
-                initial ``delay`` nor to retry backoff.
             args (tuple[Any, ...], Optional=None): Positional arguments for handler.
             kwargs (dict[str, Any], Optional=None): Keyword arguments for handler.
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
+            timeout (float, Optional=None): Keyword-only. Cooperative
+                per-job timeout in seconds. When a job exceeds it, quiv
+                sets the job's stop event — exactly as ``cancel_job()``
+                would — and the job finalizes as ``cancelled`` with a
+                timeout error message. Handlers that ignore their stop
+                event keep occupying their pool thread (quiv never kills
+                threads). ``None`` disables.
+            max_retries (int, Optional=0): Keyword-only. Maximum
+                consecutive retries after failed jobs. Applies to
+                ``failed`` jobs only — cancelled jobs (including
+                timeouts) never retry.
+            retry_backoff (float, Optional=30.0): Keyword-only. Base
+                delay in seconds for exponential retry backoff: first
+                retry after ``retry_backoff``, then 2x, 4x, and so on.
+            jitter (float, Optional=0.0): Keyword-only. Adds
+                ``uniform(0, jitter)`` seconds to each recurring next-run
+                time to de-synchronize tasks sharing interval boundaries.
+                Not applied to the initial ``delay`` nor to retry backoff.
 
         Raises:
             ConfigurationError: If scheduling parameters are invalid.

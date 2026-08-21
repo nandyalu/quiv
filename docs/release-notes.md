@@ -3,16 +3,13 @@
 
 Phase 4 of the [roadmap to v1.0.0](roadmap.md): per-task timeout, retry with exponential backoff, and jitter — see the new [Failure Handling](failure-handling.md) docs page.
 
-### Behavior changes
-
-- `add_task()` parameters after `fixed_interval` (`timeout`, `max_retries`, `retry_backoff`, `jitter`, `args`, `kwargs`, `progress_callback`) are now **keyword-only**. Calls passing `args`, `kwargs`, or `progress_callback` positionally must switch to keywords — this raises an immediate `TypeError` rather than silently binding values to the new parameters.
-
 ### What's new
 
 - **Per-task timeout** — `add_task(..., timeout=30)` cooperatively cancels jobs that exceed the deadline: quiv sets the job's stop event exactly as `cancel_job()` would, and the job finalizes as `cancelled` with a timeout error message. Handlers that ignore their stop event keep occupying their pool thread (quiv never kills threads). Enforcement rides the deadline-aware scheduler loop, so timeouts fire with millisecond latency even while the loop would otherwise sleep.
 - **Retry with exponential backoff** — `add_task(..., max_retries=3, retry_backoff=10)` re-runs **failed** jobs (an exception escaped the handler) at `now + retry_backoff * 2**(failures_so_far - 1)`. Cancelled jobs — including timeouts — never retry. A successful run resets the failure counter; on exhaustion, recurring tasks return to their normal schedule and run-once tasks are deleted. Each `Job` records its `attempt` number, and a new `Event.JOB_RETRYING` fires (after `JOB_FAILED`) whenever a retry is scheduled.
 - **Jitter** — `add_task(..., jitter=5)` adds `uniform(0, jitter)` seconds to each recurring next-run time to de-synchronize tasks sharing interval boundaries (thundering herd). Re-rolled every run; never applied to the initial `delay` or retry backoff.
 - `Task` exposes the new per-task fields (`timeout_seconds`, `max_retries`, `retry_backoff_seconds`, `retry_attempt`, `jitter_seconds`); `Job` exposes `attempt`.
+- The four new options are keyword-only; the pre-existing `add_task()` signature — including positional `args`/`kwargs`/`progress_callback` — is unchanged, so existing calls keep working as-is.
 
 ### Fixes
 

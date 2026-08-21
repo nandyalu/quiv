@@ -1437,14 +1437,28 @@ def test_backoff_delay_grows(
         scheduler.shutdown()
 
 
-def test_add_task_params_after_fixed_interval_are_keyword_only(
+def test_add_task_signature_compatibility(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
+        # Pre-v0.8.0 positional order still binds correctly.
+        def callback(progress: Any) -> None: ...
+
+        task_id = scheduler.add_task(
+            "positional", lambda: None, 60, 0, False, True,
+            (1, 2), {"a": "b"}, callback,
+        )
+        task = scheduler.get_task(task_id)
+        assert task.args == (1, 2)
+        assert task.kwargs == {"a": "b"}
+        assert scheduler.progress_callbacks[task_id] is callback
+
+        # The new failure-handling options are keyword-only.
         with pytest.raises(TypeError):
             scheduler.add_task(  # type: ignore[misc]
-                "positional", lambda: None, 60, 0, False, True, (1, 2)
+                "too-positional", lambda: None, 60, 0, False, True,
+                (), {}, None, 30,
             )
     finally:
         scheduler.shutdown()
