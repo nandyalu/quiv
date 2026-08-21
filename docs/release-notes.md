@@ -1,14 +1,14 @@
 <a id="v0.9.0"></a>
 ## [v0.9.0 - Management & Observability API](https://github.com/nandyalu/quiv/releases/tag/v0.9.0) - 2026-08-06
 
-Phase 5 of the [roadmap to v1.0.0](roadmap.md): `update_task()`, rich job/task queries, and `stats()` — see the new [Observability](observability.md) docs page.
+Phase 5 of the [roadmap to v1.0.0](roadmap.md) adds three management features: `update_task()`, rich job/task queries, and `stats()`. See the new [Observability](observability.md) docs page.
 
 ### What's new
 
-- **`update_task()`** — mutate a scheduled task in place, preserving its `task_id`: name, interval, scheduling mode, args/kwargs, timeout, retry settings, jitter, and progress callback (keyword-only; omit what you don't change — `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules the next run to `now + interval`; updating a `running` task takes effect from its next run. Emits the new `Event.TASK_UPDATED` with the post-update `Task`. `run_once`, `delay`, and the handler `func` are deliberately not updatable.
-- **Rich job/task queries** — `get_all_jobs()` gains `task_id`, `since`/`until` (aware-UTC window on `started_at`), `order_by` (`"started_at"` or `"ended_at"`, whitelisted), `descending`, and `limit`/`offset` pagination. `get_all_tasks()` gains `status`, `limit`, and `offset`, ordered by `next_run_at`.
-- **`stats()`** — point-in-time `QuivStats` snapshot (frozen dataclass, exported from `quiv`): active jobs, pool size and utilization, task counts by status, earliest upcoming run, and retained job-history count.
-- The FastAPI example app gained `GET /tasks/stats`, `GET /tasks/{task_id}/jobs?limit=&offset=`, and `PATCH /tasks/{task_id}`.
+- **`update_task()`** — changes a scheduled task in place and keeps its `task_id`. You can change the name, interval, scheduling mode, args/kwargs, timeout, retry settings, jitter, and the progress callback. All parameters are keyword-only; omit the parameters you do not want to change. `timeout=None` disables the timeout, and `progress_callback=None` removes the callback. When you change `interval`, quiv reschedules the next run to `now + interval`. When you update a `running` task, the changes apply from its next run. The method emits the new `Event.TASK_UPDATED` with the updated `Task`. You cannot change `run_once`, `delay`, or the handler `func`.
+- **Rich job/task queries** — `get_all_jobs()` accepts new filters: `task_id`, and `since`/`until` for a time window on `started_at` (pass timezone-aware UTC values). It also accepts `order_by` (`"started_at"` or `"ended_at"`), `descending`, and `limit`/`offset` for pagination. `get_all_tasks()` accepts `status`, `limit`, and `offset`, and returns tasks ordered by `next_run_at`.
+- **`stats()`** — returns a `QuivStats` snapshot (a frozen dataclass, exported from `quiv`). It contains the active job count, the pool size and utilization, task counts by status, the earliest upcoming run, and the retained job-history count.
+- The FastAPI example app has three new endpoints: `GET /tasks/stats`, `GET /tasks/{task_id}/jobs?limit=&offset=`, and `PATCH /tasks/{task_id}`.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.8.0...v0.9.0
 
