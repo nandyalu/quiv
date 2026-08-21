@@ -62,7 +62,7 @@ These features all touch the `add_task()` signature and the job-finalize path, a
 ## Phase 6 — v1.0.0 Hardening & Release
 
 1. API freeze review: a naming pass over the entire public surface (last chance for breaking changes), `__all__` audit, and removal of anything deprecated during the 0.x series.
-2. Documentation overhaul: migration notes from 0.x, "Failure handling" and "Observability" pages, and an updated README comparison table.
+2. Documentation overhaul: migration notes from 0.x, "Failure handling" and "Observability" pages, an updated README comparison table, and a Simplified Technical English (ASD-STE100) pass over the user-facing docs pages.
 3. A committed benchmark suite (dispatch latency, throughput at pool saturation) with numbers published in the release notes.
 4. Coverage target of at least 95% and a 24-hour soak test with mixed sync/async/failing/cancelled tasks — zero leaked threads or event loops, and database size bounded by the retention window.
 

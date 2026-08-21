@@ -26,6 +26,7 @@ Checklist to review, one by one:
 - [ ] Verify pages added in earlier phases exist and are in nav: `failure-handling.md` (Phase 4), `observability.md` (Phase 5).
 - [ ] README: refresh the pitch (`README.md` mirrors `docs/index.md` — keep them in sync), add a short comparison table (quiv vs `BackgroundTasks` vs APScheduler vs Celery — columns: in-process, cancellation, progress-to-loop, retries, timeout, persistence, distribution) that honestly shows what quiv does NOT do (no cron, no durable store, no multi-process).
 - [ ] Every public method's docstring shows a `Raises:` section that is actually accurate (spot-check by grepping raise sites per module).
+- [ ] **ASD-STE100 (Simplified Technical English) pass over user-facing docs** (`docs/*.md`; release notes and docstrings exempt): rewrite instructional prose to STE100 principles — one instruction per sentence, active voice/imperative for procedures, sentence length ≤ 20 words (procedural) / ≤ 25 (descriptive), no idioms or figurative language ("thundering herd" → "many tasks that run at the same time"), consistent approved terms (one name per concept — do not alternate e.g. "handler"/"callable"/"function" for the same thing). Established API terms and code identifiers are exempt from the approved-word list. Decided 2026-08-14; the one-paragraph-per-line rule for zensical still applies.
 - [ ] `uv run zensical build --clean` — zero warnings.
 
 ## 3. Benchmarks
