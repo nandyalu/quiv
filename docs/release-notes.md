@@ -1,20 +1,20 @@
 <a id="v0.8.0"></a>
 ## [v0.8.0 - Execution Features](https://github.com/nandyalu/quiv/releases/tag/v0.8.0) - 2026-08-06
 
-Phase 4 of the [roadmap to v1.0.0](roadmap.md): per-task timeout, retry with exponential backoff, and jitter — see the new [Failure Handling](failure-handling.md) docs page.
+Phase 4 of the [roadmap to v1.0.0](roadmap.md) adds three failure-handling features: per-task timeout, retry with exponential backoff, and jitter. See the new [Failure Handling](failure-handling.md) docs page.
 
 ### What's new
 
-- **Per-task timeout** — `add_task(..., timeout=30)` cooperatively cancels jobs that exceed the deadline: quiv sets the job's stop event exactly as `cancel_job()` would, and the job finalizes as `cancelled` with a timeout error message. Handlers that ignore their stop event keep occupying their pool thread (quiv never kills threads). Enforcement rides the deadline-aware scheduler loop, so timeouts fire with millisecond latency even while the loop would otherwise sleep.
-- **Retry with exponential backoff** — `add_task(..., max_retries=3, retry_backoff=10)` re-runs **failed** jobs (an exception escaped the handler) at `now + retry_backoff * 2**(failures_so_far - 1)`. Cancelled jobs — including timeouts — never retry. A successful run resets the failure counter; on exhaustion, recurring tasks return to their normal schedule and run-once tasks are deleted. Each `Job` records its `attempt` number, and a new `Event.JOB_RETRYING` fires (after `JOB_FAILED`) whenever a retry is scheduled.
-- **Jitter** — `add_task(..., jitter=5)` adds `uniform(0, jitter)` seconds to each recurring next-run time to de-synchronize tasks sharing interval boundaries (thundering herd). Re-rolled every run; never applied to the initial `delay` or retry backoff.
-- `Task` exposes the new per-task fields (`timeout_seconds`, `max_retries`, `retry_backoff_seconds`, `retry_attempt`, `jitter_seconds`); `Job` exposes `attempt`.
-- The four new options are keyword-only; the pre-existing `add_task()` signature — including positional `args`/`kwargs`/`progress_callback` — is unchanged, so existing calls keep working as-is.
+- **Per-task timeout** — `add_task(..., timeout=30)` sets a time limit for each job. When a job runs longer than `timeout` seconds, quiv sets the job's stop event, in the same way as `cancel_job()`. The job then finalizes as `cancelled` with a timeout error message. The timeout is cooperative. If the handler ignores its stop event, it keeps its pool thread until it returns; quiv never kills threads. The scheduler loop wakes for the nearest timeout deadline, so a timeout fires within milliseconds of that deadline.
+- **Retry with exponential backoff** — `add_task(..., max_retries=3, retry_backoff=10)` runs a failed job again. A job is failed when an exception escapes the handler. The next attempt starts after `retry_backoff * 2**(failures - 1)` seconds: the first retry waits `retry_backoff` seconds, the second waits twice that, and so on. Cancelled jobs do not retry; this includes timeouts. A successful run resets the failure counter. When retries are exhausted, a recurring task returns to its normal schedule and a run-once task is deleted. Each `Job` records its `attempt` number. The new `Event.JOB_RETRYING` fires after `JOB_FAILED` when quiv schedules a retry.
+- **Jitter** — `add_task(..., jitter=5)` adds a random offset between 0 and `jitter` seconds to each next run of a recurring task. Use it when many tasks share the same interval boundaries and would start at the same time. quiv draws a new offset for every run. Jitter does not apply to the initial `delay` or to retry backoff.
+- `Task` exposes the new fields `timeout_seconds`, `max_retries`, `retry_backoff_seconds`, `retry_attempt`, and `jitter_seconds`. `Job` exposes `attempt`.
+- The four new options are keyword-only. The rest of the `add_task()` signature is unchanged, including positional `args`, `kwargs`, and `progress_callback`. Existing calls continue to work.
 
 ### Fixes
 
-- Fixed-interval scheduling could compute a `next_run_at` equal to the job's start time (for jobs finishing within clock resolution) or exactly equal to `now` (elapsed landing on an interval boundary), causing an immediate re-dispatch; the next run is now always the next strictly-future interval boundary.
-- A timed-out job whose handler also raised finalized with the handler's exception as `error_message`, hiding the timeout; the timeout message now always leads, with the handler's exception appended.
+- Fixed-interval scheduling could set `next_run_at` to a time that is not in the future. This happened when a job finished within clock resolution of its start time, or when the elapsed time landed exactly on an interval boundary. The task then dispatched again immediately. The next run is now always the next interval boundary that is strictly in the future.
+- When a timed-out job's handler also raised an exception, the job's `error_message` showed only the exception text and hid the timeout. The timeout message now comes first, and the handler's exception is appended.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.7.0...v0.8.0
 
