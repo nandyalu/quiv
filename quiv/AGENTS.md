@@ -30,8 +30,8 @@ task_id = scheduler.add_task(
     interval=300,              # seconds; must be > 0. Omit when run_once=True —
                                # a run-once task never repeats, so any interval
                                # given is ignored and stored as None
-    delay=0,                   # seconds before first run; >= 0. Mutually
-                               # exclusive with run_at
+    delay=None,                # seconds before first run; >= 0. Defaults to
+                               # no delay. Mutually exclusive with run_at
     run_once=False,            # True = run once, then the task row is deleted
     fixed_interval=True,       # True: next run aligned to start-time cadence (missed slots skipped)
                                # False: next run = completion time + interval
