@@ -1,3 +1,35 @@
+<a id="v0.10.0"></a>
+## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-05
+
+`add_task()` can now schedule the first run at an absolute time.
+
+### What's new
+
+- **`run_at`** ([#66](https://github.com/nandyalu/quiv/issues/66)) — sets the absolute time of the first run, as an alternative to `delay`. It is keyword-only.
+
+    ```python
+    scheduler.add_task(
+        task_name="agent_wakeup_alarm",
+        func=agent_wakeup_alarm,
+        run_at=monday_open,
+        run_once=True,
+    )
+    ```
+
+    The rules:
+
+    - `run_at` and `delay` are mutually exclusive. Passing both raises `ConfigurationError`.
+    - A naive `datetime` is read as UTC. The `timezone` setting only formats log output, and never interprets `run_at`.
+    - An aware `datetime` in any zone is converted to UTC.
+    - A time already past runs at once. The process may have been down when the time came due, and dropping the task is worse than running it late.
+    - A `run_at` that is not a `datetime` raises `ConfigurationError`.
+
+    `run_at` sets one instant for the first run. It is not calendar scheduling: recurrence stays interval-based, and quiv still has no cron expressions.
+
+- `delay` now defaults to `None` rather than `0`, so quiv can tell "no delay given" from `delay=0` and reject `run_at` combined with either. Omitting `delay` still means no delay, and `delay=0` still works.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.9.0...v0.10.0
+
 <a id="v0.9.0"></a>
 ## [v0.9.0 - Management & Observability API](https://github.com/nandyalu/quiv/releases/tag/v0.9.0) - 2026-09-05
 

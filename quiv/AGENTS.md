@@ -30,7 +30,8 @@ task_id = scheduler.add_task(
     interval=300,              # seconds; must be > 0. Omit when run_once=True —
                                # a run-once task never repeats, so any interval
                                # given is ignored and stored as None
-    delay=0,                   # seconds before first run; >= 0
+    delay=0,                   # seconds before first run; >= 0. Mutually
+                               # exclusive with run_at
     run_once=False,            # True = run once, then the task row is deleted
     fixed_interval=True,       # True: next run aligned to start-time cadence (missed slots skipped)
                                # False: next run = completion time + interval
@@ -38,6 +39,9 @@ task_id = scheduler.add_task(
     kwargs={},
     progress_callback=None,    # sync or async; runs on the main asyncio loop
     # -- keyword-only from here --
+    run_at=None,               # absolute datetime for the first run, instead of
+                               # delay; naive = UTC (never the display timezone);
+                               # a time already past runs at once
     timeout=None,              # seconds; cooperative — sets the job's stop event,
                                # job finalizes as cancelled with a timeout message
     max_retries=0,             # retries for FAILED jobs only (cancelled never retries)
