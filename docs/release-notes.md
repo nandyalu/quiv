@@ -1,5 +1,5 @@
 <a id="v0.9.0"></a>
-## [v0.9.0 - Management & Observability API](https://github.com/nandyalu/quiv/releases/tag/v0.9.0) - 2026-08-06
+## [v0.9.0 - Management & Observability API](https://github.com/nandyalu/quiv/releases/tag/v0.9.0) - 2026-09-05
 
 Phase 5 of the [roadmap to v1.0.0](roadmap.md) adds three management features: `update_task()`, rich job/task queries, and `stats()`. See the new [Observability](observability.md) docs page.
 
@@ -9,6 +9,16 @@ Phase 5 of the [roadmap to v1.0.0](roadmap.md) adds three management features: `
 - **Rich job/task queries** — `get_all_jobs()` accepts new filters: `task_id`, and `since`/`until` for a time window on `started_at` (pass timezone-aware UTC values). It also accepts `order_by` (`"started_at"` or `"ended_at"`), `descending`, and `limit`/`offset` for pagination. `get_all_tasks()` accepts `status`, `limit`, and `offset`, and returns tasks ordered by `next_run_at`.
 - **`stats()`** — returns a `QuivStats` snapshot (a frozen dataclass, exported from `quiv`). It contains the active job count, the pool size and utilization, task counts by status, the earliest upcoming run, and the retained job-history count.
 - The FastAPI example app has three new endpoints: `GET /tasks/stats`, `GET /tasks/{task_id}/jobs?limit=&offset=`, and `PATCH /tasks/{task_id}`.
+
+### Fixes
+
+- **`add_task()` no longer requires an `interval` for a run-once task** ([#65](https://github.com/nandyalu/quiv/issues/65)). A run-once task never repeats, so quiv never reads its interval. Omit `interval` when you pass `run_once=True`. An interval given with `run_once=True` is ignored, and `Task.interval_seconds` reads `None`. A recurring task still requires `interval > 0`.
+- **`interval=None` now raises `ConfigurationError`** ([#65](https://github.com/nandyalu/quiv/issues/65)). Earlier versions raised `TypeError` from an unguarded comparison. `None` now reaches the same error as `0` and `-1`.
+- **`run_task_immediately()` raises `TaskNotFoundError` for an unknown task id** ([#67](https://github.com/nandyalu/quiv/issues/67)). Earlier versions raised `HandlerNotRegisteredError`, which names a different fault. `get_task()`, `remove_task()` and `run_task_immediately()` now report the same error for the same cause. A run-once task deletes itself when it finishes, so its id stops resolving after it runs. `HandlerNotRegisteredError` keeps its own meaning: the task exists, but no handler is registered for it.
+
+### Behavior changes
+
+- **`TaskNotScheduledError` is deprecated.** quiv no longer raises it. It is now a subclass of `TaskNotFoundError`, and the name stays exported, so imports keep working. An `except TaskNotScheduledError` clause no longer catches these errors. Change it to `except TaskNotFoundError`. quiv removes the alias in 1.0.0.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v0.8.0...v0.9.0
 

@@ -27,7 +27,9 @@ scheduler = Quiv(
 task_id = scheduler.add_task(
     task_name="sync-library",  # display label; duplicates allowed
     func=my_handler,           # sync or async callable
-    interval=300,              # seconds; must be > 0
+    interval=300,              # seconds; must be > 0. Omit when run_once=True —
+                               # a run-once task never repeats, so any interval
+                               # given is ignored and stored as None
     delay=0,                   # seconds before first run; >= 0
     run_once=False,            # True = run once, then the task row is deleted
     fixed_interval=True,       # True: next run aligned to start-time cadence (missed slots skipped)
@@ -150,6 +152,6 @@ app = FastAPI(lifespan=lifespan)
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotScheduledError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`. `TaskNotScheduledError` is a deprecated alias of `TaskNotFoundError` and is no longer raised.
 
 `run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).

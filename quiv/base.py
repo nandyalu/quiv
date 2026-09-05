@@ -544,8 +544,11 @@ class QuivBase(ABC):
             int: Number of queued task rows.
 
         Raises:
-            HandlerNotRegisteredError: If no handler is registered for the id.
-            TaskNotScheduledError: If no scheduled task exists for the id.
+            TaskNotFoundError: If no task with that id exists — the same
+                error ``get_task()`` and ``remove_task()`` raise. A
+                run-once task that already fired has removed itself.
+            HandlerNotRegisteredError: If the task exists but no handler
+                is registered for it.
             TaskNotActiveError: If the task is not in ACTIVE status —
                 running tasks cannot be queued again (no-overlap invariant)
                 and paused tasks must be resumed explicitly via
@@ -553,9 +556,16 @@ class QuivBase(ABC):
         """
 
         if task_id not in self.registry:
+            # A finishing run-once task deletes its row before it drops its
+            # handler, so a missing handler usually means a missing task.
+            # Confirm the row is gone before blaming the handler: get_task
+            # raises TaskNotFoundError, which names the real cause.
+            self.persistence.get_task(task_id)
             raise HandlerNotRegisteredError(
                 f"Handler for task '{task_id}' not registered."
             )
+        # Raises TaskNotFoundError when the row went away after the check
+        # above, so a task that vanishes mid-call still reports its absence.
         count = self.persistence.queue_task_for_immediate_run(task_id)
         self._logger.info(
             f"Task '{task_id}' queued for immediate run via scheduler loop."

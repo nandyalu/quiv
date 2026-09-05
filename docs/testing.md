@@ -142,7 +142,7 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 
 ### Persistence layer
 
-- `queue_task_for_immediate_run()` raises `TaskNotScheduledError` for missing task
+- `queue_task_for_immediate_run()` raises `TaskNotFoundError` for missing task
 - `pause_task()` and `resume_task()` raise `TaskNotFoundError` for missing task
 - `mark_task_running()` raises `TaskNotFoundError` for missing task
 - `mark_job_running()` and `finalize_job()` raise `JobNotFoundError` for missing job
@@ -155,7 +155,7 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 ### Immediate execution
 
 - `run_task_immediately()` raises `HandlerNotRegisteredError` for unregistered handler
-- `run_task_immediately()` raises `TaskNotScheduledError` when task row is missing
+- `run_task_immediately()` raises `TaskNotFoundError` when task row is missing
 - `run_task_immediately()` successfully queues a registered task
 
 ### Configuration

@@ -38,8 +38,11 @@ def _validate_task_name(value: str) -> None:
         raise ConfigurationError("task_name must not be empty")
 
 
-def _validate_interval(value: float) -> None:
-    if value <= 0:
+def _validate_interval(value: float | None) -> None:
+    # ``None`` is rejected here rather than by the caller so every entry
+    # point reports a ConfigurationError instead of a TypeError from an
+    # unguarded comparison.
+    if value is None or value <= 0:
         raise ConfigurationError("interval must be greater than 0")
 
 
@@ -126,7 +129,7 @@ class Quiv(QuivBase):
         self,
         task_name: str,
         func: Callable[..., Any],
-        interval: float,
+        interval: float | None = None,
         delay: float = 0,
         run_once: bool = False,
         fixed_interval: bool = True,
@@ -144,7 +147,10 @@ class Quiv(QuivBase):
         Args:
             task_name (str): Display name for this task.
             func (Callable[..., Any]): Function to execute as task (sync/async).
-            interval (float): Interval in seconds between runs.
+            interval (float, Optional=None): Interval in seconds
+                between runs. Required unless ``run_once=True``. A
+                run-once task never repeats, so an interval given with
+                ``run_once=True`` is ignored and stored as ``None``.
             delay (float, Optional=0): Initial delay before first run in seconds.
             run_once (bool, Optional=False): If ``True``, run task once and remove it.
             fixed_interval (bool, Optional=True): If ``True``, next run is
@@ -183,7 +189,12 @@ class Quiv(QuivBase):
         """
 
         _validate_task_name(task_name)
-        _validate_interval(interval)
+        if run_once:
+            # A run-once task is deleted when it finishes, so its
+            # interval is never read. Accept any value, keep none.
+            interval = None
+        else:
+            _validate_interval(interval)
         if delay < 0:
             raise ConfigurationError(
                 "delay must be greater than or equal to 0"
@@ -229,9 +240,14 @@ class Quiv(QuivBase):
         self._register_progress_callback(task_id, progress_callback)
 
         next_run_user_tz = self._to_display_timezone(next_run)
+        schedule = (
+            f"as run-once with delay {delay}s"
+            if run_once
+            else f"with interval {interval}s and delay {delay}s"
+        )
         self._logger.info(
-            f"Task '{task_name}' added with interval {interval}s and delay"
-            f" {delay}s (next run at {next_run_user_tz})"
+            f"Task '{task_name}' added {schedule}"
+            f" (next run at {next_run_user_tz})"
         )
         task = self.get_task(task_id)
         self._emit_event(Event.TASK_ADDED, task)

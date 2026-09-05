@@ -16,13 +16,13 @@ Checklist to review, one by one:
       - `start()`/`startup()` and `stop()`/`shutdown()` alias pairs: keep both, but pick ONE canonical name per pair in all docs and examples (`start()` / `shutdown()` — matches the FastAPI lifespan example) and say the other is an alias.
 - [ ] **Attribute visibility**: `registry`, `progress_callbacks`, `stop_events`, `executor`, `persistence`, `execution` are public attributes today. Decide: they stay public-but-undocumented (cheapest, recommended — renaming breaks any existing user) — or underscore them now. Record the decision; do NOT rename without recording why.
 - [ ] **Exception hierarchy**: every raise site uses the most specific exception; `docs/exceptions.md` lists all of them with when-raised.
-- [ ] **Deprecations**: grep for anything marked deprecated during 0.x (`grep -ri deprecat quiv/`) and remove it.
+- [ ] **Deprecations**: grep for anything marked deprecated during 0.x (`grep -ri deprecat quiv/`) and remove it. Known: `TaskNotScheduledError` (deprecated in v0.9.0, a no-longer-raised subclass of `TaskNotFoundError`) — drop the class and its `__init__.py` export.
 - [ ] **`py.typed`**: verify the wheel ships type information — add a `quiv/py.typed` marker file if absent (check `[tool.hatch.build.targets.wheel]` picks it up; it does when the file lives inside the package dir).
 - [ ] Classifier bump in `pyproject.toml`: `"Development Status :: 5 - Production/Stable"` (add; there is no status classifier today).
 
 ## 2. Documentation completion
 
-- [ ] `docs/release-notes.md`: consolidated 1.0.0 entry summarizing 0.3 → 0.7 plus a short **"Migrating from 0.x"** subsection. Known behavior changes to list: `run_task_immediately` now raises `TaskNotActiveError` on non-active tasks; `shutdown(timeout=...)`; scheduler no longer polls at 1 Hz (timing-sensitive code that relied on ~1 s dispatch granularity now sees near-immediate dispatch).
+- [ ] `docs/release-notes.md`: consolidated 1.0.0 entry summarizing 0.3 → 0.7 plus a short **"Migrating from 0.x"** subsection. Known behavior changes to list: `run_task_immediately` now raises `TaskNotActiveError` on non-active tasks and `TaskNotFoundError` (not `HandlerNotRegisteredError`) on an unknown id; `shutdown(timeout=...)`; scheduler no longer polls at 1 Hz (timing-sensitive code that relied on ~1 s dispatch granularity now sees near-immediate dispatch).
 - [ ] Verify pages added in earlier phases exist and are in nav: `failure-handling.md` (Phase 4), `observability.md` (Phase 5).
 - [ ] README: refresh the pitch (`README.md` mirrors `docs/index.md` — keep them in sync), add a short comparison table (quiv vs `BackgroundTasks` vs APScheduler vs Celery — columns: in-process, cancellation, progress-to-loop, retries, timeout, persistence, distribution) that honestly shows what quiv does NOT do (no cron, no durable store, no multi-process).
 - [ ] Every public method's docstring shows a `Raises:` section that is actually accurate (spot-check by grepping raise sites per module).

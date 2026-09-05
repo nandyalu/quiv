@@ -13,7 +13,7 @@ from quiv.exceptions import (
     HandlerNotRegisteredError,
     HandlerRegistrationError,
     TaskNotActiveError,
-    TaskNotScheduledError,
+    TaskNotFoundError,
 )
 from quiv.models import JobStatus, TaskStatus
 
@@ -44,6 +44,181 @@ def test_add_task_validates_inputs(
             )
     finally:
         scheduler.shutdown()
+
+
+def test_add_task_run_once_does_not_require_interval(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A run-once task never repeats, so it needs no interval (#65)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm",
+            func=lambda: None,
+            delay=60,
+            run_once=True,
+        )
+        assert scheduler.get_task(task_id).interval_seconds is None
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_once_ignores_any_interval(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """An interval passed with run_once=True is discarded, not stored (#65)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        for interval in (1, 0, -1, None):
+            task_id = scheduler.add_task(
+                task_name="alarm",
+                func=lambda: None,
+                interval=interval,
+                delay=60,
+                run_once=True,
+            )
+            assert scheduler.get_task(task_id).interval_seconds is None
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_requires_interval_when_recurring(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A recurring task still needs a positive interval (#65)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(
+            ConfigurationError, match="interval must be greater than 0"
+        ):
+            scheduler.add_task(task_name="a", func=lambda: None)
+        # None reaches the same error as 0 and -1 — not a TypeError.
+        with pytest.raises(
+            ConfigurationError, match="interval must be greater than 0"
+        ):
+            scheduler.add_task(
+                task_name="a", func=lambda: None, interval=None
+            )
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_once_without_interval_executes_and_self_removes(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """An interval-free run-once task runs, then deletes its own row (#65)."""
+    ran = threading.Event()
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm",
+            func=ran.set,
+            run_once=True,
+        )
+        scheduler.start()
+        assert ran.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                scheduler.get_task(task_id)
+            except TaskNotFoundError:
+                break
+            time.sleep(0.05)
+        else:  # pragma: no cover - the row must be gone by now
+            raise AssertionError("run-once task row was not removed")
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_rejects_none_interval(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """update_task reports a ConfigurationError, never a TypeError (#65)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="demo", func=lambda: None, interval=60
+        )
+        with pytest.raises(
+            ConfigurationError, match="interval must be greater than 0"
+        ):
+            scheduler.update_task(task_id, interval=None)  # type: ignore[arg-type]
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_raises_task_not_found_for_removed_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """An unknown id is a missing task, not a missing handler (#67)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="demo", func=lambda: None, interval=60, delay=99
+        )
+        scheduler.remove_task(task_id)
+        with pytest.raises(TaskNotFoundError):
+            scheduler.run_task_immediately(task_id)
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_raises_task_not_found_after_run_once_fires(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A run-once task that already fired reports TaskNotFoundError (#67)."""
+    ran = threading.Event()
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm", func=ran.set, run_once=True
+        )
+        scheduler.start()
+        assert ran.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                scheduler.run_task_immediately(task_id)
+            except TaskNotFoundError:
+                break
+            except TaskNotActiveError:
+                # The row is still RUNNING; finalization deletes it next.
+                pass
+            except HandlerNotRegisteredError:  # pragma: no cover
+                raise AssertionError(
+                    "a fired run-once task must not report a handler fault"
+                )
+            time.sleep(0.05)
+        else:  # pragma: no cover - the row must be gone by now
+            raise AssertionError("run-once task row was not removed")
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_still_reports_missing_handler(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A live task with no handler keeps its own error (#67)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="demo", func=lambda: None, interval=60, delay=99
+        )
+        with scheduler._registries_lock:
+            scheduler.registry.pop(task_id)
+        with pytest.raises(HandlerNotRegisteredError):
+            scheduler.run_task_immediately(task_id)
+    finally:
+        scheduler.shutdown()
+
+
+def test_task_not_scheduled_error_subclasses_task_not_found(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """The deprecated alias still resolves under the new parent (#67)."""
+    from quiv.exceptions import TaskNotScheduledError
+
+    assert issubclass(TaskNotScheduledError, TaskNotFoundError)
 
 
 def test_add_task_validates_args_type(
@@ -85,12 +260,13 @@ def test_add_task_validates_unpicklable_args(
         scheduler.shutdown()
 
 
-def test_run_task_immediately_requires_registered_handler(
+def test_run_task_immediately_requires_known_task_id(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
+    """An id that was never added reports TaskNotFoundError (#67)."""
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        with pytest.raises(HandlerNotRegisteredError):
+        with pytest.raises(TaskNotFoundError):
             scheduler.run_task_immediately("missing")
     finally:
         scheduler.shutdown()
@@ -103,7 +279,7 @@ def test_run_task_immediately_requires_scheduled_task(
     try:
         task_id = scheduler.add_task(task_name="demo", func=lambda: None, interval=60)
         scheduler.persistence.delete_task(task_id)
-        with pytest.raises(TaskNotScheduledError):
+        with pytest.raises(TaskNotFoundError):
             scheduler.run_task_immediately(task_id)
     finally:
         scheduler.shutdown()

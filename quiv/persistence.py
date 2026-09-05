@@ -14,7 +14,6 @@ from .exceptions import (
     JobNotFoundError,
     TaskNotActiveError,
     TaskNotFoundError,
-    TaskNotScheduledError,
 )
 from .models import Job, JobStatus, TaskDB, TaskStatus
 
@@ -51,7 +50,7 @@ class PersistenceLayer:
     def create_task(
         self,
         task_name: str,
-        interval: float,
+        interval: float | None,
         run_once: bool,
         fixed_interval: bool,
         next_run_at: datetime,
@@ -66,7 +65,8 @@ class PersistenceLayer:
 
         Args:
             task_name (str): Task display name.
-            interval (float): Seconds between task runs.
+            interval (float | None): Seconds between task runs;
+                ``None`` for a run-once task, which never repeats.
             run_once (bool): Whether task should be single-run.
             fixed_interval (bool): Whether to schedule from job start time.
             next_run_at (datetime): Next UTC run timestamp.
@@ -310,7 +310,7 @@ class PersistenceLayer:
             int: Number of task rows updated.
 
         Raises:
-            TaskNotScheduledError: If no scheduled task exists for the id.
+            TaskNotFoundError: If no task with that id exists.
             TaskNotActiveError: If the task is not in ACTIVE status
                 (e.g. currently running or paused).
         """
@@ -318,8 +318,8 @@ class PersistenceLayer:
         with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
-                raise TaskNotScheduledError(
-                    f"Task '{task_id}' is not scheduled. Add it with"
+                raise TaskNotFoundError(
+                    f"Task '{task_id}' was not found. Add it with"
                     " add_task before running immediately."
                 )
             if task.status != TaskStatus.ACTIVE:
@@ -534,6 +534,12 @@ class PersistenceLayer:
 
             existing.status = TaskStatus.ACTIVE
             interval = existing.interval_seconds
+            if interval is None:  # pragma: no cover - defensive
+                # add_task stores None only for run-once tasks, which
+                # return above, and update_task cannot clear it.
+                raise ConfigurationError(
+                    f"Recurring task '{task_id}' has no interval."
+                )
             if existing.fixed_interval:
                 elapsed = (now - job_started_at).total_seconds()
                 # floor+1, not ceil: when elapsed lands exactly on a

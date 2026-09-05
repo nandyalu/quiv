@@ -162,7 +162,9 @@ class TaskDB(QuivModelBase, table=True):
             User-facing display name for the task.
         args (bytes): Pickle-encoded positional arguments.
         kwargs (bytes): Pickle-encoded keyword arguments.
-        interval_seconds (float): Interval between consecutive task runs.
+        interval_seconds (float, Optional=None): Interval between
+            consecutive task runs; ``None`` for a run-once task, which
+            never repeats.
         fixed_interval (bool): Whether next run is measured from job start
             time (True) or from job completion time (False).
         run_once (bool): Whether task should execute only once.
@@ -183,7 +185,7 @@ class TaskDB(QuivModelBase, table=True):
     task_name: str
     args: bytes = Field(default_factory=lambda: pickle.dumps(()))
     kwargs: bytes = Field(default_factory=lambda: pickle.dumps({}))
-    interval_seconds: float
+    interval_seconds: float | None = None
     fixed_interval: bool = True
     run_once: bool = False
     status: str = TaskStatus.ACTIVE
@@ -223,7 +225,9 @@ class Task(BaseModel):
         task_name (str): User-facing task key.
         args (tuple[Any, ...]): Positional arguments.
         kwargs (dict[str, Any]): Keyword arguments.
-        interval_seconds (float): Interval between consecutive task runs.
+        interval_seconds (float, Optional=None): Interval between
+            consecutive task runs; ``None`` for a run-once task, which
+            never repeats.
         fixed_interval (bool): Whether next run is measured from job start
             time (True) or from job completion time (False).
         run_once (bool): Whether task executes only once.
@@ -245,7 +249,7 @@ class Task(BaseModel):
     task_name: str
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
-    interval_seconds: float
+    interval_seconds: float | None = None
     fixed_interval: bool = True
     run_once: bool
     status: str

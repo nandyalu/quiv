@@ -22,12 +22,19 @@ class HandlerNotRegisteredError(QuivError):
     """Raised when a handler is requested but not registered."""
 
 
-class TaskNotScheduledError(QuivError):
-    """Raised when an operation requires an existing scheduled task."""
-
-
 class TaskNotFoundError(QuivError):
     """Raised when a task record is not found."""
+
+
+class TaskNotScheduledError(TaskNotFoundError):
+    """Deprecated alias of :class:`TaskNotFoundError`.
+
+    quiv no longer raises this exception. The name stays exported so
+    that imports in 0.x code keep working, and it subclasses
+    :class:`TaskNotFoundError` so that code which still raises it is
+    caught by ``except TaskNotFoundError``. Catch
+    :class:`TaskNotFoundError` instead. Removed in 1.0.0.
+    """
 
 
 class TaskNotActiveError(QuivError):

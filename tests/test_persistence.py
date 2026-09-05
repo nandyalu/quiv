@@ -10,7 +10,6 @@ from quiv import Quiv
 from quiv.exceptions import (
     JobNotFoundError,
     TaskNotFoundError,
-    TaskNotScheduledError,
 )
 from quiv.models import Job, JobStatus, TaskDB
 
@@ -20,7 +19,7 @@ def test_queue_task_for_immediate_run_raises_for_missing_task(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        with pytest.raises(TaskNotScheduledError):
+        with pytest.raises(TaskNotFoundError):
             scheduler.persistence.queue_task_for_immediate_run("missing-id")
     finally:
         scheduler.shutdown()

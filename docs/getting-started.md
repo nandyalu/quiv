@@ -317,7 +317,6 @@ A separate `"quiv.models"` logger emits DEBUG-level messages for datetime normal
 
 - **`ConfigurationError` on startup**: check `pool_size > 0` and `history_retention_seconds >= 0`.
 - **`InvalidTimezoneError`**: use a valid IANA timezone name (for example `UTC` or `America/New_York`).
-- **`HandlerNotRegisteredError` for immediate run**: call `add_task(...)` first, and use the returned `task_id`.
-- **`TaskNotScheduledError`**: the task handler is registered, but the scheduled task row no longer exists in the database.
+- **`TaskNotFoundError` for immediate run**: the id is unknown. Call `add_task(...)` first and use the returned `task_id`. A run-once task removes itself after it runs, so its id stops resolving.
 - **No log output**: configure Python logging (see [Logging](#logging) above).
 - **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most Python objects are supported. If you encounter errors, ensure the objects are picklable (e.g. lambdas and inner functions are not).

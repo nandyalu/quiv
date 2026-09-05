@@ -49,7 +49,7 @@ Parameters:
 add_task(
     task_name: str,
     func: Callable[..., Any],
-    interval: float,
+    interval: float | None = None,
     delay: float = 0,
     run_once: bool = False,
     fixed_interval: bool = True,
@@ -82,7 +82,7 @@ This is the primary way to register tasks. It handles handler registration, prog
 Validation:
 
 - `task_name` must not be empty
-- `interval > 0` — sub-second intervals (e.g. `interval=0.2`) are supported
+- `interval > 0` — sub-second intervals (e.g. `interval=0.2`) are supported. Required unless `run_once=True`
 - `delay >= 0`
 - `timeout > 0` when provided
 - `max_retries >= 0`
@@ -97,6 +97,7 @@ Failure handling: `timeout` cooperatively cancels jobs that run too long, `max_r
 Behavior:
 
 - `func` may be sync or async
+- a run-once task never repeats, so it needs no `interval`. An interval passed with `run_once=True` is ignored, and `Task.interval_seconds` reads `None`
 - `args`/`kwargs` are pickle-serialized and persisted — most Python objects are supported, but lambdas and inner functions are not picklable. 
   
     !!! warning
@@ -168,8 +169,8 @@ Queues an already-scheduled task to run now.
 
 Raises:
 
-- `HandlerNotRegisteredError` if no registered handler exists for the id
-- `TaskNotScheduledError` if handler exists but no scheduled task row exists
+- `TaskNotFoundError` if no task with that id exists — including a run-once task that already fired and removed itself
+- `HandlerNotRegisteredError` if the task exists but no handler is registered for it
 - `TaskNotActiveError` if the task is `running` (no concurrent second run) or `paused` (use `resume_task()` instead)
 
 Returns number of task rows queued.
@@ -330,7 +331,7 @@ Key fields:
 - `task_name: str` — display name (not necessarily unique)
 - `args: tuple[Any, ...]` — positional arguments (unpickled)
 - `kwargs: dict[str, Any]` — keyword arguments (unpickled)
-- `interval_seconds: float` — seconds between runs
+- `interval_seconds: float | None` — seconds between runs; `None` for a run-once task
 - `fixed_interval: bool` — if `True`, next run is measured from job start time; if `False`, from completion
 - `run_once: bool` — if `True`, task runs once then is removed
 - `status: str` — `"active"`, `"running"`, or `"paused"`

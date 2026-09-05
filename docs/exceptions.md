@@ -10,9 +10,9 @@ All custom exceptions inherit from `QuivError`.
 	- `DatabaseInitializationError`
 	- `HandlerRegistrationError`
 	- `HandlerNotRegisteredError`
-	- `TaskNotScheduledError`
 	- `TaskNotActiveError`
 	- `TaskNotFoundError`
+		- `TaskNotScheduledError` (deprecated alias)
 	- `JobNotFoundError`
 
 ## Exception reference
@@ -44,17 +44,17 @@ Raised when an operation requires a registered handler but none exists for the g
 
 [^1]: This typically means `run_task_immediately()` was called with a `task_id` that was never returned by `add_task()`, or the task was already removed.
 
-### `TaskNotScheduledError`
-
-Raised when a task handler is registered but the scheduled task row no longer exists in the database, for example if it was deleted externally.
-
 ### `TaskNotActiveError`
 
 Raised when an operation requires an `active` task. Currently raised by `run_task_immediately()` when the task is `running` (a second concurrent run would break the no-overlap guarantee) or `paused` (un-pausing must be an explicit `resume_task()` call).
 
 ### `TaskNotFoundError`
 
-Raised when a task ID lookup fails in persistence operations (pause/resume/finalize).
+Raised when a task id is unknown. Every method that takes a `task_id` raises it: `get_task()`, `update_task()`, `remove_task()`, `pause_task()`, `resume_task()` and `run_task_immediately()`. A run-once task deletes itself when it finishes, so its id stops resolving after it runs.
+
+### `TaskNotScheduledError`
+
+Deprecated alias of `TaskNotFoundError`, removed in 1.0.0. quiv no longer raises it. The name stays exported so that imports in 0.x code keep working. Catch `TaskNotFoundError` instead — an `except TaskNotScheduledError` clause no longer catches these errors.
 
 ### `JobNotFoundError`
 
