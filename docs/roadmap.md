@@ -59,6 +59,14 @@ These features all touch the `add_task()` signature and the job-finalize path, a
 
 **Exit criteria:** the FastAPI example application gains an admin endpoint exercising all three features.
 
+## `v0.10.0` — Absolute-time scheduling
+
+**Status: ✅ complete** — implemented 2026-09-05, ships as `v0.10.0`.
+
+Not a roadmap phase. `add_task()` gained a `run_at` parameter that takes the absolute time of the first run, as an alternative to `delay` ([#66](https://github.com/nandyalu/quiv/issues/66)). A one-off task is an alarm, and an alarm is naturally set for a time rather than for a duration. The change is additive and keyword-only, so it carried no API-freeze deadline; it shipped ahead of Phase 6 because callers were repeating the same clock arithmetic.
+
+This is not calendar scheduling. `run_at` names one instant for one run. Recurrence stays interval-based — see [Out of scope](#out-of-scope-for-v100).
+
 ## Phase 6 — v1.0.0 Hardening & Release
 
 1. API freeze review: a naming pass over the entire public surface (last chance for breaking changes), `__all__` audit, and removal of anything deprecated during the 0.x series.
@@ -70,7 +78,7 @@ These features all touch the `add_task()` signature and the job-finalize path, a
 
 The following were reviewed and explicitly deferred:
 
-- **Cron / calendar scheduling** — interval-based scheduling remains the model; the `timezone` parameter stays display-only.
+- **Cron / calendar scheduling** — interval-based scheduling remains the model; the `timezone` parameter stays display-only. `run_at` (v0.10.0) sets the absolute time of a *first* run and does not change this: there is still no calendar expression and no recurrence rule.
 - **Durable persistence** — each `Quiv` instance keeps its temporary SQLite database, deleted on `shutdown()`.
 - **Event-loop reuse for async handlers** — each async invocation keeps its own fresh event loop by design: closing the loop after every job guarantees that leaked `asyncio` tasks or loop state from one job can never bleed into the next. Isolation wins over the micro-optimization.
 - **Lazy logging** — eager f-string formatting in log calls stays as-is.

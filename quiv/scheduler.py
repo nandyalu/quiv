@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta, datetime, tzinfo
+from datetime import timedelta, datetime, timezone, tzinfo
 import logging
 import pickle
 import threading
@@ -44,6 +44,26 @@ def _validate_interval(value: float | None) -> None:
     # unguarded comparison.
     if value is None or value <= 0:
         raise ConfigurationError("interval must be greater than 0")
+
+
+def _validate_delay(value: float) -> None:
+    if value < 0:
+        raise ConfigurationError("delay must be greater than or equal to 0")
+
+
+def _to_utc(value: datetime) -> datetime:
+    """Read a naive datetime as UTC, and convert an aware one to UTC.
+
+    Naive input is read as UTC, not as the display timezone. The
+    ``timezone`` setting only formats log output; every stored time is
+    UTC.
+    """
+
+    if not isinstance(value, datetime):
+        raise ConfigurationError("run_at must be a datetime")
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _validate_timeout(value: float | None) -> None:
@@ -130,13 +150,14 @@ class Quiv(QuivBase):
         task_name: str,
         func: Callable[..., Any],
         interval: float | None = None,
-        delay: float = 0,
+        delay: float | None = None,
         run_once: bool = False,
         fixed_interval: bool = True,
         args: tuple[Any, ...] | None = None,
         kwargs: dict[str, Any] | None = None,
         progress_callback: Callable[..., Any] | None = None,
         *,
+        run_at: datetime | None = None,
         timeout: float | None = None,
         max_retries: int = 0,
         retry_backoff: float = 30.0,
@@ -151,7 +172,9 @@ class Quiv(QuivBase):
                 between runs. Required unless ``run_once=True``. A
                 run-once task never repeats, so an interval given with
                 ``run_once=True`` is ignored and stored as ``None``.
-            delay (float, Optional=0): Initial delay before first run in seconds.
+            delay (float, Optional=None): Initial delay before first run
+                in seconds. Defaults to no delay. Mutually exclusive
+                with ``run_at``.
             run_once (bool, Optional=False): If ``True``, run task once and remove it.
             fixed_interval (bool, Optional=True): If ``True``, next run is
                 scheduled at fixed intervals from the job start time. If
@@ -160,6 +183,12 @@ class Quiv(QuivBase):
             args (tuple[Any, ...], Optional=None): Positional arguments for handler.
             kwargs (dict[str, Any], Optional=None): Keyword arguments for handler.
             progress_callback (Callable[..., Any], Optional=None): Optional progress callback executed on main loop.
+            run_at (datetime, Optional=None): Keyword-only. Absolute time
+                of the first run, as an alternative to ``delay``. A naive
+                datetime is read as UTC. A time already past runs at
+                once, because the process may have been down when the
+                time came due. Passing both ``run_at`` and ``delay``
+                raises ``ConfigurationError``.
             timeout (float, Optional=None): Keyword-only. Cooperative
                 per-job timeout in seconds. When a job exceeds it, quiv
                 sets the job's stop event — exactly as ``cancel_job()``
@@ -195,10 +224,12 @@ class Quiv(QuivBase):
             interval = None
         else:
             _validate_interval(interval)
-        if delay < 0:
+        if run_at is not None and delay is not None:
             raise ConfigurationError(
-                "delay must be greater than or equal to 0"
+                "run_at and delay are mutually exclusive; pass one"
             )
+        if delay is not None:
+            _validate_delay(delay)
         _validate_timeout(timeout)
         _validate_max_retries(max_retries)
         _validate_retry_backoff(retry_backoff)
@@ -221,7 +252,14 @@ class Quiv(QuivBase):
         args_pickled = _pickle_or_raise(resolved_args, "args")
         kwargs_pickled = _pickle_or_raise(resolved_kwargs, "kwargs")
 
-        next_run = self._now_utc() + timedelta(seconds=delay)
+        now = self._now_utc()
+        if run_at is not None:
+            # A time already past runs at once rather than raising: the
+            # process may have been down when it came due, and dropping
+            # the task is worse than running it late.
+            next_run = max(_to_utc(run_at), now)
+        else:
+            next_run = now + timedelta(seconds=delay or 0)
         task_id = self.persistence.create_task(
             task_name=task_name,
             interval=interval,
@@ -241,9 +279,7 @@ class Quiv(QuivBase):
 
         next_run_user_tz = self._to_display_timezone(next_run)
         schedule = (
-            f"as run-once with delay {delay}s"
-            if run_once
-            else f"with interval {interval}s and delay {delay}s"
+            "as run-once" if run_once else f"with interval {interval}s"
         )
         self._logger.info(
             f"Task '{task_name}' added {schedule}"

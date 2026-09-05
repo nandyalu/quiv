@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -219,6 +221,140 @@ def test_task_not_scheduled_error_subclasses_task_not_found(
     from quiv.exceptions import TaskNotScheduledError
 
     assert issubclass(TaskNotScheduledError, TaskNotFoundError)
+
+
+def test_add_task_run_at_schedules_an_absolute_time(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """run_at sets next_run_at exactly, with no caller arithmetic (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        when = datetime.now(timezone.utc) + timedelta(hours=2)
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, run_at=when, run_once=True
+        )
+        assert scheduler.get_task(task_id).next_run_at == when
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_at_converts_an_aware_datetime_to_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """An aware datetime in any zone lands on the same instant (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        when = (datetime.now(timezone.utc) + timedelta(hours=3)).astimezone(
+            ZoneInfo("America/New_York")
+        )
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, run_at=when, run_once=True
+        )
+        stored = scheduler.get_task(task_id).next_run_at
+        assert stored == when
+        assert stored.tzinfo is not None
+        assert stored.utcoffset() == timedelta(0)
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_at_reads_a_naive_datetime_as_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A naive datetime is UTC, never the display timezone (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop, timezone="America/New_York")
+    try:
+        naive = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(
+            tzinfo=None
+        )
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, run_at=naive, run_once=True
+        )
+        assert scheduler.get_task(task_id).next_run_at == naive.replace(
+            tzinfo=timezone.utc
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_at_in_the_past_runs_at_once(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A missed time runs late instead of raising or being dropped (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        before = datetime.now(timezone.utc)
+        task_id = scheduler.add_task(
+            task_name="alarm",
+            func=lambda: None,
+            run_at=before - timedelta(days=1),
+            run_once=True,
+        )
+        next_run = scheduler.get_task(task_id).next_run_at
+        assert next_run >= before
+        assert next_run <= datetime.now(timezone.utc)
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_at_and_delay_are_mutually_exclusive(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Passing both is a ConfigurationError, delay=0 included (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        when = datetime.now(timezone.utc) + timedelta(minutes=5)
+        for delay in (5, 0):
+            with pytest.raises(
+                ConfigurationError, match="mutually exclusive"
+            ):
+                scheduler.add_task(
+                    task_name="alarm",
+                    func=lambda: None,
+                    run_at=when,
+                    delay=delay,
+                    run_once=True,
+                )
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_run_at_rejects_a_non_datetime(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A bad run_at reports ConfigurationError, not TypeError (#66)."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(
+            ConfigurationError, match="run_at must be a datetime"
+        ):
+            scheduler.add_task(
+                task_name="alarm",
+                func=lambda: None,
+                run_at="2026-01-01T00:00:00",  # type: ignore[arg-type]
+                run_once=True,
+            )
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_at_task_executes(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A task scheduled by absolute time actually runs (#66)."""
+    ran = threading.Event()
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.add_task(
+            task_name="alarm",
+            func=ran.set,
+            run_at=datetime.now(timezone.utc) + timedelta(milliseconds=200),
+            run_once=True,
+        )
+        scheduler.start()
+        assert ran.wait(timeout=5)
+    finally:
+        scheduler.shutdown()
 
 
 def test_add_task_validates_args_type(

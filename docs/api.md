@@ -50,13 +50,14 @@ add_task(
     task_name: str,
     func: Callable[..., Any],
     interval: float | None = None,
-    delay: float = 0,
+    delay: float | None = None,
     run_once: bool = False,
     fixed_interval: bool = True,
     args: tuple | None = None,
     kwargs: dict | None = None,
     progress_callback: Callable[..., Any] | None = None,
     *,
+    run_at: datetime | None = None,
     timeout: float | None = None,
     max_retries: int = 0,
     retry_backoff: float = 30.0,
@@ -83,7 +84,8 @@ Validation:
 
 - `task_name` must not be empty
 - `interval > 0` — sub-second intervals (e.g. `interval=0.2`) are supported. Required unless `run_once=True`
-- `delay >= 0`
+- `delay >= 0`, and not combined with `run_at`
+- `run_at` must be a `datetime`
 - `timeout > 0` when provided
 - `max_retries >= 0`
 - `retry_backoff > 0`
@@ -98,6 +100,7 @@ Behavior:
 
 - `func` may be sync or async
 - a run-once task never repeats, so it needs no `interval`. An interval passed with `run_once=True` is ignored, and `Task.interval_seconds` reads `None`
+- `run_at` schedules the first run at an absolute time, as an alternative to `delay`. A naive `datetime` is read as UTC — the `timezone` setting only formats log output. A time already past runs at once, because the process may have been down when the time came due. Passing both `run_at` and `delay` raises `ConfigurationError`
 - `args`/`kwargs` are pickle-serialized and persisted — most Python objects are supported, but lambdas and inner functions are not picklable. 
   
     !!! warning
