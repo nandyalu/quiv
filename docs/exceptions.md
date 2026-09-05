@@ -42,7 +42,7 @@ Raised when registering invalid handlers/callbacks (empty task id, non-callable 
 
 Raised when an operation requires a registered handler but none exists for the given task id[^1].
 
-[^1]: This typically means `run_task_immediately()` was called with a `task_id` that was never returned by `add_task()`, or the task was already removed.
+[^1]: The task exists, but no handler is registered for it. `add_task()` registers a handler with every task, and removal drops both, so this normally means the `registry` dict was changed directly. An unknown `task_id` — including one whose task was removed, or a run-once task that already fired — raises `TaskNotFoundError` instead.
 
 ### `TaskNotActiveError`
 
