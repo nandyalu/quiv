@@ -1,6 +1,6 @@
 # Phase 6 — v1.0.0 Hardening & Release
 
-No features. This phase turns the 0.9.0 codebase into a 1.0.0 release: API freeze, docs completion, benchmarks, coverage, and a soak test. Work through the sections in order; each has its own verifiable output.
+No features. This phase turns the 0.10.0 codebase into a 1.0.0 release: API freeze, docs completion, benchmarks, coverage, and a soak test. Work through the sections in order; each has its own verifiable output.
 
 ---
 
@@ -22,7 +22,7 @@ Checklist to review, one by one:
 
 ## 2. Documentation completion
 
-- [ ] `docs/release-notes.md`: consolidated 1.0.0 entry summarizing 0.3 → 0.7 plus a short **"Migrating from 0.x"** subsection. Known behavior changes to list: `run_task_immediately` now raises `TaskNotActiveError` on non-active tasks and `TaskNotFoundError` (not `HandlerNotRegisteredError`) on an unknown id; `shutdown(timeout=...)`; scheduler no longer polls at 1 Hz (timing-sensitive code that relied on ~1 s dispatch granularity now sees near-immediate dispatch).
+- [ ] `docs/release-notes.md`: consolidated 1.0.0 entry summarizing 0.3 → 0.10 plus a short **"Migrating from 0.x"** subsection. Known behavior changes to list: `run_task_immediately` now raises `TaskNotActiveError` on non-active tasks and `TaskNotFoundError` (not `HandlerNotRegisteredError`) on an unknown id; `shutdown(timeout=...)`; `add_task(interval=...)` is optional for run-once tasks and `delay` now defaults to `None` so it can be told apart from `run_at`; scheduler no longer polls at 1 Hz (timing-sensitive code that relied on ~1 s dispatch granularity now sees near-immediate dispatch).
 - [ ] Verify pages added in earlier phases exist and are in nav: `failure-handling.md` (Phase 4), `observability.md` (Phase 5).
 - [ ] README: refresh the pitch (`README.md` mirrors `docs/index.md` — keep them in sync), add a short comparison table (quiv vs `BackgroundTasks` vs APScheduler vs Celery — columns: in-process, cancellation, progress-to-loop, retries, timeout, persistence, distribution) that honestly shows what quiv does NOT do (no cron, no durable store, no multi-process).
 - [ ] Every public method's docstring shows a `Raises:` section that is actually accurate (spot-check by grepping raise sites per module).

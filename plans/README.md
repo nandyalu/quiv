@@ -5,6 +5,8 @@ One plan per roadmap phase (see [docs/roadmap.md](../docs/roadmap.md)). Each pla
 ## Rules for implementers
 
 1. **Do the phases in order.** Later phases assume earlier machinery (e.g. Phase 4 timeout enforcement rides on Phase 2's wake-event loop).
+
+   The phase numbers are consecutive; the version numbers are not. `v0.10.0` shipped between Phase 5 and Phase 6 and has no plan of its own — it was a single additive parameter, not a phase. Read the version column, not the phase number, when you need to know what a release contains.
 2. **Read the whole plan before writing code.** The Pitfalls section exists because each item was hit or foreseen during design review.
 3. **Do not expand scope.** Cron scheduling, durable persistence, event-loop reuse, and lazy logging were explicitly rejected — see "Out of scope" in [docs/roadmap.md](../docs/roadmap.md). In particular, `run_async` must keep creating a **fresh event loop per invocation** (isolation requirement).
 4. **Every phase must pass before it ships:**
@@ -25,4 +27,5 @@ One plan per roadmap phase (see [docs/roadmap.md](../docs/roadmap.md)). Each pla
 | 3 | v0.7.0 | [phase-3-db-locking.md](phase-3-db-locking.md) | Finer-grained persistence locking |
 | 4 | v0.8.0 | [phase-4-execution-features.md](phase-4-execution-features.md) | Timeout, retry/backoff, jitter |
 | 5 | v0.9.0 | [phase-5-management-api.md](phase-5-management-api.md) | update_task, rich queries, stats() |
+| — | v0.10.0 | no plan | `run_at` absolute-time scheduling ([#66](https://github.com/nandyalu/quiv/issues/66)) — not a phase |
 | 6 | v1.0.0 | [phase-6-release-hardening.md](phase-6-release-hardening.md) | API freeze, docs, benchmarks, soak |

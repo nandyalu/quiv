@@ -2,7 +2,7 @@
 
 This page tracks the planned work between the current release and `v1.0.0`. The scope was reviewed and frozen on 2026-07-10; items listed under [Out of scope](#out-of-scope-for-v100) were considered and explicitly deferred.
 
-The roadmap is organized into six phases. Each phase ships independently as its own minor release, and later phases build on machinery introduced by earlier ones.
+The roadmap is organized into six phases. Each phase ships independently as its own minor release, and later phases build on machinery introduced by earlier ones. One release, `v0.10.0`, sits outside the phases: the phase numbers stay consecutive, so the version numbers do not.
 
 Detailed implementation plans — one per phase, with prescriptive design decisions, test lists, pitfalls, and exit checklists — live in the repository under [`plans/`](https://github.com/nandyalu/quiv/tree/main/plans).
 

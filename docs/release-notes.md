@@ -1,5 +1,5 @@
 <a id="v0.10.0"></a>
-## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-05
+## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-08
 
 `add_task()` can now schedule the first run at an absolute time.
 
