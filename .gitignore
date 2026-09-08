@@ -15,3 +15,9 @@ wheels/
 site/
 docs-help/
 docs/llms-full.txt
+
+# graft — local-only, regenerable per machine (run `graft init`).
+/graft/
+/.claude/
+/.mcp.json
+/.ignore
