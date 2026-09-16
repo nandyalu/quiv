@@ -1,0 +1,10 @@
+# Revisions to skip when running `git blame`.
+#
+# These commits changed formatting only, never behavior. Skipping them keeps
+# blame pointing at the commit that actually wrote each line.
+#
+# GitHub reads this file automatically. To use it locally, run:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: normalize line endings to LF, add .gitattributes
+eb45d6c4503b4fbe489183f3aeae1f6853baa39d
