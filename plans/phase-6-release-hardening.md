@@ -43,7 +43,7 @@ These are scripts, not pytest — no CI integration (perf assertions in CI are f
 
 ## 4. Coverage
 
-- [ ] Add to `pyproject.toml`:
+- [x] Add to `pyproject.toml`:
 
       ```toml
       [tool.coverage.report]
@@ -54,8 +54,8 @@ These are scripts, not pytest — no CI integration (perf assertions in CI are f
       source = ["quiv"]
       ```
 
-- [ ] `uv run pytest --cov=quiv` ≥ 95 %. Close gaps with real tests — do NOT chase 100 % by adding `# pragma: no cover` to reachable logic; pragmas are only for genuinely unreachable/defensive lines (the codebase already uses them that way).
-- [ ] Wire `--cov` + fail_under into the tests CI workflow (`.github/workflows/tests.yml`) if not already there — read the workflow first; keep its existing matrix untouched.
+- [x] `uv run pytest --cov=quiv` ≥ 95 %. Close gaps with real tests — do NOT chase 100 % by adding `# pragma: no cover` to reachable logic; pragmas are only for genuinely unreachable/defensive lines (the codebase already uses them that way).
+- [x] Wire `--cov` + fail_under into the tests CI workflow (`.github/workflows/tests.yml`) if not already there — read the workflow first; keep its existing matrix untouched.
 
 ## 5. Soak test
 

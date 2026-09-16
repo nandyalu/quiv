@@ -34,6 +34,11 @@ jobs:
         run: uv sync
 
       - name: Run tests with coverage
+        # The coverage floor lives in pyproject.toml ([tool.coverage.report]
+        # fail_under). pytest exits non-zero when coverage drops below it, so
+        # this step fails the build on a coverage regression as well as on a
+        # test failure. Keep the threshold in pyproject only — a second copy
+        # here would drift.
         run: uv run pytest tests/ -v --cov=quiv --cov-report=term --cov-report=xml
 
       - name: Upload coverage report

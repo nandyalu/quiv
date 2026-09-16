@@ -175,6 +175,113 @@ def test_update_task_rejects_kwargs_colliding_with_injected_params(
         scheduler.shutdown()
 
 
+def test_remove_task_leaves_other_running_jobs_alone(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Removing one task must not cancel a running job of another task.
+
+    remove_task() scans every RUNNING job and skips the ones that belong
+    to a different task. That skip had no coverage before v1.0.0.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    keeper_started = threading.Event()
+    doomed_started = threading.Event()
+    release = threading.Event()
+    keeper_cancelled = threading.Event()
+
+    def keeper(stop_event: threading.Event) -> None:
+        keeper_started.set()
+        if stop_event.wait(timeout=5):
+            keeper_cancelled.set()
+
+    def doomed(stop_event: threading.Event) -> None:
+        doomed_started.set()
+        release.wait(timeout=5)
+
+    try:
+        scheduler.add_task(
+            task_name="keeper", func=keeper, interval=60, run_once=True
+        )
+        doomed_id = scheduler.add_task(
+            task_name="doomed", func=doomed, interval=60, run_once=True
+        )
+        scheduler.start()
+        assert keeper_started.wait(timeout=3)
+        assert doomed_started.wait(timeout=3)
+
+        # Both jobs are RUNNING. Removing "doomed" walks the running-job
+        # list and must skip the job belonging to "keeper".
+        scheduler.remove_task(doomed_id)
+        release.set()
+
+        # The keeper's stop event must still be unset.
+        assert not keeper_cancelled.wait(timeout=0.5)
+    finally:
+        release.set()
+        scheduler.shutdown(timeout=5)
+
+
+def test_update_task_changes_every_updatable_field(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Each updatable field is written through to the task row.
+
+    fixed_interval, args, max_retries and retry_backoff had no coverage
+    before v1.0.0, though update_task has accepted them since v0.9.0.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="before",
+            func=lambda *a: None,
+            interval=60,
+            delay=3600,
+            fixed_interval=True,
+            args=(1,),
+            max_retries=0,
+            retry_backoff=30.0,
+            jitter=0.0,
+        )
+        scheduler.update_task(
+            task_id,
+            task_name="after",
+            interval=120,
+            fixed_interval=False,
+            args=(2, 3),
+            max_retries=5,
+            retry_backoff=7.5,
+            jitter=1.5,
+        )
+
+        task = scheduler.get_task(task_id)
+        assert task.task_name == "after"
+        assert task.interval_seconds == 120
+        assert task.fixed_interval is False
+        assert task.args == (2, 3)
+        assert task.max_retries == 5
+        assert task.retry_backoff_seconds == 7.5
+        assert task.jitter_seconds == 1.5
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_rejects_non_callable_progress_callback(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A progress callback that is not callable is refused, as in add_task."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="sync", func=lambda: None, interval=60, delay=3600
+        )
+        with pytest.raises(HandlerRegistrationError, match="must be callable"):
+            scheduler.update_task(task_id, progress_callback="not-callable")
+        # Passing None is allowed: it clears the callback.
+        scheduler.update_task(task_id, progress_callback=None)
+    finally:
+        scheduler.shutdown()
+
+
 def test_update_task_accepts_kwargs_that_do_not_collide(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

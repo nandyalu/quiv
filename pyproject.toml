@@ -55,3 +55,10 @@ python_version = "3.10"
 strict = true
 exclude = ["^docs/"]
 
+[tool.coverage.run]
+source = ["quiv"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+
