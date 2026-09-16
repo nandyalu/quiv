@@ -111,6 +111,21 @@ Work through this list. Each entry names the release that changed the behavior.
 
 Nothing else in the `0.x` API changed. Your calls to `add_task()`, `pause_task()`, `resume_task()`, `remove_task()`, `cancel_job()`, and the query methods keep working.
 
+### Performance
+
+`v1.0.0` adds a [benchmark suite](https://github.com/nandyalu/quiv/tree/main/benchmarks). The numbers below come from an Intel Core i5-11600 at 2.80 GHz, 12 logical CPUs, Linux, Python 3.10.12. Read them as one machine on one day.
+
+| Measurement | Result |
+| --- | --- |
+| Time from a task becoming due to its handler starting | 14 ms at p50, 18 ms at p95 |
+| 100 tasks that share one due time | about 5 ms for each extra task in the batch |
+| Jobs completed each second, no-op handler, `pool_size=16` | about 200 |
+| `add_task()` calls each second | about 1000 |
+
+The first row is the one to remember. A task starts within about 18 ms of its due time, where quiv `0.5` and earlier polled once a second and could take up to 1000 ms.
+
+**A larger pool does not raise the rate of short jobs.** Between `pool_size=4` and `pool_size=64` the rate stays near 200 jobs per second. The limit is the database, not the pool: each job writes four times, and a write takes the writer lock, so those writes queue behind the writes of every other job. Raise `pool_size` when your handlers wait on something. For work that lasts a few milliseconds, the bookkeeping costs more than the work itself.
+
 <a id="v0.10.0"></a>
 ## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-08
 

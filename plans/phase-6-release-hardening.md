@@ -34,10 +34,10 @@ Checklist to review, one by one. **All items complete** — every decision is re
 
 Create `benchmarks/` at the repo root (NOT inside `quiv/`; excluded from the wheel automatically since hatch only packages `quiv`). Two scripts, each runnable via `uv run python benchmarks/<name>.py` and printing a small table:
 
-- [ ] `benchmarks/bench_dispatch_latency.py`: schedule 100 run-once tasks due "now" with a no-op handler; measure per-job `started_at - next_run_at` (the row is deleted for run-once, so capture the scheduled time at add time); report p50/p95/max. Target: p95 < 50 ms.
-- [ ] `benchmarks/bench_throughput.py`: `pool_size=16`, 1,000 run-once no-op tasks; measure wall time from `start()` to last COMPLETED job; report jobs/second. Also run a variant with a 10 ms sleeping handler to show pool saturation behavior.
-- [ ] `benchmarks/README.md`: how to run, machine caveats, and the recorded numbers for the release (update at release time).
-- [ ] Copy the headline numbers into the 1.0.0 release notes.
+- [x] `benchmarks/bench_dispatch_latency.py`: schedule 100 run-once tasks due "now" with a no-op handler; measure per-job `started_at - next_run_at` (the row is deleted for run-once, so capture the scheduled time at add time); report p50/p95/max. Target: p95 < 50 ms.
+- [x] `benchmarks/bench_throughput.py`: `pool_size=16`, 1,000 run-once no-op tasks; measure wall time from `start()` to last COMPLETED job; report jobs/second. Also run a variant with a 10 ms sleeping handler to show pool saturation behavior.
+- [x] `benchmarks/README.md`: how to run, machine caveats, and the recorded numbers for the release (update at release time).
+- [x] Copy the headline numbers into the 1.0.0 release notes.
 
 These are scripts, not pytest — no CI integration (perf assertions in CI are flaky by nature). Do not add pytest-benchmark.
 
