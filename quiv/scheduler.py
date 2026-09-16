@@ -490,8 +490,12 @@ class Quiv(QuivBase):
         loop early via ``_wake_loop()``.
         """
 
-        while not getattr(self, "_initialized", False):
-            time.sleep(0.1)
+        # Unreachable as written: __init__ sets _initialized as its last
+        # statement, and the thread only starts in start(), which a caller
+        # reaches after __init__ returns. Kept as a guard in case that
+        # ordering ever changes.
+        while not getattr(self, "_initialized", False):  # pragma: no cover
+            time.sleep(0.1)  # pragma: no cover
 
         self._logger.info("Scheduler loop starting")
         next_cleanup = time.monotonic()  # run cleanup on first iteration

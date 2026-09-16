@@ -529,6 +529,54 @@ def test_shutdown_timeout_with_hung_handler(
     # not reuse this scheduler instance.
 
 
+def test_shutdown_warns_when_loop_thread_outlives_the_timeout(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """shutdown() warns when the scheduler thread misses its deadline.
+
+    A real wedged loop thread cannot be produced on demand, so the thread
+    is replaced with a stand-in that reports itself alive and returns
+    from join() at once. That drives the same branch shutdown() takes
+    when a thread outlives its timeout.
+    """
+
+    class NeverStops:
+        """Stands in for a scheduler thread that ignores its deadline."""
+
+        def __init__(self, real: threading.Thread) -> None:
+            self._real = real
+            self.join_timeouts: list[float | None] = []
+
+        def is_alive(self) -> bool:
+            return True
+
+        def join(self, timeout: float | None = None) -> None:
+            self.join_timeouts.append(timeout)
+
+        def start(self) -> None:  # pragma: no cover - not used here
+            self._real.start()
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    scheduler.start()
+    real_thread = scheduler.thread
+    stand_in = NeverStops(real_thread)
+    scheduler.thread = stand_in  # type: ignore[assignment]
+
+    with caplog.at_level("WARNING", logger="Quiv"):
+        scheduler.shutdown(timeout=0.2)
+
+    assert stand_in.join_timeouts == [0.2]
+    assert any(
+        "did not stop within the shutdown timeout" in record.message
+        for record in caplog.records
+    ), [r.message for r in caplog.records]
+
+    # Let the real loop thread finish so it leaks nothing into later tests.
+    real_thread.join(timeout=5)
+    assert not real_thread.is_alive()
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: stats()
 # ---------------------------------------------------------------------------
