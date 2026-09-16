@@ -3,6 +3,21 @@
 
 The first stable release. `v1.0.0` freezes the public API.
 
+### What changed since v0.3
+
+Six phases of work separate `v0.3` from `v1.0.0`. Each one shipped as its own minor release.
+
+| Release | Theme | Main additions |
+| --- | --- | --- |
+| `v0.5.0` | Correctness and stability | A guard against a double run in `run_task_immediately()`, locked handler registries, and `shutdown(timeout=...)` |
+| `v0.6.0` | Scheduler efficiency | The loop sleeps until the next task is due, instead of polling once a second. Intervals below one second work, and an idle scheduler queries the database zero times |
+| `v0.7.0` | Database locking | Reads run without a lock under WAL. Writes serialize on a writer lock |
+| `v0.8.0` | Execution features | `timeout`, `max_retries` with exponential backoff, and `jitter` |
+| `v0.9.0` | Management and observability | `update_task()`, filters and paging for the job and task queries, and `stats()` |
+| `v0.10.0` | Absolute-time scheduling | `run_at` sets the time of the first run |
+
+Read [Migrating from 0.x](#migrating-from-0x) for every change that needs an edit to your code.
+
 ### Breaking changes
 
 !!! warning "Injected handler parameters lost the underscore prefix"
@@ -72,6 +87,29 @@ from quiv import TaskNotFoundError
 `run_on_main()` raised a bare `RuntimeError` when it could not reach a main event loop. It now raises `MainLoopUnavailableError`, which inherits both `QuivError` and `RuntimeError`.
 
 This is not a breaking change. An existing `except RuntimeError` clause still catches it, and `except QuivError` now catches it as well. Every exception that quiv raises is under `QuivError`.
+
+### Migrating from 0.x
+
+Work through this list. Each entry names the release that changed the behavior.
+
+**1. Rename the injected handler parameters.** (`v1.0.0`) Change `_job_id` to `job_id`, `_stop_event` to `stop_event`, and `_progress_hook` to `progress_hook`. `add_task()` raises `ConfigurationError` if you miss one. See [the section above](#breaking-changes).
+
+**2. Catch `TaskNotFoundError` instead of `TaskNotScheduledError`.** (`v0.9.0`, removed in `v1.0.0`) The alias is gone.
+
+**3. Check the exceptions you catch around `run_task_immediately()`.** (`v0.5.0`, `v0.9.0`) Two causes now report different exceptions:
+
+- The task is `running` or `paused` — `TaskNotActiveError`. Earlier versions dispatched a second concurrent run, or un-paused the task without telling you. Call `resume_task()` to un-pause a task.
+- The task id is unknown — `TaskNotFoundError`. Earlier versions raised `HandlerNotRegisteredError`, which names a different fault. `HandlerNotRegisteredError` keeps its own meaning: the task exists, but no handler is registered for it.
+
+**4. Review timing-sensitive code.** (`v0.6.0`) The scheduler no longer polls once a second. A due task now dispatches almost at once. Code that relied on the old delay of about one second sees a job start sooner than before.
+
+**5. Bound your shutdown if a handler can hang.** (`v0.5.0`) `shutdown(timeout=...)` limits how long quiv waits for the scheduler thread and for jobs still running. A job that does not exit within the deadline is abandoned on its worker thread, and quiv writes a warning. The default still waits forever.
+
+**6. Drop `interval` from a run-once task, if you want to.** (`v0.9.0`) A run-once task never repeats, so quiv never reads its interval. Passing one with `run_once=True` is accepted and ignored, and `Task.interval_seconds` reads `None`. A recurring task still needs `interval > 0`. Passing `interval=None` for a recurring task now raises `ConfigurationError`, where earlier versions raised `TypeError`.
+
+**7. Note the new default of `delay`.** (`v0.10.0`) `delay` defaults to `None` instead of `0`, so quiv can tell "no delay given" from `delay=0`. Omitting `delay` still means no delay, and `delay=0` still works. Passing both `delay` and `run_at` raises `ConfigurationError`.
+
+Nothing else in the `0.x` API changed. Your calls to `add_task()`, `pause_task()`, `resume_task()`, `remove_task()`, `cancel_job()`, and the query methods keep working.
 
 <a id="v0.10.0"></a>
 ## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-08

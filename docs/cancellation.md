@@ -1,12 +1,16 @@
 # Cancellation
 
-quiv uses cooperative cancellation via `threading.Event`. This gives handlers full control over how and when they stop, enabling clean resource cleanup and graceful shutdown.
+quiv cancels a job cooperatively, with a `threading.Event`. The handler keeps full control of when it stops and of how it stops. It can release its resources first, and it can finish the unit of work it started.
 
 ## How it works
 
-Each job gets its own `threading.Event` stop signal. When cancellation is requested, the event is set. The handler checks the event and decides how to respond.
+Each job has its own `threading.Event`, which is its stop signal. quiv sets the event when something asks for a cancellation. The handler reads the event and decides what to do.
 
-Three things set a job's stop event: `cancel_job(job_id)`, `remove_task()`/`shutdown()` for running jobs, and per-task timeouts (`add_task(..., timeout=30)`) — timeouts are cancellations through this exact mechanism, see [Failure Handling](failure-handling.md).
+Three things set the stop event of a job:
+
+- `cancel_job(job_id)`.
+- `remove_task()` and `shutdown()`, for a job that is running.
+- A timeout on the task, from `add_task(..., timeout=30)`. A timeout is a cancellation through this same mechanism. See [Failure Handling](failure-handling.md).
 
 ```mermaid
 sequenceDiagram
@@ -26,17 +30,17 @@ sequenceDiagram
 
 ### Key points
 
-- Cancellation is **cooperative** — the handler must check `stop_event` to actually stop. quiv cannot force-kill a running thread.
-- The handler decides **when** to check and **how** to clean up.
-- Job status is automatically set to `cancelled` if the stop event was set when the handler returns, regardless of whether the handler accepted `stop_event` in its signature.
+- Cancellation is **cooperative**. The handler must check `stop_event` to stop. quiv never kills a thread.
+- The handler decides **when** to check, and **how** to release its resources.
+- quiv sets the job status to `cancelled` if the stop event was set when the handler returned. This happens even when the handler does not declare `stop_event`.
 
-## Writing a cancellable handler
+## Writing a handler that can stop
 
-Add `stop_event` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
+Add `stop_event` to the signature of your handler. quiv reads the signature and injects the event only when the parameter is there.
 
 !!! warning "Renamed in v1.0.0 — was `_stop_event`"
 
-    quiv `0.x` injected this parameter as `_stop_event`. A handler that still declares the old name is rejected by `add_task()`, which raises `ConfigurationError` and names the new spelling. Rename the parameter; its behavior is unchanged. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
+    quiv `0.x` injected this parameter as `_stop_event`. `add_task()` rejects a handler that still declares the old name, and raises `ConfigurationError` that names the new spelling. Rename the parameter. Its behavior is unchanged. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
 
 ```python
 import threading
@@ -58,13 +62,13 @@ def long_running_task(
         time.sleep(0.1)
 ```
 
-### Check frequency
+### How often to check
 
-Check `stop_event` at natural breakpoints in your handler:
+Check `stop_event` at the natural breakpoints of your handler:
 
-- Between iterations of a loop
-- Before starting an expensive operation
-- After completing a unit of work
+- Between two turns of a loop.
+- Before an operation that costs a lot of time.
+- After you finish one unit of work.
 
 ```python
 def batch_processor(
@@ -85,9 +89,9 @@ def batch_processor(
             progress_hook(step=i + 1, total=len(batches))
 ```
 
-### Using `stop_event.wait()` instead of `time.sleep()`
+### Use `stop_event.wait()` in place of `time.sleep()`
 
-If your handler has a sleep/wait period, use `stop_event.wait()` instead of `time.sleep()`. This makes cancellation responsive even during wait periods:
+If your handler waits for a period, call `stop_event.wait()` rather than `time.sleep()`. The handler then stops during the wait, instead of after it.
 
 ```python
 def polling_task(
@@ -107,11 +111,11 @@ def polling_task(
             time.sleep(5)
 ```
 
-This pattern is especially useful for tasks that poll external services.
+Use this pattern for a task that polls an external service.
 
 ## Cancelling a job
 
-Use `cancel_job(job_id)` to signal cancellation:
+Call `cancel_job(job_id)` to send the signal:
 
 ```python
 # Find running jobs
@@ -122,11 +126,11 @@ for job in jobs:
     scheduler.cancel_job(job.id)
 ```
 
-`cancel_job` returns `True` if the stop event was found and set, `False` if the job was not found (already finished or invalid ID).
+`cancel_job()` returns `True` when it finds the stop event and sets it. It returns `False` when it finds no job, which means the job already finished or the id is wrong.
 
 ## Cancellation during shutdown
 
-When `shutdown()` is called, quiv automatically cancels all tracked running jobs by setting their stop events. Handlers that check `stop_event` will exit gracefully; handlers that don't will run to completion before the process exits.
+`shutdown()` cancels every running job that quiv tracks, by setting the stop event of each one. A handler that checks `stop_event` returns early. A handler that does not check it runs to the end, and the process waits.
 
 ```mermaid
 flowchart TD
@@ -138,9 +142,9 @@ flowchart TD
     F --> G["Delete DB files (.db, -wal, -shm)"]
 ```
 
-## How status is determined
+## How quiv decides the status
 
-When a job finishes, quiv checks the stop event to determine the final status. This happens in the `finally` block of `_run_job`, so it works regardless of how the handler exited:
+When a job finishes, quiv reads the stop event and sets the final status. It does this in the `finally` block of `_run_job`, so the result is the same however the handler exited.
 
 ```mermaid
 flowchart TD
@@ -155,21 +159,21 @@ flowchart TD
     G --> H
 ```
 
-Note that `cancelled` takes priority over both `completed` and `failed`. If a handler raises an exception *and* the stop event is set, the job is marked as `cancelled` — the assumption is that the cancellation caused the error.
+`cancelled` wins over `completed` and over `failed`. If a handler raises an exception and the stop event is also set, quiv marks the job `cancelled`, because the cancellation is the more likely cause of the error.
 
 ## Handlers without `stop_event`
 
-If your handler's signature does not include `stop_event` (and does not use `**kwargs`), the event is **not injected** — but it is still tracked internally. This means:
+If the signature of your handler has no `stop_event` and no `**kwargs`, quiv does not inject the event. It still creates the event and tracks it. Three things follow:
 
-- `cancel_job()` still sets the event
-- The job status is still set to `cancelled` if the event was set when the handler returns
-- The handler itself just can't respond to cancellation early
+- `cancel_job()` still sets the event.
+- quiv still sets the job status to `cancelled` if the event was set when the handler returned.
+- The handler cannot return early, because it never sees the event.
 
-This is useful for short-lived tasks where you don't need mid-execution cancellation but still want correct status tracking on shutdown.
+Write a handler this way when the task is short. You give up the early exit, and you keep the correct status at shutdown.
 
 ## Combining with progress callbacks
 
-A common pattern is to check `stop_event` and report progress in the same loop:
+Many handlers check `stop_event` and report progress in the same loop:
 
 ```python
 def export_data(
@@ -194,4 +198,4 @@ def export_data(
             )
 ```
 
-The progress callback and stop event are independent — you can use either or both. quiv injects each one only if the handler's signature accepts it.
+The progress callback and the stop event do not depend on each other. Use one, or both. quiv injects each one only when the signature of the handler accepts it.

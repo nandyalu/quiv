@@ -2,11 +2,11 @@
 
 `quiv` is split into focused layers:
 
-- `base` layer (`quiv/base.py`): runtime lifecycle, DB bootstrap, threadpool, callback plumbing, cancellation controls
-- `scheduler` layer (`quiv/scheduler.py`): public API and scheduling loop
-- `persistence` layer (`quiv/persistence.py`): task/job storage operations
-- `execution` layer (`quiv/execution.py`): invocation preparation and sync/async dispatch
-- `models` layer (`quiv/models.py`): SQLModel entities and status constants
+- The `base` layer (`quiv/base.py`) owns the runtime lifecycle, the setup of the database, the thread pool, the dispatch of callbacks, and the controls for cancellation.
+- The `scheduler` layer (`quiv/scheduler.py`) holds the public API and the scheduling loop.
+- The `persistence` layer (`quiv/persistence.py`) stores and reads the tasks and the jobs.
+- The `execution` layer (`quiv/execution.py`) prepares each invocation and calls sync and async handlers.
+- The `models` layer (`quiv/models.py`) holds the SQLModel entities and the status constants.
 
 ## Runtime flow
 
@@ -53,105 +53,102 @@ sequenceDiagram
     Q->>DB: Dispose engine + delete DB files
 ```
 
-1. `Quiv(...)` initializes runtime resources
-    - resolves timezone
-    - creates temporary SQLite database in OS temp directory
-    - initializes SQLModel tables
-    - creates threadpool executor
-2. `add_listener(event, callback)` registers a callback for scheduler events.
-    - Listeners can be added at any time.
-    - Multiple listeners per event are supported.
-3. `add_task(...)` creates a `Task` row with scheduling metadata, then registers the handler and progress callback by `task_id`.
+1. `Quiv(...)` prepares the runtime resources. It resolves the timezone, creates a temporary SQLite database in the temp directory of the operating system, creates the SQLModel tables, and creates the thread pool.
+2. `add_listener(event, callback)` registers a callback for the events of the scheduler. You can add a listener at any time, and each event can have several listeners.
+3. `add_task(...)` writes a `Task` row with the scheduling values, then registers the handler and the progress callback under the `task_id`.
 
-    - Returns a unique `task_id` (UUID string) used for all subsequent task operations.
-    - Multiple tasks can share the same `task_name` — each gets its own `task_id`.
-    - Emits `TASK_ADDED` event.
-    - Tasks can be added before `start()`, after `start()`, or at any point while the scheduler is running.
+    - It returns a unique `task_id`, a UUID string. Every later operation on the task uses it.
+    - Several tasks can share one `task_name`. Each task gets its own `task_id`.
+    - It emits the `TASK_ADDED` event.
+    - You can add a task before `start()`, after `start()`, and at any moment while the scheduler runs.
 
-4. `start()` launches scheduler loop thread.
-5. Loop iteration (sleeps until the next due task on an interruptible wait — no fixed polling tick):
-    - cleans old job history via SQL-level DELETE (every 60 seconds, via a wall-clock deadline)
-    - enforces per-task timeouts: sets the stop event of any running job past its deadline (cooperative, same mechanism as `cancel_job()`)
-    - checks backpressure: skips dispatch if all workers are busy
-    - selects due active tasks (`next_run_at <= now`, `status == active`)
-    - marks task as `running` — prevents concurrent runs of the same task
-    - creates a `Job` row for each due task
-    - prepares invocation args (inject hooks if supported; each handler's signature is introspected once and cached)
-    - submits execution to threadpool
-    - emits `JOB_STARTED` event
-    - sleeps until the earliest of: next due task, next cleanup deadline, soonest running-job timeout deadline, or a 60-second safety ceiling; `add_task()`, `run_task_immediately()`, `resume_task()`, `remove_task()`, job completion, and `shutdown()` wake the loop early, so schedule changes take effect immediately and an idle scheduler issues no database queries. Sub-second intervals are supported.
-6. Job completion:
-    - emits `JOB_COMPLETED`, `JOB_FAILED`, or `JOB_CANCELLED` event
-    - updates job with terminal status (`completed`, `failed`, `cancelled`); timed-out jobs finalize as `cancelled` with a timeout `error_message`
-    - sets task back to `active` and schedules next run (the next strictly-future interval boundary when `fixed_interval=True`, `now + interval` when `False`), plus `uniform(0, jitter)` seconds when jitter is configured
-    - on failure with retries remaining, schedules the retry at `now + retry_backoff * 2**(failures - 1)` instead and emits `JOB_RETRYING` after `JOB_FAILED` (cancelled jobs never retry)
-    - for run-once tasks, deletes the task row instead (only after retries are exhausted)
-    - jobs that started late due to pool saturation log a warning with the delay
+4. `start()` starts the thread that runs the scheduler loop.
+5. Each turn of the loop does the work below. The loop has no fixed polling tick: it sleeps until the next task is due, on a wait that quiv can interrupt.
+    - It deletes old job history with one SQL `DELETE`, every 60 seconds, against a wall-clock deadline.
+    - It enforces the timeout of each task. It sets the stop event of any running job that passed its deadline. This is cooperative, and it is the mechanism that `cancel_job()` uses.
+    - It checks backpressure, and dispatches nothing while every worker is busy.
+    - It selects the active tasks that are due, where `next_run_at <= now` and `status == active`.
+    - It marks the task `running`, which stops a second run of the same task.
+    - It creates one `Job` row for each due task.
+    - It prepares the arguments of the invocation, and injects the hooks that the handler accepts. quiv reads the signature of each handler once and keeps the result.
+    - It submits the job to the thread pool.
+    - It emits the `JOB_STARTED` event.
+    - It then sleeps until the earliest of four moments: the next due task, the next cleanup deadline, the nearest timeout deadline of a running job, and a ceiling of 60 seconds.
+
+    Six things wake the loop early: `add_task()`, `run_task_immediately()`, `resume_task()`, `remove_task()`, the completion of a job, and `shutdown()`. A change to the schedule therefore takes effect at once, and an idle scheduler sends no query to the database. Intervals below one second work.
+
+6. When a job completes, quiv does the following:
+    - It emits `JOB_COMPLETED`, `JOB_FAILED`, or `JOB_CANCELLED`.
+    - It writes the final status to the job: `completed`, `failed`, or `cancelled`. A job that passed its timeout finalizes as `cancelled`, and its `error_message` names the timeout.
+    - It sets the task back to `active` and schedules the next run. With `fixed_interval=True` that is the next interval boundary in the future. With `False` it is `now + interval`. quiv adds `uniform(0, jitter)` seconds when the task sets a jitter.
+    - If the job failed and retries remain, quiv schedules the retry at `now + retry_backoff * 2**(failures - 1)` instead, and emits `JOB_RETRYING` after `JOB_FAILED`. A cancelled job never retries.
+    - For a run-once task, quiv deletes the task row instead, and only after the retries run out.
+    - If a job started late because the pool was full, quiv writes a warning that names the delay.
 
 ## Cancellation model
 
-- each job receives its own `threading.Event` stop signal if handler accepts `stop_event`
-- `cancel_job(job_id)` sets that event when the job is currently tracked
-- per-task timeouts use the same mechanism: the scheduler loop sets the stop event when a job exceeds its deadline (see [Failure Handling](failure-handling.md))
-- cancellation is cooperative: handler code must check the event
+- Each job has its own `threading.Event` stop signal. quiv injects it when the handler accepts `stop_event`.
+- `cancel_job(job_id)` sets that event while quiv still tracks the job.
+- A timeout on a task uses the same mechanism. The scheduler loop sets the stop event when a job passes its deadline. See [Failure Handling](failure-handling.md).
+- Cancellation is cooperative. The code of the handler must check the event.
 
-For writing cancellable handlers, shutdown behavior, and status determination logic, see [Cancellation](cancellation.md).
+To write a handler that can stop, and to read how shutdown behaves and how quiv decides the final status, see [Cancellation](cancellation.md).
 
 ## Progress callback model
 
-- handlers can receive `progress_hook` when accepted in signature
-- calling `progress_hook(...)` dispatches configured progress callback via `_resolve_main_loop()`
-- the main event loop is lazily resolved on first dispatch — `Quiv()` can be instantiated at module level before any asyncio loop exists
-- with an event loop available:
-    - async callbacks are dispatched via `run_coroutine_threadsafe`
-    - sync callbacks are dispatched via `call_soon_threadsafe`
-- without an event loop (e.g. plain scripts without asyncio):
-    - sync callbacks run directly on the worker thread
-    - async callbacks run in a temporary event loop on the worker thread
+- A handler receives `progress_hook` when its signature accepts it.
+- A call to `progress_hook(...)` sends the payload to the registered progress callback, through `_resolve_main_loop()`.
+- quiv finds the main event loop on the first dispatch, not at startup. You can therefore create `Quiv()` at module level, before any asyncio loop exists.
+- With an event loop available:
+    - quiv sends an async callback with `run_coroutine_threadsafe`.
+    - quiv sends a sync callback with `call_soon_threadsafe`.
+- Without an event loop, in a plain script for example:
+    - A sync callback runs on the worker thread.
+    - An async callback runs in a temporary event loop on the worker thread.
 
-For dispatch flow details, async/sync examples, and error handling, see [Progress Callbacks](progress-callbacks.md).
+For the full dispatch flow, examples of both kinds, and error handling, see [Progress Callbacks](progress-callbacks.md).
 
 ## Event listener model
 
-- listeners are registered globally via `add_listener(event, callback)`
-- multiple listeners per event are supported, called in registration order
-- dispatch uses the same mechanism as progress callbacks:
-    - async listeners dispatched via `run_coroutine_threadsafe` on the main loop
-    - sync listeners dispatched via `call_soon_threadsafe` on the main loop
-    - without a loop: async listeners run in a temporary event loop, sync listeners run directly
-- listener exceptions are logged and swallowed — they never block the scheduler or fail a job
-- task events (`TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`) fire on the calling thread (whoever called `add_task()`, etc.)
-- job events (`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`) fire from the worker thread executing the job
+- You register a listener globally, with `add_listener(event, callback)`.
+- One event can have several listeners. quiv calls them in the order of registration.
+- Dispatch uses the same mechanism as the progress callbacks:
+    - quiv sends an async listener to the main loop with `run_coroutine_threadsafe`.
+    - quiv sends a sync listener to the main loop with `call_soon_threadsafe`.
+    - Without a loop, an async listener runs in a temporary event loop, and a sync listener runs directly.
+- quiv writes an exception from a listener to the log and continues. A listener never blocks the scheduler, and never fails a job.
+- The task events (`TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`) fire on the thread of the caller, which is whichever thread called `add_task()` or a similar method.
+- The job events (`JOB_STARTED`, `JOB_COMPLETED`, `JOB_FAILED`, `JOB_CANCELLED`) fire from the worker thread that runs the job.
 
-For event types, data payloads, and examples, see [Event Listeners](event-listeners.md).
+For the event types, their payloads, and examples, see [Event Listeners](event-listeners.md).
 
 ## Async execution model
 
-Async task handlers do not run on the main application event loop. Instead, each async invocation creates a dedicated thread-local event loop, runs the coroutine to completion, and tears down the loop. This ensures async handlers do not interfere with each other or with the main loop.
+An async task handler does not run on the main event loop of your application. Each async invocation creates its own event loop on the worker thread, runs the coroutine to the end, and closes the loop. Async handlers therefore cannot disturb each other, and cannot disturb the main loop.
 
 ## Persistence model
 
-- tasks and jobs are persisted in internal SQLite tables:
+- quiv stores the tasks and the jobs in two internal SQLite tables:
     - `quiv_task`
     - `quiv_job`
-- `quiv` uses a private SQLAlchemy `registry` to keep its metadata separate from user-defined SQLModel models
-- datetimes are normalized to UTC-aware values on model load
-- history cleanup removes old finished jobs by retention cutoff
+- `quiv` uses a private SQLAlchemy `registry`, which keeps its metadata separate from the SQLModel models of your application.
+- quiv converts every datetime to an aware UTC value when it loads a model.
+- The history cleanup deletes finished jobs that are older than the retention window.
 
 ## Thread safety
 
-- the scheduler loop runs in a single daemon thread
-- task handlers execute in the threadpool (`ThreadPoolExecutor`)
-- each handler invocation gets its own stop event and kwargs; there is no shared mutable state between concurrent handler runs
-- persistence operations use short-lived `Session` scopes; reads run lock-free under SQLite WAL, while read-modify-write operations serialize on a dedicated write lock
-- progress callbacks are dispatched thread-safely onto the main asyncio loop when available, or run directly on the worker thread when no loop exists
+- The scheduler loop runs in one daemon thread.
+- The task handlers run in the thread pool, a `ThreadPoolExecutor`.
+- Each invocation of a handler gets its own stop event and its own kwargs. Two handler runs share no mutable state.
+- The persistence operations use short `Session` scopes. A read needs no lock under SQLite WAL. An operation that reads, changes, and writes takes a dedicated write lock, one at a time.
+- quiv sends a progress callback to the main asyncio loop in a thread-safe way when a loop is available. Without a loop, the callback runs on the worker thread.
 
 ## Lifecycle and teardown
 
-- `shutdown()`:
-    - requests loop shutdown
-    - signals cancellation for tracked running jobs
-    - joins scheduler thread
-    - shuts down threadpool
-    - disposes engine and removes temp DB file
-- the temporary SQLite database does not survive process restarts
+- `shutdown()` does five things, in order:
+    - It asks the loop to stop.
+    - It sets the stop event of every running job that it tracks.
+    - It joins the scheduler thread.
+    - It shuts down the thread pool.
+    - It disposes the engine and deletes the temporary database file.
+- The temporary SQLite database does not survive a restart of the process.

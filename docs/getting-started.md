@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide gets `quiv` running with recurring tasks, progress callbacks, and clean shutdown behavior.
+This guide starts `quiv`, adds a recurring task, reports progress, and shuts the scheduler down cleanly.
 
 ## Install
 
@@ -36,7 +36,7 @@ For local development:
 
 ## 1) Create a scheduler
 
-You can configure `Quiv` with either a `QuivConfig` object or direct args.
+Configure `Quiv` in one of two ways: pass a `QuivConfig` object, or pass the values one by one.
 
 ```python
 from quiv import Quiv, QuivConfig
@@ -62,7 +62,7 @@ scheduler = Quiv(
 )
 ```
 
-Do not mix `config=...` with direct constructor config args. See [Quiv API](./api.md#quiv) for full configuration options.
+Do not pass `config=` together with a separate configuration value. See [Quiv API](./api.md#quiv) for every option.
 
 ## 2) Add a task
 
@@ -99,7 +99,7 @@ task_id = scheduler.add_task(
 
 ### Async handler
 
-Async handlers are fully supported. They run in thread-local event loops created per invocation, so they do not block the scheduler or main loop.
+quiv accepts an async handler. Each invocation creates its own event loop on the worker thread, so an async handler blocks neither the scheduler nor the main loop.
 
 ```python
 import httpx
@@ -123,14 +123,14 @@ scheduler.add_task(
 )
 ```
 
-`job_id`, `stop_event`, and `progress_hook` are injected only if your handler accepts those keyword parameters. If your handler signature does not include them (and does not use `**kwargs`), they are not injected. See [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md) for in-depth guides.
+quiv injects `job_id`, `stop_event`, and `progress_hook` only when your handler declares them as keyword parameters. If the signature has none of them, and has no `**kwargs`, quiv injects nothing. Read [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md) for the details.
 
-!!! tip "Hold onto `task_id`"
-    `add_task()` returns a `task_id` (UUID string). All runtime operations — `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`, and `get_task()` — use this id. Multiple tasks can share the same `task_name`; each gets its own unique `task_id`.
+!!! tip "Keep the `task_id`"
+    `add_task()` returns a `task_id`, a UUID string. Every later operation uses it: `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`, and `get_task()`. Several tasks can share one `task_name`, and each of them gets its own `task_id`.
 
 ## 3) Add progress callback (optional)
 
-Progress callbacks can be sync or async. When an asyncio event loop is available, async callbacks run via `run_coroutine_threadsafe` and sync callbacks run via `call_soon_threadsafe` on the main loop. If no event loop is available (e.g. in a plain script without asyncio), sync callbacks run directly on the worker thread and async callbacks run in a temporary event loop on the worker thread.
+A progress callback can be sync or async. With an asyncio event loop available, quiv sends an async callback to the main loop with `run_coroutine_threadsafe`, and a sync callback with `call_soon_threadsafe`. Without an event loop, in a plain script for example, a sync callback runs on the worker thread, and an async callback runs in a temporary event loop on that thread.
 
 ```python
 async def on_progress(**payload):
@@ -146,7 +146,7 @@ scheduler.add_task(
 
 ## 4) Listen for events (optional)
 
-Event listeners let you react to task and job lifecycle events. Register a callback with `add_listener()`:
+An event listener lets your code react to what happens to a task and to a job. Register a callback with `add_listener()`:
 
 ```python
 from quiv import Event
@@ -163,9 +163,9 @@ scheduler.add_listener(Event.JOB_FAILED, on_job_failed)
 ```
 
 !!! info "Typed callbacks"
-    `TASK_*` listeners receive `(event, task)`. `JOB_*` listeners receive `(event, task, job)`. Both use typed model objects with full IDE autocomplete — no dict key lookups.
+    A `TASK_*` listener receives `(event, task)`. A `JOB_*` listener receives `(event, task, job)`. Both receive typed model objects, so your editor completes every field and you never look up a key in a dictionary.
 
-Listeners follow the same dispatch model as progress callbacks: async listeners run on the main loop, sync listeners run via `call_soon_threadsafe` (or directly on the calling thread when no loop is available). Exceptions in listeners are logged and swallowed. See [Event Listeners](event-listeners.md) for the full event list and dispatch details.
+A listener follows the same dispatch model as a progress callback. An async listener runs on the main loop. A sync listener runs through `call_soon_threadsafe`, or on the calling thread when no loop is available. If a listener raises, quiv writes the error to the log and continues. See [Event Listeners](event-listeners.md) for every event and for the dispatch rules.
 
 ## 5) Start and stop
 
@@ -206,7 +206,7 @@ for job in jobs:
     scheduler.cancel_job(job.id)
 ```
 
-Cancellation is cooperative: it sets the job's stop event. The handler must check `stop_event.is_set()` to actually stop.
+Cancellation is cooperative. `cancel_job()` sets the stop event of the job. The handler must check `stop_event.is_set()` and return.
 
 ## 8) Inspect state
 
@@ -218,7 +218,7 @@ failed_jobs = scheduler.get_all_jobs(status="failed")
 
 ## FastAPI integration example
 
-`quiv` is intended for app-integrated task scheduling, especially in FastAPI. Use the `lifespan` context manager to tie scheduler lifecycle to the app:
+`quiv` is built to schedule tasks inside an application, and above all inside FastAPI. Use the `lifespan` context manager, so that the scheduler starts and stops with the application:
 
 ```python
 from contextlib import asynccontextmanager
@@ -269,13 +269,13 @@ app = FastAPI(lifespan=lifespan)
 
 Why this matters:
 
-- `stop_event` makes long tasks cancel safely on shutdown.
-- `progress_hook` sends task progress back into FastAPI's async context.
-- Scheduler lifecycle is tied cleanly to app lifecycle.
+- `stop_event` lets a long task stop safely at shutdown.
+- `progress_hook` carries the progress of a task into the async context of FastAPI.
+- The scheduler starts and stops with the application, in one place.
 
 ## Logging
 
-`quiv` uses Python's standard `logging` module. If you do not configure logging, no output is produced (Python's default `NullHandler` behavior).
+`quiv` uses the standard `logging` module of Python. If you configure no logging, quiv writes nothing, which is the default behavior of `NullHandler`.
 
 To see scheduler logs, configure the `"Quiv"` logger:
 
@@ -315,7 +315,7 @@ The library logs at these levels:
 | WARNING | Progress callback skipped (no event loop or main loop closed) |
 | ERROR   | Job failures, scheduler loop errors, progress callback errors |
 
-A separate `"quiv.models"` logger emits DEBUG-level messages for datetime normalization. This logger is not configurable via the constructor and follows standard Python logging configuration.
+A second logger, `"quiv.models"`, writes DEBUG messages about datetime conversion. The constructor cannot configure this logger. Configure it the way you configure any other Python logger.
 
 ## Troubleshooting
 
@@ -323,4 +323,4 @@ A separate `"quiv.models"` logger emits DEBUG-level messages for datetime normal
 - **`InvalidTimezoneError`**: use a valid IANA timezone name (for example `UTC` or `America/New_York`).
 - **`TaskNotFoundError` for immediate run**: the id is unknown. Call `add_task(...)` first and use the returned `task_id`. A run-once task removes itself after it runs, so its id stops resolving.
 - **No log output**: configure Python logging (see [Logging](#logging) above).
-- **Args/kwargs errors**: `args` and `kwargs` are pickle-serialized, so most Python objects are supported. If you encounter errors, ensure the objects are picklable (e.g. lambdas and inner functions are not).
+- **An error about `args` or `kwargs`**: quiv serializes both with pickle, which accepts most Python objects. If you see an error, check that every object is picklable. A lambda and an inner function are not.

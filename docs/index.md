@@ -22,16 +22,16 @@
 
 Background tasks for FastAPI apps that need more than `BackgroundTasks` and less than Celery.
 
-If you've reached for APScheduler inside a FastAPI app, you've probably hit one of these:
+If you have used APScheduler inside a FastAPI app, you have probably met one of these problems:
 
-- A task is running too long and the user wants to cancel it — but there's no clean way to signal the worker mid-run.
-- A background job needs to push progress to a websocket, and you're writing `run_coroutine_threadsafe` glue to hop back onto the main loop.
-- You want a job id stamped on every log line for one specific run, and you're threading it through call sites by hand.
-- You have a complete async pipeline you want to run in the background, and you're wrapping it in `asyncio.run` just to hand it to a sync-only scheduler.
+- A task runs too long and the user wants to cancel it, but there is no clean way to signal the worker while it runs.
+- A background job must send progress to a websocket, and you write `run_coroutine_threadsafe` code by hand to get back onto the main loop.
+- You want a job id on every log line of one run, and you pass that id through every call by hand.
+- You have a complete async pipeline to run in the background, and you wrap it in `asyncio.run` to give it to a scheduler that accepts sync code only.
 
-`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr) — a FastAPI app that outgrew APScheduler for exactly these reasons. It's a single-process, threadpool-backed scheduler with first-class support for cooperative cancellation (`stop_event`), main-loop progress callbacks (`progress_hook`), and per-job tracing (`job_id`).
+`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr), a FastAPI app that left APScheduler for these reasons. It is a scheduler for one process, backed by a thread pool. It has three things built in: cooperative cancellation through `stop_event`, progress callbacks that run on the main loop through `progress_hook`, and a job id for tracing through `job_id`.
 
-It is not a Celery replacement. If you need multi-process workers, durable queues, or distributed execution, use Celery or arq. `quiv` is for the in-process case those tools are overkill for.
+`quiv` does not replace Celery. If you need workers in several processes, a queue that survives a restart, or work spread over machines, use Celery or arq. Use `quiv` when the work belongs inside your own process, where those tools would be far more than you need.
 
 Supports Python 3.10 through 3.14.
 
@@ -104,7 +104,7 @@ def start_heartbeat():
 
 ### Run async handlers natively, no `asyncio.run` wrapper
 
-APScheduler has asyncio integrations, but async pipelines can still end up wrapped or bridged when you’re scheduling from a threadpool. `quiv` accepts async handlers directly; each invocation runs in an event loop created on the worker thread for that job. Sync and async handlers coexist in the same scheduler.
+APScheduler integrates with asyncio, but an async pipeline still needs a wrapper or a bridge when you schedule it from a thread pool. `quiv` accepts an async handler as it is. Each invocation runs in an event loop that quiv creates on the worker thread of that job. Sync and async handlers live in the same scheduler.
 
 
 ```python
@@ -116,7 +116,7 @@ scheduler.add_task(task_name="fetch", func=fetch_updates, interval=60)
 
 ### Cancel a running task from an HTTP endpoint
 
-`stop_event` is a per-job `threading.Event` injected into your handler. Check it at natural breakpoints and exit early when an endpoint calls `scheduler.cancel_job(job_id)` — no thread killing, no exceptions raised across thread boundaries.
+`stop_event` is a `threading.Event` for one job, which quiv injects into your handler. Check it at the natural breakpoints and return early when an endpoint calls `scheduler.cancel_job(job_id)`. quiv kills no thread, and raises no exception across a thread boundary.
 
 ```python
 def download(media_id: int, stop_event=None):
@@ -126,9 +126,9 @@ def download(media_id: int, stop_event=None):
         write(chunk)
 ```
 
-### Stream progress to a websocket without the `run_coroutine_threadsafe` dance
+### Send progress to a websocket, without writing `run_coroutine_threadsafe` yourself
 
-Your handler calls `progress_hook(**payload)` from inside the threadpool. `quiv` dispatches your registered async callback on the main asyncio loop — where it can broadcast over a websocket, update app state, or push to a metrics client.
+Your handler calls `progress_hook(**payload)` inside the thread pool. `quiv` runs the async callback that you registered on the main asyncio loop. There it can send a websocket message, change the state of the application, or report a metric.
 
 ```python
 async def on_progress(**payload):
@@ -144,7 +144,7 @@ scheduler.add_task(
 
 ### Dispatch to the main loop from anywhere — no parameter threading
 
-When a deeply-nested function inside a task needs to touch a resource that lives on the main event loop (e.g. a WebSocket manager that tracks connected clients), reach for `quiv.run_on_main`. Import it at module level and call it — `quiv` looks up the active instance, finds its main loop, and dispatches your callable. No `progress_hook` parameter threaded through every layer, no `run_coroutine_threadsafe` glue.
+A function deep inside a task sometimes needs a resource that lives on the main event loop, such as a WebSocket manager that holds the connected clients. Use `quiv.run_on_main` for that. Import it at module level and call it. `quiv` finds the active instance, finds its main loop, and sends your callable there. You pass no `progress_hook` through every layer, and you write no `run_coroutine_threadsafe` by hand.
 
 ```python
 from quiv import run_on_main
@@ -161,7 +161,7 @@ The same `run_on_main` call also works when invoked from a FastAPI route handler
 
 ### Correlate logs for one job, across threads
 
-Every invocation gets a `job_id` (UUID). Stamp it into a `LoggerAdapter` (or a `ContextVar`) and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
+Every invocation gets a `job_id`, a UUID. Put it into a `LoggerAdapter`, or into a `ContextVar`, and every log line of that run carries the same trace id. You can then filter the logs of one job with a single query, while many tasks run at the same time.
 
 ```python
 import logging
@@ -174,7 +174,7 @@ def download_trailer(media_id: int, job_id: str | None = None, stop_event=None):
     # every log line through `logger` below carries trace_id=<job_id>
 ```
 
-Trailarr uses a `ContextVar` flavor of this in production so downstream modules pick up the trace id automatically — see [Getting Started](getting-started.md) for that variant.
+Trailarr uses the `ContextVar` form of this in production, so that the modules it calls read the trace id without any extra code. See [Getting Started](getting-started.md) for that version.
 
 ## Concepts
 
@@ -183,22 +183,39 @@ Trailarr uses a `ContextVar` flavor of this in production so downstream modules 
 - **Task statuses**: `active`, `running`, `paused`
 - **Job statuses**: `scheduled`, `running`, `completed`, `cancelled`, `failed`
 
+## How quiv compares
+
+The table describes the default behavior of each tool. All four can be stretched further with extra work.
+
+| | quiv | FastAPI `BackgroundTasks` | APScheduler | Celery |
+| --- | --- | --- | --- | --- |
+| Runs inside your process | yes | yes | yes | no — separate worker processes |
+| Recurring schedules | interval only | no | interval and cron | interval and cron, through beat |
+| Cooperative cancellation of a running job | yes, through `stop_event` | no | no | partial — `revoke` reaches a queued task, and terminating a running one kills the worker |
+| Progress updates on the main event loop | yes, through `progress_hook` | not needed — the task already runs there | no | no |
+| Retries with backoff | yes | no | no | yes |
+| Per-task timeout | yes, cooperative | no | no | yes, soft and hard limits |
+| State survives a restart | no | no | optional, through a job store | yes, through the broker and the result backend |
+| Spreads work over processes or machines | no | no | no | yes |
+
+Read the last three rows first. quiv keeps no state across a restart, runs no cron expression, and spreads no work beyond one process. If you need any of those, use APScheduler or Celery. quiv is for the case where a job must run in your process, report progress to your event loop, and stop when a user asks it to.
+
 ## Important caveats
 
-- **Temporary database**: each `Quiv` instance creates a temporary SQLite file that is deleted on `shutdown()`. Task/job state does not persist across restarts.
-- **Single-process**: the scheduler runs in-process. It is not designed for distributed or multi-process deployments.
-- **Picklable args**: `args` and `kwargs` passed to `add_task()` are pickle-serialized for persistence. Most Python objects are supported, but lambdas and inner functions are not picklable. The temporary SQLite database is trusted internal state — only your application code writes to it, and it is deleted on `shutdown()`. Do not expose the database file to untrusted input.
+- **A temporary database**: each `Quiv` instance creates a temporary SQLite file, and `shutdown()` deletes it. The state of your tasks and jobs does not survive a restart.
+- **One process**: the scheduler runs inside your process. It is not built to spread work over several processes or machines.
+- **Picklable arguments**: quiv serializes the `args` and `kwargs` of `add_task()` with pickle, to store them. Pickle accepts most Python objects, but it cannot accept a lambda or an inner function. The temporary SQLite database holds trusted internal state: only your application writes to it, and `shutdown()` deletes it. Never let untrusted input reach that database file.
 
 
 ## Next pages
 
-Interested in learning more or ready to start building with `quiv`? The full documentation is here:
+Read the full documentation here:
 
 - [Getting Started](getting-started.md) — install, scheduler setup, and your first task
-- [API](api.md) — full reference for `Quiv`, `add_task`, and friends
+- [API](api.md) — the full reference for `Quiv`, `add_task`, and every other method
 - [Architecture](architecture.md) — how the scheduler, persistence, and execution layers fit together
 - [Running on the main event loop](run-on-main.md) — dispatch work to the main loop from anywhere in a task's call stack
-- [Event Listeners](event-listeners.md) — hook into task and job lifecycle events
+- [Event Listeners](event-listeners.md) — react to what happens to a task and to a job
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite
 - [AI Tools](ai-tools.md) — bundled agent guide, llms.txt, and the Claude Code plugin

@@ -16,32 +16,32 @@ Quiv(
 )
 ```
 
-If `config` is provided, do not also pass explicit `pool_size/history_retention_seconds/timezone`.
+If you pass `config`, do not also pass `pool_size`, `history_retention_seconds`, or `timezone`.
 
 Parameters:
 
 - `config`: grouped configuration object (see [`QuivConfig`](#quivconfig))
-- `pool_size`: maximum number of tasks that can run concurrently (default 10). See [Choosing a pool size](#choosing-a-pool-size) below
-- `history_retention_seconds`: how long finished job records are kept (default 86400 = 24 hours)
+- `pool_size`: the largest number of tasks that can run at the same time. The default is 10. See [Choosing a pool size](#choosing-a-pool-size) below
+- `history_retention_seconds`: how long quiv keeps the record of a finished job. The default is 86400 seconds, which is 24 hours
 - `timezone`: [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) or `tzinfo` for display formatting (default `"UTC"`)
 
     !!! note "Timezone is for display only"
 
-        `timezone` is only used to format datetime values in quiv's log output. All internal datetime handling (scheduling, persistence, job lifecycle) uses UTC regardless of this setting.
+        quiv uses `timezone` only to format the datetime values that it writes to the log. Everything inside quiv uses UTC, whatever you set here. That covers the schedule, the stored rows, and the life of each job.
 
 - `logger`: optional custom logger or `LoggerAdapter` instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
 
     !!! note "Logger scope"
 
-        The `logger` is only used for quiv's own internal logs (scheduler loop events, job lifecycle, cleanup, warnings, etc.). Task handler logs are **not** routed through this logger — use your own loggers inside your task handlers as usual.
+        quiv uses `logger` only for its own messages, such as the events of the scheduler loop, the life of a job, the cleanup, and the warnings. quiv does **not** send the output of your handlers through it. Use your own logger inside a handler, as you would anywhere else.
 
 - `main_loop`: optional asyncio event loop for progress callbacks and event listeners. 
     
-    - If not provided, resolution is attempted at `start()` time via `asyncio.get_running_loop()`, and lazily on first callback dispatch if still unset. 
+    - If you pass nothing, quiv tries `asyncio.get_running_loop()` when you call `start()`. If it still has no loop, it tries again on the first callback.
     
-    - This means `Quiv()` can be instantiated at module level before any event loop is running (common in FastAPI apps). 
+    - You can therefore create `Quiv()` at module level, before any event loop runs. A FastAPI application usually does this.
     
-    - If no event loop is available when a callback fires, async callbacks run in a temporary event loop on the worker thread, and sync callbacks run directly.
+    - If no event loop is available when a callback fires, an async callback runs in a temporary event loop on the worker thread, and a sync callback runs on that thread directly.
 
 ### `add_task(...)`
 
@@ -65,11 +65,11 @@ add_task(
 ) -> str
 ```
 
-The pre-existing parameters keep their positional order from earlier releases; the failure-handling options (`timeout`, `max_retries`, `retry_backoff`, `jitter`) are keyword-only.
+The older parameters keep the positions that they had in earlier releases. The four failure-handling options are keyword-only: `timeout`, `max_retries`, `retry_backoff`, and `jitter`.
 
-Adds a scheduled task and returns its task ID (UUID string)[^1].
+Adds a scheduled task and returns its task id, a UUID string[^1].
 
-[^1]: Hold onto the returned `task_id` — it is the key for all subsequent operations:
+[^1]: Keep the `task_id` that `add_task()` returns. Every later operation uses it:
 
     - `remove_task()`
     - `pause_task()`
@@ -78,7 +78,7 @@ Adds a scheduled task and returns its task ID (UUID string)[^1].
     - `get_task()`
     - `update_task()`.
 
-This is the primary way to register tasks. It handles handler registration, progress callback registration, and task persistence in one call.
+This is the main way to register a task. One call registers the handler, registers the progress callback, and stores the task.
 
 Validation:
 
@@ -91,23 +91,23 @@ Validation:
 - `retry_backoff > 0`
 - `jitter >= 0`
 
-Failure handling: `timeout` cooperatively cancels jobs that run too long, `max_retries`/`retry_backoff` re-run failed jobs with exponential backoff, and `jitter` de-synchronizes recurring schedules — see [Failure Handling](failure-handling.md) for full semantics.
+Failure handling: `timeout` asks a job that runs too long to stop, `max_retries` with `retry_backoff` runs a failed job again after a delay that doubles each time, and `jitter` moves apart the tasks that share an interval. Read [Failure Handling](failure-handling.md) for the rules.
 
 !!! note "Duplicate task names are allowed"
-    Multiple tasks can share the same `task_name`. Each call to `add_task()` returns a unique `task_id` (UUID) which is the identifier used for all task operations. `task_name` is a display label, not a unique key.
+    Several tasks can share one `task_name`. Each call to `add_task()` returns its own `task_id`, a UUID, and every operation on a task uses that id. `task_name` is a label for a reader, not a key.
 
 Behavior:
 
 - `func` may be sync or async
 - a run-once task never repeats, so it needs no `interval`. An interval passed with `run_once=True` is ignored, and `Task.interval_seconds` reads `None`
 - `run_at` schedules the first run at an absolute time, as an alternative to `delay`. A naive `datetime` is read as UTC — the `timezone` setting only formats log output. A time already past runs at once, because the process may have been down when the time came due. Passing both `run_at` and `delay` raises `ConfigurationError`
-- `args`/`kwargs` are pickle-serialized and persisted — most Python objects are supported, but lambdas and inner functions are not picklable. 
+- quiv serializes `args` and `kwargs` with pickle and stores them. Pickle accepts most Python objects, but it cannot accept a lambda or an inner function.
   
     !!! warning
-        The temporary database is trusted internal state and should not be exposed to untrusted input. Doing so might open to attackers injecting untrusted args/kwargs that gets passed to Tasks which could compromise the application.
+        The temporary database holds trusted internal state. Never let untrusted input reach it. An attacker who can write to it can put their own `args` and `kwargs` into a task, and your application will then run them.
 
-- if `run_once=True`, task is executed once and then removed from storage
-- if `progress_callback` is provided, it runs on the main loop when available, or directly on the worker thread otherwise
+- With `run_once=True`, the task runs one time, and quiv then deletes it
+- If you pass a `progress_callback`, it runs on the main loop when one is available, and on the worker thread when none is
 
     !!! info "`fixed_interval` scheduling modes"
 
@@ -134,11 +134,11 @@ update_task(
 ) -> Task
 ```
 
-Mutates a scheduled task in place, preserving its `task_id`. Only the parameters you pass change; everything else is untouched. If `interval` is changed, the next run is rescheduled to `now + interval`. Updating a `running` task is allowed — the changes take effect from the next run. Emits `Event.TASK_UPDATED` with the post-update `Task`.
+Changes a scheduled task in place and keeps its `task_id`. Only the parameters that you pass change, and quiv leaves every other value as it is. If you change `interval`, quiv moves the next run to `now + interval`. You can update a `running` task: the changes take effect from its next run. `update_task()` emits `Event.TASK_UPDATED`, carrying the `Task` as it is after the change.
 
-Because `None` is meaningful (`timeout=None` disables the timeout; `progress_callback=None` clears it), "not passed" is tracked with an internal sentinel — simply omit parameters you don't want to change.
+`None` carries meaning here: `timeout=None` turns the timeout off, and `progress_callback=None` removes the callback. quiv therefore marks an argument that you did not pass with an internal sentinel. To leave a value alone, omit it.
 
-Not updatable: `run_once`, `delay` (initial delay is a creation-time concept), and the handler `func` (remove and re-add the task to change its handler).
+Three things cannot change: `run_once`, `delay`, and the handler `func`. `delay` belongs to the moment when you create the task. To change the handler, remove the task and add it again.
 
 Raises:
 
@@ -147,24 +147,26 @@ Raises:
 
 ### `start() -> None` / `startup() -> None`
 
-Starts scheduler background loop thread. Safe to call multiple times.
+Starts the background thread that runs the scheduler loop. You can call it more than once without harm.
 
 !!! success "`startup()` is an alias for `start()`"
-    use whichever reads better in your code. `startup()` pairs naturally with `shutdown()`.
+    `start()` is the canonical name, and this documentation uses it everywhere. `startup()` calls the same code and keeps working.
 
 ### `shutdown(timeout: float | None = None) -> None` / `stop(...) -> None`
 
-- Stops scheduler loop and worker threads
-- Cancels running jobs via stop events
-- Disposes DB engine
-- And removes temporary scheduler SQLite file.
+`shutdown()` does four things:
 
-Always call this during app teardown.
+- It stops the scheduler loop and the worker threads.
+- It cancels each running job, by setting its stop event.
+- It disposes the database engine.
+- It deletes the temporary SQLite file of the scheduler.
 
-With `timeout=None` (default) shutdown waits indefinitely for in-flight jobs to finish. Pass a `timeout` (seconds) to bound the wait: jobs that do not exit within the deadline are abandoned on their worker threads with a warning — useful in FastAPI lifespan teardown where a hung handler must not block application shutdown. Abandoned jobs may log errors afterwards (e.g. writing to the already-deleted database).
+Always call it when your application stops.
+
+With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application. A job left behind can write errors later, when it reaches the database that quiv already deleted.
 
 !!! success "`stop()` is an alias for `shutdown()`"
-    use whichever reads better in your code. `stop()` pairs naturally with `start()`.
+    `shutdown()` is the canonical name, and this documentation uses it everywhere. `stop()` calls the same code and keeps working.
 
 ### `run_task_immediately(task_id: str) -> int`
 
@@ -201,12 +203,12 @@ Raises:
 
 ### `cancel_job(job_id: str) -> bool`
 
-Signals cancellation for a running job by setting its stop event.
+Asks a running job to stop, by setting its stop event.
 
-Returns `True` if the stop event was found and set, `False` otherwise.
+Returns `True` when it finds the stop event and sets it. Returns `False` when it finds no such job.
 
 !!! info
-    Cancellation is cooperative: the handler must check `stop_event.is_set()` to actually stop.
+    Cancellation is cooperative. The handler must check `stop_event.is_set()` and return.
 
 ### `get_task(task_id: str) -> Task`
 
@@ -238,28 +240,28 @@ Returns persisted jobs with optional filters and pagination — see [Observabili
 
 ### `stats() -> QuivStats`
 
-Returns a point-in-time statistics snapshot: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, and `job_history_count`. `QuivStats` is a frozen dataclass (exported from `quiv`) — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
+Returns a snapshot of the scheduler at one moment: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, and `job_history_count`. `QuivStats` is a frozen dataclass, exported from `quiv` — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
 
 ### `remove_task(task_id: str) -> None`
 
-Removes a scheduled task, its registered handler, and progress callback. If the task has a running job, its stop event is set to signal cancellation.
+Removes a scheduled task, the handler registered for it, and its progress callback. If a job of that task is running, quiv sets its stop event to ask it to stop.
 
 Raises:
 
 - `TaskNotFoundError` if no task with that id exists.
 
-Any previously running job will finish on its own and clean up normally.
+A job that was already running finishes on its own, and quiv cleans up after it as usual.
 
 ### `add_listener(event: Event, callback: Callable[..., Any]) -> None`
 
-Register an event listener for a scheduler lifecycle event. Multiple listeners can be registered for the same event. Both sync and async callbacks are supported.
+Registers a listener for one event of the scheduler. One event can have several listeners. A callback can be sync or async.
 
 The callback signature depends on the event group:
 
 - **`TASK_*` events**: `callback(event: Event, task: Task)`
 - **`JOB_*` events**: `callback(event: Event, task: Task, job: Job)`
 
-Listeners receive typed `Task` and `Job` model objects with full IDE autocomplete — no dict key lookups needed.
+A listener receives typed `Task` and `Job` model objects, so your editor completes every field and you never look up a key in a dictionary.
 
 Raises:
 
@@ -269,7 +271,7 @@ See [Event Listeners](event-listeners.md) for the full event list and dispatch d
 
 ### `remove_listener(event: Event, callback: Callable[..., Any]) -> None`
 
-Remove a previously registered event listener. If the callback is not found, the call is silently ignored.
+Removes a listener that you registered before. If quiv does not find the callback, the call does nothing and raises nothing.
 
 ## `run_on_main`
 
@@ -279,7 +281,7 @@ from quiv import run_on_main
 run_on_main(func: Callable[..., Any], *args: Any, **kwargs: Any) -> None
 ```
 
-Module-level helper that dispatches `func` onto the active Quiv instance's main event loop. Designed to be called from anywhere in a task handler's call stack — without threading a callback parameter through intermediate functions — and from code already running on the main loop (e.g., FastAPI route handlers that share utilities with task code).
+A module-level helper that sends `func` to the main event loop of the active Quiv instance. Call it from anywhere inside the call stack of a task handler, without passing a callback parameter through the functions in between. Call it also from code that already runs on the main loop, such as a FastAPI route handler that shares a utility with your task code.
 
 Resolution order for the active instance:
 
@@ -290,35 +292,35 @@ Behavior:
 
 - Fire-and-forget; returns `None` immediately on cross-thread dispatch.
 - Sync targets run inline when called from the main loop's thread, else via `call_soon_threadsafe`. Async targets are scheduled via `main_loop.create_task` on-loop, else `run_coroutine_threadsafe`.
-- Exceptions raised by `func` are logged on the active Quiv's logger and swallowed.
+- If `func` raises, quiv writes the error to the logger of the active instance and continues.
 
 Raises:
 
-- `RuntimeError` if no active Quiv instance is registered, or if the active instance has no resolvable main event loop.
+- `MainLoopUnavailableError` if no active Quiv instance is registered, or if the active instance has no main event loop that it can resolve. It inherits `QuivError` and `RuntimeError`.
 
 See [Running on the main event loop](run-on-main.md) for the full walkthrough, dispatch table, and caveats.
 
 ## Hooks and callback injection
 
-When a task is dispatched, `quiv` inspects handler signatures:
+When quiv dispatches a task, it reads the signature of the handler:
 
 - injects `job_id` (`str`, UUID) only if accepted
 - injects `stop_event` (`threading.Event`) only if accepted
 - injects `progress_hook` (callable) only if accepted
 
-If your handler does not define those parameters (and does not use `**kwargs`), no injection is performed.
+If your handler declares none of those parameters, and declares no `**kwargs`, quiv injects nothing.
 
 !!! warning "Renamed in v1.0.0"
 
     quiv `0.x` injected these as `_job_id`, `_stop_event`, and `_progress_hook`. `add_task()` rejects a handler that still declares an old name, and raises `ConfigurationError` naming the new spelling. A key in `kwargs` that collides with an injected name is rejected the same way, because the injected value would overwrite yours. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
 
-Async handlers run in thread-local event loops created per invocation. They do not share the main application event loop.
+An async handler runs in an event loop that quiv creates on the worker thread, one for each invocation. It never shares the main event loop of your application.
 
 ## Models
 
 ### `Task`
 
-Public API model returned by `get_task()` and `get_all_tasks()`. Use directly in FastAPI endpoints — no manual conversion needed.
+The public model that `get_task()` and `get_all_tasks()` return. Return it straight from a FastAPI endpoint. You convert nothing by hand.
 
 ```python
 # Methods return Task directly

@@ -1,10 +1,10 @@
 # Observability
 
-quiv exposes a point-in-time statistics snapshot and rich, filterable job/task queries — enough to build an admin or health endpoint without touching the database directly.
+quiv gives you a snapshot of the scheduler at one moment, and queries over tasks and jobs that accept filters. Together they are enough to build an admin page or a health check without reading the database directly.
 
 ## `stats()`
 
-Returns a frozen `QuivStats` dataclass:
+`stats()` returns a frozen `QuivStats` dataclass:
 
 ```python
 from quiv import Quiv, QuivStats
@@ -18,11 +18,11 @@ stats.next_run_at        # earliest upcoming run (UTC), or None
 stats.job_history_count  # job rows currently retained
 ```
 
-`QuivStats` is a plain dataclass — serialize it with `dataclasses.asdict()` for JSON responses.
+`QuivStats` is a plain dataclass. Call `dataclasses.asdict()` on it to build a JSON response.
 
 ## Job queries
 
-`get_all_jobs()` accepts filters, ordering, and pagination:
+`get_all_jobs()` accepts filters, an order, and paging:
 
 ```python
 scheduler.get_all_jobs(
@@ -37,11 +37,11 @@ scheduler.get_all_jobs(
 )
 ```
 
-`order_by` accepts exactly `"started_at"` and `"ended_at"` — anything else raises `ConfigurationError`. Datetime filters follow the library-wide contract: pass timezone-aware UTC values.
+`order_by` accepts `"started_at"` and `"ended_at"`. Any other value raises `ConfigurationError`. The two datetime filters follow the rule that holds everywhere in quiv: pass an aware UTC value.
 
 ## Task queries
 
-`get_all_tasks()` gained `status`, `limit`, and `offset` alongside the existing `include_run_once`; results are ordered by `next_run_at` ascending:
+`get_all_tasks()` accepts `status`, `limit`, and `offset`, next to `include_run_once`. It orders the results by `next_run_at`, earliest first.
 
 ```python
 scheduler.get_all_tasks(status=TaskStatus.PAUSED)
@@ -50,7 +50,7 @@ scheduler.get_all_tasks(limit=50, offset=100)
 
 ## Example endpoints
 
-The [FastAPI example app](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) wires all three into routes:
+The [FastAPI example app](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) puts all three into routes:
 
 ```python
 @router.get("/stats")
@@ -68,4 +68,4 @@ def update_task(task_id: str, update: TaskUpdate):
     return scheduler.update_task(task_id, **update.model_dump(exclude_none=True))
 ```
 
-See [`update_task()`](api.md#update_task) for runtime task mutation.
+See [`update_task()`](api.md#update_task) to change a task while the scheduler runs.

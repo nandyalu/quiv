@@ -1,6 +1,6 @@
 # Bigger Applications
 
-In larger FastAPI projects, code is split across multiple packages and modules. This guide shows how to structure `quiv` in that setup — shared scheduler instance, tasks defined in separate files, API endpoints for runtime control, WebSocket progress updates, and graceful cancellation.
+A larger FastAPI project spreads its code over several packages and modules. This guide shows where `quiv` goes in such a project. It covers one shared scheduler instance, tasks in separate files, API endpoints that control those tasks, progress updates over a WebSocket, and cancellation that lets a handler finish cleanly.
 
 ## Project structure
 
@@ -19,7 +19,7 @@ myapp/
 
 ## 1) Create the scheduler instance
 
-Define the `Quiv` instance in its own module so every other file can import it. Do **not** call `start()` here — that happens in the FastAPI lifespan.
+Define the `Quiv` instance in its own module, so that every other file can import it. Do **not** call `start()` here. The FastAPI lifespan calls it.
 
 ```python
 # myapp/scheduler.py
@@ -32,11 +32,11 @@ scheduler = Quiv(
 )
 ```
 
-Since `Quiv` lazily resolves the asyncio event loop, this works at module level before FastAPI or uvicorn creates a loop.
+`Quiv` finds the asyncio event loop on first use, not at startup. This code therefore works at module level, before FastAPI or uvicorn creates a loop.
 
 ## 2) Create a logging context (optional)
 
-Create a logging context that holds the `trace_id` which can be later used for logs
+Create a logging context that holds the `trace_id`, so that later log lines can carry it.
 
 ```python
 # myapp/config/logging_context.py
@@ -105,13 +105,13 @@ def with_logging_context(func):
     return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
 ```
 
-Make the logging adapter or logging handler retrieve the trace_id and add it to logs.
+Make your logging adapter, or your logging handler, read the `trace_id` and add it to each line.
 
-For full working code with logging context, stop events, and progress hooks, see [Trailarr](https://github.com/nandyalu/trailarr/).
+For complete code that uses a logging context, stop events, and progress hooks, read [Trailarr](https://github.com/nandyalu/trailarr/).
 
 ## 3) Define tasks in separate files
 
-Each task file imports the shared scheduler to register its task via `add_task()`. Tasks are plain functions — sync or async.
+Each task file imports the shared scheduler and registers its task with `add_task()`. A task is a plain function, either sync or async.
 
 ### Cleanup task (sync, with stop event)
 
@@ -192,7 +192,7 @@ def generate_report(
 
 ## 4) Register tasks and wire up the lifespan
 
-The main module registers tasks, starts the scheduler on startup, and shuts it down on teardown. This is also where you set up WebSocket-based progress callbacks.
+The main module registers the tasks, starts the scheduler at startup, and shuts it down at the end. Set up the progress callbacks for the WebSocket here as well.
 
 ```python
 # myapp/main.py
@@ -300,7 +300,7 @@ async def progress_websocket(websocket: WebSocket):
 
 ## 5) API endpoints for runtime control
 
-A separate router imports the same scheduler instance to expose task management endpoints.
+A separate router imports the same scheduler instance and publishes the endpoints that manage the tasks.
 
 ```python
 # myapp/routes/tasks.py
@@ -372,9 +372,9 @@ def cancel_job(job_id: str):
 ```
 
 !!! tip "Task IDs in your API"
-    Since `add_task()` returns a `task_id` (UUID string), you can store it in your application state or return it to clients. All runtime operations (`pause_task`, `resume_task`, `run_task_immediately`, `remove_task`) use `task_id` as the identifier.
+    `add_task()` returns a `task_id`, a UUID string. Store it in the state of your application, or return it to the client. Every later operation uses it: `pause_task`, `resume_task`, `run_task_immediately`, and `remove_task`.
 
-`Task` and `Job` are SQLModel objects, so FastAPI serializes them directly — no manual conversion needed. All datetime fields (`next_run_at`, `started_at`, `ended_at`) are guaranteed to be timezone-aware UTC, so the JSON output will include a `+00:00` suffix that browsers can parse and display in the user's local timezone.
+`Task` and `Job` are SQLModel objects, so FastAPI serializes them as they are. You convert nothing by hand. Every datetime field is an aware UTC value: `next_run_at`, `started_at`, and `ended_at`. The JSON therefore ends each one with `+00:00`, which a browser can read and show in the timezone of the user.
 
 Register the router in your app:
 
@@ -387,13 +387,13 @@ app.include_router(tasks_router)
 
 ## Run the full example
 
-A complete runnable version of this app is in the [`examples/fastapi_app`](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) directory. From the repository root:
+The [`examples/fastapi_app`](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) directory holds a complete version of this application that you can run. From the root of the repository:
 
 ```bash
 uv run uvicorn examples.fastapi_app.main:app --reload
 ```
 
-Then open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for interactive API docs, or connect to `ws://127.0.0.1:8000/ws/progress` for live progress updates.
+Then open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) to try the API, or connect to `ws://127.0.0.1:8000/ws/progress` to watch the progress updates.
 
 ## Key takeaways
 

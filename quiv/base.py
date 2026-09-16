@@ -38,7 +38,7 @@ from .persistence import PersistenceLayer
 
 
 class QuivBase(ABC):
-    """Base scheduler runtime with lifecycle, execution, and callback plumbing.
+    """Base scheduler runtime: lifecycle, execution, and callback dispatch.
 
     Attributes:
         _logger (logging.Logger | logging.LoggerAdapter[Any]): Logger instance used by the scheduler.

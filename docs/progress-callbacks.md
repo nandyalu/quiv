@@ -1,10 +1,10 @@
 # Progress Callbacks
 
-Progress callbacks let task handlers report live progress back to your application. This is useful for updating UIs, broadcasting WebSocket messages, logging metrics, or tracking long-running work.
+A progress callback lets a handler report its progress to your application while it runs. Use it to update a user interface, to send a WebSocket message, to record a metric, or to follow a job that takes a long time.
 
 ## How it works
 
-When a handler calls `progress_hook(...)`, quiv dispatches the registered progress callback for that task. The dispatch path depends on whether an asyncio event loop is available and whether the callback is sync or async.
+When a handler calls `progress_hook(...)`, quiv sends the progress to the callback registered for that task. Two things decide the path it takes: whether an asyncio event loop is available, and whether the callback is sync or async.
 
 ```mermaid
 flowchart TD
@@ -24,16 +24,16 @@ flowchart TD
 
 ### The four dispatch paths
 
-| Event loop | Callback type | What happens |
+| Event loop | Callback type | What quiv does |
 |------------|--------------|--------------|
-| Available | Async | Dispatched via `run_coroutine_threadsafe` on the main loop |
-| Available | Sync | Dispatched via `call_soon_threadsafe` on the main loop |
-| Unavailable | Sync | Called directly on the worker thread |
-| Unavailable | Async | Run in a temporary event loop on the worker thread |
+| Available | Async | Sends it to the main loop with `run_coroutine_threadsafe` |
+| Available | Sync | Sends it to the main loop with `call_soon_threadsafe` |
+| Unavailable | Sync | Calls it on the worker thread |
+| Unavailable | Async | Runs it in a temporary event loop on the worker thread |
 
 ## Event loop resolution
 
-quiv does **not** require an event loop at startup. The main loop is lazily resolved the first time a progress callback fires:
+quiv does **not** need an event loop at startup. It finds the main loop the first time a progress callback fires, and keeps it.
 
 ```mermaid
 sequenceDiagram
@@ -53,11 +53,11 @@ sequenceDiagram
     Q->>UV: Dispatch callback on loop
 ```
 
-This means `Quiv()` can be instantiated at module level before FastAPI or uvicorn creates an event loop — the common pattern for larger applications.
+You can therefore create `Quiv()` at module level, before FastAPI or uvicorn creates an event loop. Larger applications usually do this.
 
 ## Adding a progress callback
 
-Pass a `progress_callback` when adding a task:
+Pass `progress_callback` when you add the task:
 
 ```python
 async def on_progress(**payload):
@@ -71,9 +71,13 @@ scheduler.add_task(
 )
 ```
 
-## Writing a handler with progress reporting
+## Writing a handler that reports progress
 
-Add `progress_hook` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
+Add `progress_hook` to the signature of your handler. quiv reads the signature and injects the hook only when the parameter is there.
+
+!!! warning "Renamed in v1.0.0 — was `_progress_hook`"
+
+    quiv `0.x` injected this parameter as `_progress_hook`. `add_task()` rejects a handler that still declares the old name, and raises `ConfigurationError` that names the new spelling. Rename the parameter. Its behavior is unchanged. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
 
 ```python
 import threading
@@ -102,11 +106,11 @@ def process_records(
             )
 ```
 
-The handler does not need to know whether the callback is sync or async, or whether an event loop exists. It just calls `progress_hook(...)` and quiv handles the dispatch.
+The handler does not need to know whether the callback is sync or async, and it does not need to know whether an event loop exists. It calls `progress_hook(...)`, and quiv chooses the path.
 
 ## Async progress callback
 
-Async callbacks run on the main event loop via `run_coroutine_threadsafe`. This is ideal for FastAPI apps where you want to broadcast to WebSocket clients:
+An async callback runs on the main event loop, through `run_coroutine_threadsafe`. Use it in a FastAPI application to send updates to WebSocket clients:
 
 ```python
 from fastapi import WebSocket
@@ -127,11 +131,11 @@ scheduler.add_task(
 )
 ```
 
-Since the callback runs on FastAPI's event loop, you can safely use `await` with WebSockets, database sessions, or any async API.
+The callback runs on the event loop of FastAPI, so you can `await` a WebSocket, a database session, or any other async API inside it.
 
 ## Sync progress callback
 
-Sync callbacks work identically from the handler's perspective. When an event loop is available, they run on the main loop via `call_soon_threadsafe`. When no loop is available (e.g. a plain script), they run directly on the worker thread.
+A sync callback looks the same to the handler. When an event loop is available, it runs on the main loop through `call_soon_threadsafe`. When no loop is available, in a plain script for example, it runs on the worker thread.
 
 ```python
 import logging
@@ -153,7 +157,7 @@ scheduler.add_task(
 
 ## Without an event loop
 
-In scripts that don't use asyncio, sync progress callbacks still work — they run directly on the worker thread that executes the handler:
+A sync progress callback still works in a script that does not use asyncio. It runs on the worker thread that runs the handler.
 
 ```python
 from quiv import Quiv
@@ -180,11 +184,11 @@ scheduler.add_task(
 scheduler.start()
 ```
 
-Async progress callbacks also work in this scenario — they run in a temporary event loop on the worker thread, so `await` calls inside the callback will execute correctly.
+An async progress callback works without an event loop too. quiv runs it in a temporary event loop on the worker thread, so an `await` inside the callback runs correctly.
 
 ## Error handling
 
-If a progress callback raises an exception, quiv logs the error but does **not** fail the job. The handler continues running. This prevents a broken callback from disrupting task execution.
+If a progress callback raises an exception, quiv writes the error to the log and the job continues. The job does not fail, and the handler keeps running. One broken callback therefore cannot stop your tasks.
 
 ```mermaid
 flowchart TD
@@ -198,7 +202,7 @@ flowchart TD
 
 ## Payload conventions
 
-`progress_hook` accepts any `*args` and `**kwargs`. There is no enforced schema, but a useful pattern is:
+`progress_hook` accepts any `*args` and any `**kwargs`. quiv enforces no schema. This set of keys works well:
 
 ```python
 progress_hook(
@@ -209,4 +213,4 @@ progress_hook(
 )
 ```
 
-The progress callback receives exactly what the handler passes — quiv uses the `task_id` internally to look up the registered callback, but this is consumed by the dispatch layer and not forwarded to the callback.
+The progress callback receives what the handler passes, and nothing more. quiv reads the `task_id` to find the registered callback, and the dispatch layer keeps it. quiv does not add it to the payload.

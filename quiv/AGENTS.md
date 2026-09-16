@@ -104,7 +104,7 @@ def deeply_nested_step():
     run_on_main(broadcast, {"event": "step_done"})  # fire-and-forget, exceptions logged+swallowed
 ```
 
-Works from anywhere in a task's call stack (no parameter threading) and also from main-loop code (e.g. FastAPI routes). Raises `RuntimeError` if no active Quiv instance / main loop is resolvable.
+Works from anywhere in a task's call stack (no parameter threading) and also from main-loop code (e.g. FastAPI routes). Raises `MainLoopUnavailableError` if no active Quiv instance or main loop can be resolved.
 
 ## Event listeners
 

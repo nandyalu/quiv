@@ -1,6 +1,6 @@
 # Testing
 
-quiv is extensively tested with **108 tests** covering the full lifecycle of tasks, jobs, event listeners, progress callbacks, configuration, models, and edge cases. Tests run on every commit via CI across Python 3.10 through 3.14.
+quiv has **more than 200 tests**. They cover the whole life of a task and of a job, the event listeners, the progress callbacks, the configuration, the models, and the rare cases. CI runs them on every commit, against Python 3.10 through 3.14.
 
 ```bash
 # Run all tests
@@ -18,7 +18,7 @@ uv run pytest tests/test_scheduler.py::test_backpressure_skips_dispatch_when_poo
 
 ## Test architecture
 
-Most tests require a running asyncio event loop for callback dispatch. The `running_main_loop` fixture (in `conftest.py`) spins up an event loop in a background thread and yields it to each test. Every test calls `scheduler.shutdown()` in a `finally` block to clean up threads and temp DB files.
+Most tests need a running asyncio event loop, because quiv dispatches callbacks onto it. The `running_main_loop` fixture in `conftest.py` starts an event loop in a background thread and yields it to the test. Every test calls `scheduler.shutdown()` in a `finally` block, which releases the threads and deletes the temporary database files.
 
 ## What is tested
 
@@ -27,9 +27,9 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 - Mixing `config=QuivConfig(...)` with explicit kwargs raises `ConfigurationError`
 - `pool_size <= 0` and `history_retention_seconds < 0` are rejected
 - `start()` is idempotent (safe to call multiple times)
-- `shutdown()` handles DB cleanup failures gracefully
+- `shutdown()` continues and logs the problem when it cannot delete the database files
 - Database initialization failure raises `DatabaseInitializationError`
-- quiv's internal tables (`quiv_task`, `quiv_job`) do not leak into user SQLModel metadata
+- The internal tables of quiv (`quiv_task`, `quiv_job`) stay out of the SQLModel metadata of the application
 
 ### Task input validation
 
@@ -60,10 +60,10 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 ### Concurrent execution and backpressure
 
 - Same task is never dispatched concurrently (status set to `running` blocks re-dispatch)
-- When the thread pool is full, due tasks are deferred instead of queued unboundedly; they dispatch as soon as a job finishes and frees a slot
-- Deferred tasks execute once a worker becomes available
+- While the thread pool is full, quiv holds due tasks back instead of adding them to a queue that never stops growing. Each one dispatches as soon as a job finishes and frees a slot
+- A task that quiv held back runs as soon as a worker is free
 - `_active_job_count` decrements correctly after job completion
-- Late-starting jobs (due to pool saturation) log a warning with the delay
+- A job that starts late, because the pool was full, logs a warning that names the delay
 
 ### Interval scheduling (`fixed_interval`)
 
@@ -88,15 +88,15 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 - Progress callback registration and clearing via `None`
 - Sync callback works without an event loop (runs on worker thread)
 - Async callback works without an event loop (runs in temporary event loop)
-- Failing sync callback is logged, does not crash the job
-- Failing async callback is logged, does not crash the job
+- quiv logs a sync callback that raises, and the job continues
+- quiv logs an async callback that raises, and the job continues
 - Closed main loop does not crash progress dispatch
 
 ### Event listeners
 
 - Invalid event type (non-`Event` enum) raises `ConfigurationError`
 - Non-callable callback raises `ConfigurationError`
-- Removing an unregistered listener is silently ignored
+- Removing a listener that was never registered does nothing and raises nothing
 - **`TASK_ADDED`**: listener receives `Event` and `Task` with correct `task_name` and `task_id`
 - **`TASK_REMOVED`**: listener receives snapshot of task before deletion
 - **`TASK_PAUSED`**: listener receives task with `paused` status
@@ -107,7 +107,7 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 - **`JOB_CANCELLED`**: listener receives `Job` with `cancelled` status
 - Multiple listeners for the same event are all called
 - Async listener dispatched on main event loop
-- Failing listener is logged and swallowed; subsequent listeners still run
+- quiv logs a listener that raises and continues. The listeners after it still run
 - Sync listener works without an event loop
 - Async listener works without an event loop (temporary event loop)
 - Async listener failure without an event loop is caught and logged
@@ -117,13 +117,13 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 - `job_id`, `stop_event`, and `progress_hook` are injected when handler accepts them
 - Injection is skipped when handler signature does not include the parameters
 - Handlers with `**kwargs` receive all injected parameters
-- Uninspectable callables (e.g. `object()`) are handled gracefully (no injection, no crash)
+- A callable whose signature quiv cannot read, such as `object()`, injects nothing and raises nothing
 
 ### Deserialization safety
 
 - Corrupt pickle data in `args_pickled` raises `ConfigurationError`
 - Corrupt pickle data in `kwargs_pickled` raises `ConfigurationError`
-- Pickled kwargs that aren't a `dict` raises `ConfigurationError`
+- Pickled kwargs that are not a `dict` raise `ConfigurationError`
 - Corrupt pickle in `Task.model_validate()` from dict falls back to empty defaults
 - Corrupt pickle in `Task.model_validate()` from `TaskDB` object falls back to empty defaults
 - Non-standard input types pass through the validator without crashing
@@ -168,8 +168,8 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 
 ### Scheduler loop resilience
 
-- Loop catches and logs exceptions, retries after sleep
-- Loop does not crash on persistent errors (verified over multiple iterations)
+- The loop catches an exception, logs it, and tries again after a sleep
+- The loop keeps running when the same error repeats, which the test checks over several turns
 
 ### Model serialization
 
