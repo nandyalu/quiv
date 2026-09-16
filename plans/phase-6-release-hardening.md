@@ -8,17 +8,18 @@ No features. This phase turns the 0.10.0 codebase into a 1.0.0 release: API free
 
 This is the last release where breaking changes are acceptable. Produce a short review document (`plans/api-freeze-notes.md`, committed) recording every decision below, then apply them.
 
-Checklist to review, one by one:
+Checklist to review, one by one. **All items complete** — every decision is recorded in `plans/api-freeze-notes.md`.
 
-- [ ] **`__all__` audit**: every name in `quiv/__init__.py.__all__` is deliberate; everything public is exported (`QuivStats`, `TaskNotActiveError` from earlier phases — verify). Anything importable but internal gets a leading underscore or is left out of `__all__` knowingly.
-- [ ] **Naming consistency pass** across the public surface:
+- [x] **`__all__` audit**: every name in `quiv/__init__.py.__all__` is deliberate; everything public is exported (`QuivStats`, `TaskNotActiveError` from earlier phases — verify). Anything importable but internal gets a leading underscore or is left out of `__all__` knowingly.
+- [x] **Naming consistency pass** across the public surface:
       - parameter names: `interval` (add_task) vs `interval_seconds` (Task model) vs `timeout` vs `timeout_seconds` — the convention is: API params are bare (`interval`, `timeout`, `jitter`, `retry_backoff`), model fields carry units (`interval_seconds`, `timeout_seconds`, ...). Confirm every field follows it.
       - `start()`/`startup()` and `stop()`/`shutdown()` alias pairs: keep both, but pick ONE canonical name per pair in all docs and examples (`start()` / `shutdown()` — matches the FastAPI lifespan example) and say the other is an alias.
-- [ ] **Attribute visibility**: `registry`, `progress_callbacks`, `stop_events`, `executor`, `persistence`, `execution` are public attributes today. Decide: they stay public-but-undocumented (cheapest, recommended — renaming breaks any existing user) — or underscore them now. Record the decision; do NOT rename without recording why.
-- [ ] **Exception hierarchy**: every raise site uses the most specific exception; `docs/exceptions.md` lists all of them with when-raised.
-- [ ] **Deprecations**: grep for anything marked deprecated during 0.x (`grep -ri deprecat quiv/`) and remove it. Known: `TaskNotScheduledError` (deprecated in v0.9.0, a no-longer-raised subclass of `TaskNotFoundError`) — drop the class and its `__init__.py` export.
-- [ ] **`py.typed`**: verify the wheel ships type information — add a `quiv/py.typed` marker file if absent (check `[tool.hatch.build.targets.wheel]` picks it up; it does when the file lives inside the package dir).
-- [ ] Classifier bump in `pyproject.toml`: `"Development Status :: 5 - Production/Stable"` (add; there is no status classifier today).
+- [x] **Injected handler parameters drop the underscore** (decided 2026-09-15, recorded in `plans/api-freeze-notes.md` §1): `_job_id` → `job_id`, `_stop_event` → `stop_event`, `_progress_hook` → `progress_hook`. These are part of the public handler contract, and a leading underscore reads as private. Do this FIRST in the phase — it rewrites the same doc lines that the STE100 pass in §2 would otherwise touch twice. Two guards ship with it, both raising `ConfigurationError` from `add_task()`: a legacy-name guard (the handler still declares an old spelling — otherwise cancellation and timeouts silently stop working), and a permanent collision guard (a key in `kwargs` collides with an injected name). Released release notes stay untouched.
+- [x] **Attribute visibility**: `registry`, `progress_callbacks`, `stop_events`, `executor`, `persistence`, `execution` are public attributes today. Decide: they stay public-but-undocumented (cheapest, recommended — renaming breaks any existing user) — or underscore them now. Record the decision; do NOT rename without recording why.
+- [x] **Exception hierarchy**: every raise site uses the most specific exception; `docs/exceptions.md` lists all of them with when-raised.
+- [x] **Deprecations**: grep for anything marked deprecated during 0.x (`grep -ri deprecat quiv/`) and remove it. Known: `TaskNotScheduledError` (deprecated in v0.9.0, a no-longer-raised subclass of `TaskNotFoundError`) — drop the class and its `__init__.py` export.
+- [x] **`py.typed`**: verify the wheel ships type information — add a `quiv/py.typed` marker file if absent (check `[tool.hatch.build.targets.wheel]` picks it up; it does when the file lives inside the package dir).
+- [x] Classifier bump in `pyproject.toml`: `"Development Status :: 5 - Production/Stable"` (add; there is no status classifier today).
 
 ## 2. Documentation completion
 

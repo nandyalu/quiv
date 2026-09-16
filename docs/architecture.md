@@ -39,7 +39,7 @@ sequenceDiagram
         Q->>DB: INSERT Job row
         Q->>Pool: Submit job
         Pool->>H: Execute handler
-        Note over H: _job_id / _stop_event / _progress_hook injected if accepted
+        Note over H: job_id / stop_event / progress_hook injected if accepted
         Pool->>App: Emit JOB_STARTED event
         H-->>Pool: Return result
         Pool->>App: Emit JOB_COMPLETED/FAILED event
@@ -90,7 +90,7 @@ sequenceDiagram
 
 ## Cancellation model
 
-- each job receives its own `threading.Event` stop signal if handler accepts `_stop_event`
+- each job receives its own `threading.Event` stop signal if handler accepts `stop_event`
 - `cancel_job(job_id)` sets that event when the job is currently tracked
 - per-task timeouts use the same mechanism: the scheduler loop sets the stop event when a job exceeds its deadline (see [Failure Handling](failure-handling.md))
 - cancellation is cooperative: handler code must check the event
@@ -99,8 +99,8 @@ For writing cancellable handlers, shutdown behavior, and status determination lo
 
 ## Progress callback model
 
-- handlers can receive `_progress_hook` when accepted in signature
-- calling `_progress_hook(...)` dispatches configured progress callback via `_resolve_main_loop()`
+- handlers can receive `progress_hook` when accepted in signature
+- calling `progress_hook(...)` dispatches configured progress callback via `_resolve_main_loop()`
 - the main event loop is lazily resolved on first dispatch — `Quiv()` can be instantiated at module level before any asyncio loop exists
 - with an event loop available:
     - async callbacks are dispatched via `run_coroutine_threadsafe`

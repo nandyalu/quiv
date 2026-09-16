@@ -4,7 +4,7 @@ description: >
   Usage guide for quiv, the threadpool-backed background scheduler for
   Python/FastAPI apps. Use when adding, scheduling, cancelling, or debugging
   background/recurring tasks with quiv, or when the user mentions quiv,
-  add_task, _stop_event, _progress_hook, run_on_main, or asks how to run
+  add_task, stop_event, progress_hook, run_on_main, or asks how to run
   periodic jobs in a FastAPI app that already depends on quiv.
 ---
 
@@ -43,17 +43,19 @@ app = FastAPI(lifespan=lifespan)
 
 ## Handler injection
 
-`_job_id: str`, `_stop_event: threading.Event`, and `_progress_hook: Callable` are injected **only if the handler signature declares them**:
+`job_id: str`, `stop_event: threading.Event`, and `progress_hook: Callable` are injected **only if the handler signature declares them**:
 
 ```python
-def work(item_id: int, _stop_event=None, _progress_hook=None):
+def work(item_id: int, stop_event=None, progress_hook=None):
     for i, chunk in enumerate(chunks(item_id)):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return                      # cancellation is cooperative — this check is mandatory
         process(chunk)
-        if _progress_hook:
-            _progress_hook(step=i)      # forwarded to progress_callback on the main loop
+        if progress_hook:
+            progress_hook(step=i)      # forwarded to progress_callback on the main loop
 ```
+
+Renamed in v1.0.0 (were `_job_id`, `_stop_event`, `_progress_hook`). `add_task()` raises `ConfigurationError` if a handler still declares an old name, or if a `kwargs` key collides with an injected name.
 
 Async handlers pass the same way; each invocation gets a fresh event loop on a worker thread (never the main app loop — do not change this; isolation is a design requirement). To touch main-loop resources from task code use `from quiv import run_on_main; run_on_main(async_or_sync_fn, *args)` (fire-and-forget, exceptions logged and swallowed).
 
@@ -67,7 +69,7 @@ Async handlers pass the same way; each invocation gets a fresh event loop on a w
 
 1. Forgetting `scheduler.shutdown()` (in tests: `finally:` block) — leaks the loop thread and temp DB file.
 2. Passing both `config=QuivConfig(...)` and individual kwargs to `Quiv()` — raises `ConfigurationError`; pick one.
-3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `_stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning.
-4. Blocking on main-loop resources inside a handler instead of using `_progress_hook` / `run_on_main`.
+3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning.
+4. Blocking on main-loop resources inside a handler instead of using `progress_hook` / `run_on_main`.
 5. `timezone=` only affects log formatting — scheduling and persistence are always UTC.
 6. Calling `run_task_immediately()` on a `running` or `paused` task raises `TaskNotActiveError` — resume paused tasks with `resume_task()` instead.

@@ -13,10 +13,10 @@ from .exceptions import (
     HandlerRegistrationError,
     InvalidTimezoneError,
     JobNotFoundError,
+    MainLoopUnavailableError,
     QuivError,
     TaskNotActiveError,
     TaskNotFoundError,
-    TaskNotScheduledError,
 )
 from .models import Event, Job, JobStatus, QuivStats, Task, TaskStatus
 from .scheduler import Quiv
@@ -32,10 +32,10 @@ __all__ = [
     "DatabaseInitializationError",
     "HandlerRegistrationError",
     "HandlerNotRegisteredError",
-    "TaskNotScheduledError",
     "TaskNotActiveError",
     "TaskNotFoundError",
     "JobNotFoundError",
+    "MainLoopUnavailableError",
     "Event",
     "Task",
     "TaskStatus",

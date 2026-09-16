@@ -28,7 +28,7 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
         run_progress_callback=run_progress_callback,
     )
 
-    def handler(_job_id=None, _stop_event=None, _progress_hook=None):
+    def handler(job_id=None, stop_event=None, progress_hook=None):
         return None
 
     stop_event = threading.Event()
@@ -42,9 +42,9 @@ def test_prepare_invocation_injects_stop_and_progress_hooks() -> None:
     )
 
     assert args == ()
-    assert kwargs["_job_id"] == "test-uuid-123"
-    assert kwargs["_stop_event"] is stop_event
-    kwargs["_progress_hook"](1, pct=50)
+    assert kwargs["job_id"] == "test-uuid-123"
+    assert kwargs["stop_event"] is stop_event
+    kwargs["progress_hook"](1, pct=50)
     assert captured == [(("demo", 1), {"pct": 50})]
 
 
@@ -100,9 +100,9 @@ def test_prepare_invocation_skips_optional_injections_when_not_supported() -> (
     )
 
     assert args == (1,)
-    assert "_job_id" not in kwargs
-    assert "_stop_event" not in kwargs
-    assert "_progress_hook" not in kwargs
+    assert "job_id" not in kwargs
+    assert "stop_event" not in kwargs
+    assert "progress_hook" not in kwargs
 
 
 def test_compute_injectable_params_handles_uninspectable_callable() -> None:
@@ -126,6 +126,42 @@ def test_compute_injectable_params_empty_when_no_injectables() -> None:
     assert layer._compute_injectable_params(handler) == frozenset()
 
 
+def test_find_legacy_params_detects_declared_names() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    def handler(_job_id=None, _stop_event=None, value: int = 0) -> None:
+        return None
+
+    assert layer._find_legacy_params(handler) == frozenset(
+        {"_job_id", "_stop_event"}
+    )
+
+
+def test_find_legacy_params_ignores_var_keyword() -> None:
+    """**kwargs declares no name, so it is not a legacy handler."""
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    def handler(**kwargs: Any) -> None:
+        return None
+
+    assert layer._find_legacy_params(handler) == frozenset()
+
+
+def test_find_legacy_params_handles_uninspectable_callable() -> None:
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+    uninspectable = cast(Any, object())
+    assert layer._find_legacy_params(uninspectable) == frozenset()
+
+
 def test_injectable_params_var_keyword() -> None:
     layer = ExecutionLayer(
         run_async=lambda _f, _a, _k: None,
@@ -136,7 +172,7 @@ def test_injectable_params_var_keyword() -> None:
         return None
 
     assert layer._compute_injectable_params(handler) == frozenset(
-        {"_job_id", "_stop_event", "_progress_hook"}
+        {"job_id", "stop_event", "progress_hook"}
     )
 
     args, kwargs = layer.prepare_invocation(
@@ -147,9 +183,9 @@ def test_injectable_params_var_keyword() -> None:
         stop_event=threading.Event(),
         job_id="test-uuid-vkw",
     )
-    assert kwargs["_job_id"] == "test-uuid-vkw"
-    assert "_stop_event" in kwargs
-    assert "_progress_hook" in kwargs
+    assert kwargs["job_id"] == "test-uuid-vkw"
+    assert "stop_event" in kwargs
+    assert "progress_hook" in kwargs
 
 
 def test_injectable_params_cached(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,7 +194,7 @@ def test_injectable_params_cached(monkeypatch: pytest.MonkeyPatch) -> None:
         run_progress_callback=lambda *_a, **_k: None,
     )
 
-    def handler(_stop_event=None):
+    def handler(stop_event=None):
         return None
 
     calls: dict[str, int] = {"count": 0}
@@ -195,7 +231,7 @@ def test_injectable_params_unhashable_callable() -> None:
         def __eq__(self, other: object) -> bool:
             return isinstance(other, UnhashableHandler)
 
-        def __call__(self, _stop_event=None) -> None:
+        def __call__(self, stop_event=None) -> None:
             return None
 
     handler = UnhashableHandler()
@@ -208,7 +244,7 @@ def test_injectable_params_unhashable_callable() -> None:
             stop_event=threading.Event(),
             job_id=f"test-uuid-{i}",
         )
-        assert "_stop_event" in kwargs
+        assert "stop_event" in kwargs
     assert len(layer._injectable_cache) == 0
 
 
@@ -219,7 +255,7 @@ def test_cache_does_not_leak_removed_handlers() -> None:
     )
 
     def make_handler() -> Any:
-        def handler(_stop_event=None) -> None:
+        def handler(stop_event=None) -> None:
             return None
 
         return handler

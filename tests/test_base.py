@@ -468,9 +468,9 @@ def test_shutdown_only_cancels_running_jobs(
     def quick() -> None:
         quick_done.set()
 
-    def long_handler(_stop_event: threading.Event) -> None:
+    def long_handler(stop_event: threading.Event) -> None:
         long_started.set()
-        _stop_event.wait(timeout=10)
+        stop_event.wait(timeout=10)
 
     def on_cancelled(event: Event, task: object, job: object) -> None:
         cancelled_job_ids.append(getattr(job, "id", None))
@@ -561,7 +561,7 @@ def test_stats_counts_running_job(
         started = threading.Event()
         release = threading.Event()
 
-        def handler(_stop_event: threading.Event) -> None:
+        def handler(stop_event: threading.Event) -> None:
             started.set()
             release.wait(5)
 

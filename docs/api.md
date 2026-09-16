@@ -206,7 +206,7 @@ Signals cancellation for a running job by setting its stop event.
 Returns `True` if the stop event was found and set, `False` otherwise.
 
 !!! info
-    Cancellation is cooperative: the handler must check `_stop_event.is_set()` to actually stop.
+    Cancellation is cooperative: the handler must check `stop_event.is_set()` to actually stop.
 
 ### `get_task(task_id: str) -> Task`
 
@@ -302,11 +302,15 @@ See [Running on the main event loop](run-on-main.md) for the full walkthrough, d
 
 When a task is dispatched, `quiv` inspects handler signatures:
 
-- injects `_job_id` (`str`, UUID) only if accepted
-- injects `_stop_event` (`threading.Event`) only if accepted
-- injects `_progress_hook` (callable) only if accepted
+- injects `job_id` (`str`, UUID) only if accepted
+- injects `stop_event` (`threading.Event`) only if accepted
+- injects `progress_hook` (callable) only if accepted
 
 If your handler does not define those parameters (and does not use `**kwargs`), no injection is performed.
+
+!!! warning "Renamed in v1.0.0"
+
+    quiv `0.x` injected these as `_job_id`, `_stop_event`, and `_progress_hook`. `add_task()` rejects a handler that still declares an old name, and raises `ConfigurationError` naming the new spelling. A key in `kwargs` that collides with an injected name is rejected the same way, because the injected value would overwrite yours. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
 
 Async handlers run in thread-local event loops created per invocation. They do not share the main application event loop.
 

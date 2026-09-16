@@ -74,21 +74,23 @@ scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs
 
 quiv inspects the handler signature and injects these kwargs **only if the handler declares them** (or takes `**kwargs`):
 
-- `_job_id: str` — UUID of this run; stamp it into a `LoggerAdapter`/`ContextVar` for per-job log tracing.
-- `_stop_event: threading.Event` — check `_stop_event.is_set()` at natural breakpoints and `return` early. This is the ONLY way cancellation/shutdown stops a handler; threads are never killed.
-- `_progress_hook: Callable` — call `_progress_hook(**payload)` from the worker; quiv forwards the payload to the registered `progress_callback` on the main loop.
+- `job_id: str` — UUID of this run; stamp it into a `LoggerAdapter`/`ContextVar` for per-job log tracing.
+- `stop_event: threading.Event` — check `stop_event.is_set()` at natural breakpoints and `return` early. This is the ONLY way cancellation/shutdown stops a handler; threads are never killed.
+- `progress_hook: Callable` — call `progress_hook(**payload)` from the worker; quiv forwards the payload to the registered `progress_callback` on the main loop.
+
+Renamed in v1.0.0: these were `_job_id`, `_stop_event`, `_progress_hook` in 0.x. `add_task()` raises `ConfigurationError` if a handler still declares an old name, and again if a key in `kwargs` collides with an injected name (the injected value would overwrite the caller's).
 
 ```python
-def download(media_id: int, _job_id=None, _stop_event=None, _progress_hook=None):
+def download(media_id: int, job_id=None, stop_event=None, progress_hook=None):
     for i, chunk in enumerate(stream_chunks(media_id)):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return  # cooperative exit
         write(chunk)
-        if _progress_hook:
-            _progress_hook(step=i, stage="download")
+        if progress_hook:
+            progress_hook(step=i, stage="download")
 ```
 
-Async handlers are passed the same way (`func=my_async_handler`) — each invocation runs in a **fresh event loop on the worker thread**. Handlers never share the main app loop, so never touch main-loop-bound resources directly from a handler; use `_progress_hook` or `run_on_main` (below).
+Async handlers are passed the same way (`func=my_async_handler`) — each invocation runs in a **fresh event loop on the worker thread**. Handlers never share the main app loop, so never touch main-loop-bound resources directly from a handler; use `progress_hook` or `run_on_main` (below).
 
 ## Reaching the main loop from task code
 
@@ -147,8 +149,8 @@ app = FastAPI(lifespan=lifespan)
 1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite file. In tests, call it in a `finally:` block.
 2. **Expecting persistence** — the DB is temporary by design; re-`add_task` on every startup.
 3. **Unpicklable `args`/`kwargs`** — lambdas, inner functions, open handles fail pickle serialization. Pass plain data; make `func` a module-level callable.
-4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `_stop_event` runs to completion.
-5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `_progress_hook`/`run_on_main` to hop back.
+4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `stop_event` runs to completion.
+5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `progress_hook`/`run_on_main` to hop back.
 6. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
 7. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
 8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
@@ -156,6 +158,6 @@ app = FastAPI(lifespan=lifespan)
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`. `TaskNotScheduledError` is a deprecated alias of `TaskNotFoundError` and is no longer raised.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`, `MainLoopUnavailableError` (raised by `run_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
 
 `run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).

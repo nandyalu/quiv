@@ -66,20 +66,24 @@ Do not mix `config=...` with direct constructor config args. See [Quiv API](./ap
 
 ## 2) Add a task
 
+!!! warning "Upgrading from 0.x: the injected parameters were renamed"
+
+    quiv injects `job_id`, `stop_event`, and `progress_hook` into a handler that declares them. In `0.x` these names carried a leading underscore. `add_task()` rejects a handler that still declares `_job_id`, `_stop_event`, or `_progress_hook`, and names the new spelling in the error. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
+
 ### Sync handler
 
 ```python
 def my_task(
-    _job_id: str | None = None,
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    job_id: str | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     total = 5
     for step in range(1, total + 1):
         # <do some task work here>
-        if _progress_hook:
-            _progress_hook(step=step, total=total)
-        if _stop_event and _stop_event.is_set():
+        if progress_hook:
+            progress_hook(step=step, total=total)
+        if stop_event and stop_event.is_set():
             return
 
 task_id = scheduler.add_task(
@@ -101,15 +105,15 @@ Async handlers are fully supported. They run in thread-local event loops created
 import httpx
 
 async def poll_api(
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     async with httpx.AsyncClient() as client:
         # example of doing some async work
         response = await client.get("https://api.example.com/status")
-        if _progress_hook:
-            _progress_hook(status_code=response.status_code)
-        if _stop_event and _stop_event.is_set():
+        if progress_hook:
+            progress_hook(status_code=response.status_code)
+        if stop_event and stop_event.is_set():
             return
 
 scheduler.add_task(
@@ -119,7 +123,7 @@ scheduler.add_task(
 )
 ```
 
-`_job_id`, `_stop_event`, and `_progress_hook` are injected only if your handler accepts those keyword parameters. If your handler signature does not include them (and does not use `**kwargs`), they are not injected. See [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md) for in-depth guides.
+`job_id`, `stop_event`, and `progress_hook` are injected only if your handler accepts those keyword parameters. If your handler signature does not include them (and does not use `**kwargs`), they are not injected. See [Progress Callbacks](progress-callbacks.md) and [Cancellation](cancellation.md) for in-depth guides.
 
 !!! tip "Hold onto `task_id`"
     `add_task()` returns a `task_id` (UUID string). All runtime operations — `pause_task()`, `resume_task()`, `run_task_immediately()`, `remove_task()`, and `get_task()` — use this id. Multiple tasks can share the same `task_name`; each gets its own unique `task_id`.
@@ -169,16 +173,16 @@ Listeners follow the same dispatch model as progress callbacks: async listeners 
 import asyncio
 
 async def main() -> None:
-    scheduler.startup()
+    scheduler.start()
     await asyncio.sleep(25)
     scheduler.shutdown()
 
 asyncio.run(main())
 ```
 
-Always call `shutdown()` (or `stop()`) when your app exits.
+Always call `shutdown()` when your app exits.
 
-`startup()` / `shutdown()` is the recommended pair, but `start()` / `stop()` works identically — they are aliases.
+`start()` and `shutdown()` are the canonical names, and the documentation uses them everywhere. `startup()` is an alias of `start()`, and `stop()` is an alias of `shutdown()`. Both aliases keep working.
 
 ## 6) Operate tasks at runtime
 
@@ -202,7 +206,7 @@ for job in jobs:
     scheduler.cancel_job(job.id)
 ```
 
-Cancellation is cooperative: it sets the job's stop event. The handler must check `_stop_event.is_set()` to actually stop.
+Cancellation is cooperative: it sets the job's stop event. The handler must check `stop_event.is_set()` to actually stop.
 
 ## 8) Inspect state
 
@@ -226,18 +230,18 @@ from quiv import Quiv
 scheduler = Quiv(timezone="UTC")
 
 
-def reindex_documents(_stop_event=None, _progress_hook=None) -> None:
+def reindex_documents(stop_event=None, progress_hook=None) -> None:
     total = 100
     for step in range(1, total + 1):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return
 
         # Simulate blocking work
         import time
         time.sleep(0.05)
 
-        if _progress_hook:
-            _progress_hook(step=step, total=total, stage="reindex")
+        if progress_hook:
+            progress_hook(step=step, total=total, stage="reindex")
 
 
 async def on_reindex_progress(**payload) -> None:
@@ -265,8 +269,8 @@ app = FastAPI(lifespan=lifespan)
 
 Why this matters:
 
-- `_stop_event` makes long tasks cancel safely on shutdown.
-- `_progress_hook` sends task progress back into FastAPI's async context.
+- `stop_event` makes long tasks cancel safely on shutdown.
+- `progress_hook` sends task progress back into FastAPI's async context.
 - Scheduler lifecycle is tied cleanly to app lifecycle.
 
 ## Logging

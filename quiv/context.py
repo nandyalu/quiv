@@ -26,6 +26,8 @@ from collections.abc import Coroutine
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, cast
 
+from .exceptions import MainLoopUnavailableError
+
 if TYPE_CHECKING:
     from .base import QuivBase
 
@@ -101,7 +103,7 @@ def run_on_main(
 
     Exceptions raised by ``func`` are logged via the active Quiv's logger
     and swallowed — they will not propagate back to the caller. This
-    mirrors ``_progress_hook`` and event-listener semantics.
+    mirrors ``progress_hook`` and event-listener semantics.
 
     Context propagation: the active Quiv instance propagates into nested
     sync calls, into the thread-local event loops created for async
@@ -117,13 +119,14 @@ def run_on_main(
         **kwargs (Any): Keyword arguments forwarded to ``func``.
 
     Raises:
-        RuntimeError: If no active Quiv instance is registered, or if
-            the active Quiv has no resolvable main loop.
+        MainLoopUnavailableError: If no active Quiv instance is
+            registered, or if the active Quiv has no resolvable main
+            loop. It subclasses both ``QuivError`` and ``RuntimeError``.
     """
 
     quiv = _get_active_quiv()
     if quiv is None:
-        raise RuntimeError(
+        raise MainLoopUnavailableError(
             "run_on_main() called with no active Quiv instance. Ensure"
             " Quiv.start() has been called before dispatching to the main"
             " loop."
@@ -131,7 +134,7 @@ def run_on_main(
 
     main_loop = quiv._resolve_main_loop()
     if main_loop is None:
-        raise RuntimeError(
+        raise MainLoopUnavailableError(
             "run_on_main() requires a resolvable main event loop. Pass"
             " main_loop= to Quiv() or call start() from inside the main"
             " loop's thread."

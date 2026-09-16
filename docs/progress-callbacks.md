@@ -4,11 +4,11 @@ Progress callbacks let task handlers report live progress back to your applicati
 
 ## How it works
 
-When a handler calls `_progress_hook(...)`, quiv dispatches the registered progress callback for that task. The dispatch path depends on whether an asyncio event loop is available and whether the callback is sync or async.
+When a handler calls `progress_hook(...)`, quiv dispatches the registered progress callback for that task. The dispatch path depends on whether an asyncio event loop is available and whether the callback is sync or async.
 
 ```mermaid
 flowchart TD
-    A["Handler calls _progress_hook(...)"] --> B{Callback registered?}
+    A["Handler calls progress_hook(...)"] --> B{Callback registered?}
     B -- No --> C[Return silently]
     B -- Yes --> D{Event loop available?}
     D -- Yes --> E{Async callback?}
@@ -46,7 +46,7 @@ sequenceDiagram
     UV->>UV: Event loop starts
     App->>Q: scheduler.start()
     Note over Q: Loop thread begins
-    Q->>Q: Handler calls _progress_hook
+    Q->>Q: Handler calls progress_hook
     Q->>Q: _resolve_main_loop()
     Q->>UV: asyncio.get_running_loop()
     Note over Q: _main_loop cached
@@ -73,7 +73,7 @@ scheduler.add_task(
 
 ## Writing a handler with progress reporting
 
-Add `_progress_hook` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
+Add `progress_hook` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
 
 ```python
 import threading
@@ -82,27 +82,27 @@ from typing import Callable
 
 def process_records(
     batch_size: int,
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     records = fetch_records(batch_size)
     total = len(records)
 
     for i, record in enumerate(records, 1):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return
 
         process(record)
 
-        if _progress_hook:
-            _progress_hook(
+        if progress_hook:
+            progress_hook(
                 step=i,
                 total=total,
                 pct=round(i / total * 100),
             )
 ```
 
-The handler does not need to know whether the callback is sync or async, or whether an event loop exists. It just calls `_progress_hook(...)` and quiv handles the dispatch.
+The handler does not need to know whether the callback is sync or async, or whether an event loop exists. It just calls `progress_hook(...)` and quiv handles the dispatch.
 
 ## Async progress callback
 
@@ -165,10 +165,10 @@ def on_progress(**payload):
     print(f"Step {payload['step']}/{payload['total']}")
 
 
-def my_task(_progress_hook=None):
+def my_task(progress_hook=None):
     for i in range(1, 6):
-        if _progress_hook:
-            _progress_hook(step=i, total=5)
+        if progress_hook:
+            progress_hook(step=i, total=5)
 
 
 scheduler.add_task(
@@ -188,7 +188,7 @@ If a progress callback raises an exception, quiv logs the error but does **not**
 
 ```mermaid
 flowchart TD
-    A[Handler runs] --> B["_progress_hook(...)"]
+    A[Handler runs] --> B["progress_hook(...)"]
     B --> C[Callback dispatched]
     C --> D{Callback raises?}
     D -- No --> E[Continue]
@@ -198,10 +198,10 @@ flowchart TD
 
 ## Payload conventions
 
-`_progress_hook` accepts any `*args` and `**kwargs`. There is no enforced schema, but a useful pattern is:
+`progress_hook` accepts any `*args` and `**kwargs`. There is no enforced schema, but a useful pattern is:
 
 ```python
-_progress_hook(
+progress_hook(
     step=3,        # current step
     total=10,      # total steps
     stage="load",  # descriptive label

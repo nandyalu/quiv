@@ -255,9 +255,9 @@ def test_job_cancelled_event(
         captured.append((event, task, job))
         received.set()
 
-    def blocking_handler(_stop_event=None) -> None:
+    def blocking_handler(stop_event=None) -> None:
         started.set()
-        while not (_stop_event and _stop_event.is_set()):
+        while not (stop_event and stop_event.is_set()):
             time.sleep(0.05)
 
     try:

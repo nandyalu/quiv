@@ -52,9 +52,9 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 
 - Sync run-once task executes and produces a `completed` job
 - Async run-once task executes via thread-local event loop
-- Sync handler without `_stop_event` or `_progress_hook` still runs correctly
+- Sync handler without `stop_event` or `progress_hook` still runs correctly
 - Failed handler sets job status to `failed`
-- `_job_id` is injected as a UUID string when handler accepts it
+- `job_id` is injected as a UUID string when handler accepts it
 - `args` and `kwargs` ordering is preserved through pickle round-trip (tested with 8 positional args and 5 keyword args)
 
 ### Concurrent execution and backpressure
@@ -76,13 +76,13 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 ### Cancellation
 
 - `cancel_job()` returns `True` when stop event exists, `False` otherwise
-- Handler that sets `_stop_event` results in `cancelled` status
+- Handler that sets `stop_event` results in `cancelled` status
 - `remove_task()` on a running task cancels its active job
 - `shutdown()` cancels all tracked running jobs
 
 ### Progress callbacks
 
-- Async progress callback dispatched on main event loop via handler's `_progress_hook`
+- Async progress callback dispatched on main event loop via handler's `progress_hook`
 - Sync progress callback dispatched on main event loop via `call_soon_threadsafe`
 - Async handler with sync progress callback works correctly
 - Progress callback registration and clearing via `None`
@@ -114,7 +114,7 @@ Most tests require a running asyncio event loop for callback dispatch. The `runn
 
 ### Handler injection
 
-- `_job_id`, `_stop_event`, and `_progress_hook` are injected when handler accepts them
+- `job_id`, `stop_event`, and `progress_hook` are injected when handler accepts them
 - Injection is skipped when handler signature does not include the parameters
 - Handlers with `**kwargs` receive all injected parameters
 - Uninspectable callables (e.g. `object()`) are handled gracefully (no injection, no crash)

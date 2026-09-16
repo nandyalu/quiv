@@ -82,7 +82,7 @@ def with_logging_context(func):
     @wraps(func)
     async def async_wrapper(*args, **kwargs):
         # 1. Extract or Create
-        trace_id = kwargs.get("_job_id") or kwargs.get("trace_id")
+        trace_id = kwargs.get("job_id") or kwargs.get("trace_id")
 
         token = generate_trace_id(trace_id)  # Falls back to uuid4() internally
         try:
@@ -93,7 +93,7 @@ def with_logging_context(func):
     @wraps(func)
     def sync_wrapper(*args, **kwargs):
         # 1. Extract or Create
-        trace_id = kwargs.get("_job_id") or kwargs.get("trace_id")
+        trace_id = kwargs.get("job_id") or kwargs.get("trace_id")
 
         token = generate_trace_id(trace_id)
         try:
@@ -128,19 +128,19 @@ logger = logging.getLogger(__name__)
 @with_logging_context
 def cleanup_stale_records(
     days: int,
-    _job_id: str | None = None,
-    _stop_event: threading.Event | None = None,
+    job_id: str | None = None,
+    stop_event: threading.Event | None = None,
 ):
     """Delete records older than `days` from the database."""
 
-    # quiv injects _job_id and with_logging_context decorator stores it as trace_id
+    # quiv injects job_id and with_logging_context decorator stores it as trace_id
     # logs handler will get it using get_trace_id and adds it to all logs
     # so logs from the task will be logged with that trace_id
     # Attach job_id as trace context for this run
 
     batches = 10
     for batch in range(1, batches + 1):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             logger.info("Cleanup cancelled at batch %d/%d", batch, batches)
             return
 
@@ -166,22 +166,22 @@ logger = logging.getLogger(__name__)
 @with_logging_context
 def generate_report(
     report_type: str,
-    _job_id: str | None = None,
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    job_id: str | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     """Generate a report with progress updates."""
     steps = 5
     for step in range(1, steps + 1):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             logger.info("Report generation cancelled at step %d/%d", step, steps)
             return
 
         # ... do a chunk of report work ...
         time.sleep(2)  # simulate work
 
-        if _progress_hook:
-            _progress_hook(
+        if progress_hook:
+            progress_hook(
                 step=step,
                 total=steps,
                 report_type=report_type,
@@ -400,6 +400,6 @@ Then open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for interacti
 - **Single instance, shared everywhere.** Create `Quiv` in one module and import it wherever needed. This avoids multiple schedulers and duplicate DB files.
 - **Module-level init is safe.** `Quiv()` does not require a running asyncio loop at creation time. The event loop is resolved lazily when progress callbacks fire.
 - **Lifespan owns the lifecycle.** Call `start()` and `shutdown()` in the FastAPI lifespan so the scheduler is tied to the app process.
-- **Tasks are plain functions.** Define them anywhere. They only need `_stop_event` and `_progress_hook` in their signature if they want cancellation or progress support. See [Cancellation](cancellation.md) and [Progress Callbacks](progress-callbacks.md) for detailed guides.
+- **Tasks are plain functions.** Define them anywhere. They only need `stop_event` and `progress_hook` in their signature if they want cancellation or progress support. See [Cancellation](cancellation.md) and [Progress Callbacks](progress-callbacks.md) for detailed guides.
 - **Progress goes through WebSocket.** Async progress callbacks run on FastAPI's event loop, so they can broadcast to WebSocket clients directly. See [Progress Callbacks](progress-callbacks.md) for dispatch details.
 - **Event listeners for observability.** Use `add_listener()` to react to task and job lifecycle events. Async listeners run on the main loop, so they can broadcast to WebSocket clients alongside progress callbacks. See [Event Listeners](event-listeners.md) for the full event list.

@@ -12,8 +12,8 @@ All custom exceptions inherit from `QuivError`.
 	- `HandlerNotRegisteredError`
 	- `TaskNotActiveError`
 	- `TaskNotFoundError`
-		- `TaskNotScheduledError` (deprecated alias)
 	- `JobNotFoundError`
+	- `MainLoopUnavailableError` (also inherits `RuntimeError`)
 
 ## Exception reference
 
@@ -25,6 +25,8 @@ Raised when runtime or scheduling configuration is invalid, for example:
 - `history_retention_seconds < 0`
 - invalid `add_task(...)` inputs (`task_name`, `interval`, `delay`)
 - mixing `config=...` with direct constructor config args
+- a handler that declares a pre-1.0 injected parameter (`_job_id`, `_stop_event`, `_progress_hook`) — rename it to `job_id`, `stop_event`, or `progress_hook`
+- a key in `kwargs` that collides with a parameter quiv injects into the handler
 
 ### `InvalidTimezoneError`
 
@@ -52,13 +54,15 @@ Raised when an operation requires an `active` task. Currently raised by `run_tas
 
 Raised when a task id is unknown. Every method that takes a `task_id` raises it: `get_task()`, `update_task()`, `remove_task()`, `pause_task()`, `resume_task()` and `run_task_immediately()`. A run-once task deletes itself when it finishes, so its id stops resolving after it runs.
 
-### `TaskNotScheduledError`
-
-Deprecated alias of `TaskNotFoundError`, removed in 1.0.0. quiv no longer raises it. The name stays exported so that imports in 0.x code keep working. Catch `TaskNotFoundError` instead — an `except TaskNotScheduledError` clause no longer catches these errors.
-
 ### `JobNotFoundError`
 
 Raised when a job ID lookup fails in persistence operations (mark running/finalize).
+
+### `MainLoopUnavailableError`
+
+Raised by `run_on_main()` when it cannot reach a main event loop. There are two causes: no active Quiv instance is registered, or the active Quiv has no resolvable main loop. Pass `main_loop=` to `Quiv()`, or call `start()` from the thread that runs the main loop.
+
+This exception inherits `RuntimeError` as well as `QuivError`. quiv raised a bare `RuntimeError` here before v1.0.0, so an existing `except RuntimeError` clause keeps working. `except QuivError` now catches it too.
 
 ## Handling pattern
 

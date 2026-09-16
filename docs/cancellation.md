@@ -18,7 +18,7 @@ sequenceDiagram
     H->>H: Working...
     App->>S: cancel_job(job_id)
     S->>S: stop_event.set()
-    H->>H: Checks _stop_event.is_set()
+    H->>H: Checks stop_event.is_set()
     H->>H: Cleans up and returns
     S->>S: Detects stop_event was set
     S->>S: Mark job as "cancelled"
@@ -26,13 +26,17 @@ sequenceDiagram
 
 ### Key points
 
-- Cancellation is **cooperative** — the handler must check `_stop_event` to actually stop. quiv cannot force-kill a running thread.
+- Cancellation is **cooperative** — the handler must check `stop_event` to actually stop. quiv cannot force-kill a running thread.
 - The handler decides **when** to check and **how** to clean up.
-- Job status is automatically set to `cancelled` if the stop event was set when the handler returns, regardless of whether the handler accepted `_stop_event` in its signature.
+- Job status is automatically set to `cancelled` if the stop event was set when the handler returns, regardless of whether the handler accepted `stop_event` in its signature.
 
 ## Writing a cancellable handler
 
-Add `_stop_event` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
+Add `stop_event` to your handler's signature. quiv inspects the signature and only injects it if the parameter is present.
+
+!!! warning "Renamed in v1.0.0 — was `_stop_event`"
+
+    quiv `0.x` injected this parameter as `_stop_event`. A handler that still declares the old name is rejected by `add_task()`, which raises `ConfigurationError` and names the new spelling. Rename the parameter; its behavior is unchanged. See the [v1.0.0 release notes](release-notes.md#v1.0.0).
 
 ```python
 import threading
@@ -40,13 +44,13 @@ import time
 
 
 def long_running_task(
-    _stop_event: threading.Event | None = None,
+    stop_event: threading.Event | None = None,
 ):
     """A task that processes items and can be cancelled between steps."""
     items = fetch_items()
 
     for item in items:
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             # Clean up and exit gracefully
             return
 
@@ -56,7 +60,7 @@ def long_running_task(
 
 ### Check frequency
 
-Check `_stop_event` at natural breakpoints in your handler:
+Check `stop_event` at natural breakpoints in your handler:
 
 - Between iterations of a loop
 - Before starting an expensive operation
@@ -64,41 +68,41 @@ Check `_stop_event` at natural breakpoints in your handler:
 
 ```python
 def batch_processor(
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     batches = get_batches()
 
     for i, batch in enumerate(batches):
         # Check before each batch
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return
 
         result = process_batch(batch)  # might take a while
         save_result(result)
 
-        if _progress_hook:
-            _progress_hook(step=i + 1, total=len(batches))
+        if progress_hook:
+            progress_hook(step=i + 1, total=len(batches))
 ```
 
-### Using `_stop_event.wait()` instead of `time.sleep()`
+### Using `stop_event.wait()` instead of `time.sleep()`
 
-If your handler has a sleep/wait period, use `_stop_event.wait()` instead of `time.sleep()`. This makes cancellation responsive even during wait periods:
+If your handler has a sleep/wait period, use `stop_event.wait()` instead of `time.sleep()`. This makes cancellation responsive even during wait periods:
 
 ```python
 def polling_task(
-    _stop_event: threading.Event | None = None,
+    stop_event: threading.Event | None = None,
 ):
     """Poll an API every 5 seconds, but respond to cancellation immediately."""
-    while not (_stop_event and _stop_event.is_set()):
+    while not (stop_event and stop_event.is_set()):
         result = check_api()
         if result.ready:
             handle_result(result)
             return
 
         # Wait 5 seconds OR until cancelled — whichever comes first
-        if _stop_event:
-            _stop_event.wait(timeout=5)
+        if stop_event:
+            stop_event.wait(timeout=5)
         else:
             time.sleep(5)
 ```
@@ -122,7 +126,7 @@ for job in jobs:
 
 ## Cancellation during shutdown
 
-When `shutdown()` is called, quiv automatically cancels all tracked running jobs by setting their stop events. Handlers that check `_stop_event` will exit gracefully; handlers that don't will run to completion before the process exits.
+When `shutdown()` is called, quiv automatically cancels all tracked running jobs by setting their stop events. Handlers that check `stop_event` will exit gracefully; handlers that don't will run to completion before the process exits.
 
 ```mermaid
 flowchart TD
@@ -153,9 +157,9 @@ flowchart TD
 
 Note that `cancelled` takes priority over both `completed` and `failed`. If a handler raises an exception *and* the stop event is set, the job is marked as `cancelled` — the assumption is that the cancellation caused the error.
 
-## Handlers without `_stop_event`
+## Handlers without `stop_event`
 
-If your handler's signature does not include `_stop_event` (and does not use `**kwargs`), the event is **not injected** — but it is still tracked internally. This means:
+If your handler's signature does not include `stop_event` (and does not use `**kwargs`), the event is **not injected** — but it is still tracked internally. This means:
 
 - `cancel_job()` still sets the event
 - The job status is still set to `cancelled` if the event was set when the handler returns
@@ -165,25 +169,25 @@ This is useful for short-lived tasks where you don't need mid-execution cancella
 
 ## Combining with progress callbacks
 
-A common pattern is to check `_stop_event` and report progress in the same loop:
+A common pattern is to check `stop_event` and report progress in the same loop:
 
 ```python
 def export_data(
     format: str,
-    _stop_event: threading.Event | None = None,
-    _progress_hook: Callable | None = None,
+    stop_event: threading.Event | None = None,
+    progress_hook: Callable | None = None,
 ):
     records = query_records()
     total = len(records)
 
     for i, record in enumerate(records, 1):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return
 
         write_record(record, format)
 
-        if _progress_hook and i % 100 == 0:
-            _progress_hook(
+        if progress_hook and i % 100 == 0:
+            progress_hook(
                 step=i,
                 total=total,
                 pct=round(i / total * 100),

@@ -8,7 +8,15 @@ from typing import Any, Callable
 
 from .exceptions import ConfigurationError
 
-_INJECTABLE_KWARGS = frozenset({"_job_id", "_stop_event", "_progress_hook"})
+_INJECTABLE_KWARGS = frozenset({"job_id", "stop_event", "progress_hook"})
+
+# Pre-1.0 spellings of the names above. quiv stopped injecting these in
+# 1.0.0. add_task() rejects a handler that still declares one: injection
+# would skip it, and the handler would never see a cancellation. Remove in
+# 2.0.0 — see plans/api-freeze-notes.md.
+_LEGACY_INJECTABLE_KWARGS = frozenset(
+    {"_job_id", "_stop_event", "_progress_hook"}
+)
 
 
 class ExecutionLayer:
@@ -98,6 +106,29 @@ class ExecutionLayer:
                 accepted.add(parameter.name)
         return frozenset(accepted)
 
+    def _find_legacy_params(self, func: Callable[..., Any]) -> frozenset[str]:
+        """Return pre-1.0 injectable names that the callable declares.
+
+        Args:
+            func (Callable[..., Any]): Target callable.
+
+        Returns:
+            frozenset[str]: Declared legacy names. Empty when the callable
+                declares none. A ``**kwargs`` parameter is not a
+                declaration, so it never matches.
+        """
+
+        try:
+            signature = inspect.signature(func)
+        except (ValueError, TypeError):
+            return frozenset()
+        return frozenset(
+            parameter.name
+            for parameter in signature.parameters.values()
+            if parameter.name in _LEGACY_INJECTABLE_KWARGS
+        )
+
+
     def prepare_invocation(
         self,
         task_id: str,
@@ -143,20 +174,20 @@ class ExecutionLayer:
 
         injectable = self._get_injectable_params(func)
 
-        if "_job_id" in injectable:
-            f_kwargs["_job_id"] = job_id
+        if "job_id" in injectable:
+            f_kwargs["job_id"] = job_id
 
-        if "_stop_event" in injectable:
-            f_kwargs["_stop_event"] = stop_event
+        if "stop_event" in injectable:
+            f_kwargs["stop_event"] = stop_event
 
-        if "_progress_hook" in injectable:
+        if "progress_hook" in injectable:
 
-            def _progress_hook(*progress_args: Any, **progress_kwargs: Any) -> None:
+            def progress_hook(*progress_args: Any, **progress_kwargs: Any) -> None:
                 self._run_progress_callback(
                     task_id, *progress_args, **progress_kwargs
                 )
 
-            f_kwargs["_progress_hook"] = _progress_hook
+            f_kwargs["progress_hook"] = progress_hook
 
         return f_args, f_kwargs
 

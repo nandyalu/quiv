@@ -48,6 +48,152 @@ def test_add_task_validates_inputs(
         scheduler.shutdown()
 
 
+@pytest.mark.parametrize(
+    "handler, legacy, renamed",
+    [
+        (lambda _job_id=None: None, "_job_id", "job_id"),
+        (lambda _stop_event=None: None, "_stop_event", "stop_event"),
+        (lambda _progress_hook=None: None, "_progress_hook", "progress_hook"),
+    ],
+)
+def test_add_task_rejects_legacy_injected_params(
+    running_main_loop: asyncio.AbstractEventLoop,
+    handler: Any,
+    legacy: str,
+    renamed: str,
+) -> None:
+    """A 0.x handler fails at registration, not silently at run time.
+
+    quiv 1.0.0 stopped injecting the underscore-prefixed names. Without
+    this guard the parameter keeps its default and the handler never sees
+    a cancellation.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError) as excinfo:
+            scheduler.add_task(task_name="legacy", func=handler, interval=1)
+        message = str(excinfo.value)
+        assert legacy in message
+        assert renamed in message
+        # The guard runs before the row is written, so no orphan task
+        # is left behind that could never dispatch.
+        assert scheduler.get_all_tasks() == []
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_legacy_guard_ignores_var_keyword(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """``**kwargs`` declares no name, so the legacy guard stays quiet."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="catch-all",
+            func=lambda **kwargs: None,
+            interval=1,
+        )
+        assert scheduler.get_task(task_id) is not None
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_rejects_kwargs_colliding_with_injected_params(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """quiv refuses to overwrite a caller value with an injected one."""
+
+    def handler(job_id: str | None = None) -> None:
+        return None
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError, match="collide"):
+            scheduler.add_task(
+                task_name="sync",
+                func=handler,
+                interval=1,
+                kwargs={"job_id": "external-123"},
+            )
+        assert scheduler.get_all_tasks() == []
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_kwargs_collision_covers_var_keyword_handler(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A ``**kwargs`` handler accepts every injected name, so it collides."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError, match="collide"):
+            scheduler.add_task(
+                task_name="catch-all",
+                func=lambda **kwargs: None,
+                interval=1,
+                kwargs={"stop_event": "mine"},
+            )
+    finally:
+        scheduler.shutdown()
+
+
+def test_add_task_allows_kwargs_that_are_not_injected(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Only the three injected names collide; other keys pass through."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="catch-all",
+            func=lambda **kwargs: None,
+            interval=1,
+            kwargs={"user_id": "u-1"},
+        )
+        assert scheduler.get_task(task_id) is not None
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_rejects_kwargs_colliding_with_injected_params(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """update_task can change kwargs, so it runs the same collision guard."""
+
+    def handler(stop_event: Any = None) -> None:
+        return None
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="sync", func=handler, interval=60, delay=60
+        )
+        with pytest.raises(ConfigurationError, match="collide"):
+            scheduler.update_task(task_id, kwargs={"stop_event": "mine"})
+        # The rejected update wrote nothing.
+        assert scheduler.get_task(task_id).task_name == "sync"
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_accepts_kwargs_that_do_not_collide(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """The collision guard lets an ordinary kwargs update through."""
+
+    def handler(stop_event: Any = None, user_id: str = "") -> None:
+        return None
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="sync", func=handler, interval=60, delay=60
+        )
+        scheduler.update_task(task_id, kwargs={"user_id": "u-2"})
+        assert scheduler.get_task(task_id) is not None
+    finally:
+        scheduler.shutdown()
+
+
 def test_add_task_run_once_does_not_require_interval(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
@@ -214,13 +360,13 @@ def test_run_task_immediately_still_reports_missing_handler(
         scheduler.shutdown()
 
 
-def test_task_not_scheduled_error_subclasses_task_not_found(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """The deprecated alias still resolves under the new parent (#67)."""
-    from quiv.exceptions import TaskNotScheduledError
+def test_deprecated_task_not_scheduled_error_is_removed() -> None:
+    """The v0.9.0 alias was dropped in v1.0.0. Catch TaskNotFoundError."""
+    import quiv
+    import quiv.exceptions
 
-    assert issubclass(TaskNotScheduledError, TaskNotFoundError)
+    assert not hasattr(quiv.exceptions, "TaskNotScheduledError")
+    assert "TaskNotScheduledError" not in quiv.__all__
 
 
 def test_add_task_run_at_schedules_an_absolute_time(
@@ -535,7 +681,7 @@ def test_run_once_sync_task_executes_and_creates_completed_job(
     scheduler = Quiv(main_loop=running_main_loop)
     finished = threading.Event()
 
-    def handler(_stop_event=None) -> None:
+    def handler(stop_event=None) -> None:
         finished.set()
 
     try:
@@ -562,8 +708,8 @@ def test_job_id_injected_into_handler(
     finished = threading.Event()
     received_job_id: dict[str, str | None] = {"value": None}
 
-    def handler(_job_id: str | None = None) -> None:
-        received_job_id["value"] = _job_id
+    def handler(job_id: str | None = None) -> None:
+        received_job_id["value"] = job_id
         finished.set()
 
     try:
@@ -589,7 +735,7 @@ def test_run_once_async_task_executes(
     scheduler = Quiv(main_loop=running_main_loop)
     finished = threading.Event()
 
-    async def handler(_stop_event=None) -> None:
+    async def handler(stop_event=None) -> None:
         finished.set()
 
     try:
@@ -616,9 +762,9 @@ def test_progress_callback_runs_on_main_loop(
         if step == 1:
             progress_done.set()
 
-    def handler(_progress_hook=None, _stop_event=None) -> None:
-        assert _progress_hook is not None
-        _progress_hook(step=1)
+    def handler(progress_hook=None, stop_event=None) -> None:
+        assert progress_hook is not None
+        progress_hook(step=1)
 
     try:
         scheduler.add_task(
@@ -663,9 +809,9 @@ def test_run_once_sync_task_with_stop_event_cancels_job(
     scheduler = Quiv(main_loop=running_main_loop)
     finished = threading.Event()
 
-    def handler(_stop_event=None) -> None:
-        assert _stop_event is not None
-        _stop_event.set()
+    def handler(stop_event=None) -> None:
+        assert stop_event is not None
+        stop_event.set()
         finished.set()
 
     try:
@@ -695,9 +841,9 @@ def test_async_task_with_progress_hook_and_sync_progress_callback(
         if step == 2:
             progress_done.set()
 
-    async def handler(_progress_hook=None) -> None:
-        assert _progress_hook is not None
-        _progress_hook(step=2)
+    async def handler(progress_hook=None) -> None:
+        assert progress_hook is not None
+        progress_hook(step=2)
 
     try:
         scheduler.add_task(
@@ -965,9 +1111,9 @@ def test_remove_task_cancels_running_job(
     blocker = threading.Event()
     started = threading.Event()
 
-    def blocking_handler(_stop_event=None) -> None:
+    def blocking_handler(stop_event=None) -> None:
         started.set()
-        while not (_stop_event and _stop_event.is_set()):
+        while not (stop_event and stop_event.is_set()):
             blocker.wait(timeout=0.1)
 
     try:
@@ -1409,10 +1555,10 @@ def test_timeout_cancels_cooperative_handler(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        def cooperative(_stop_event: threading.Event) -> None:
+        def cooperative(stop_event: threading.Event) -> None:
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
-                if _stop_event.wait(0.05):
+                if stop_event.wait(0.05):
                     return
 
         t0 = time.monotonic()
@@ -1442,8 +1588,8 @@ def test_timeout_fires_promptly_during_long_loop_sleep(
     try:
         cancelled_at: dict[str, float] = {}
 
-        def cooperative(_stop_event: threading.Event) -> None:
-            if _stop_event.wait(10):
+        def cooperative(stop_event: threading.Event) -> None:
+            if stop_event.wait(10):
                 cancelled_at["t"] = time.monotonic()
 
         scheduler.add_task(
@@ -1473,9 +1619,9 @@ def test_no_timeout_means_no_deadline(
     try:
         running = threading.Event()
 
-        def handler(_stop_event: threading.Event) -> None:
+        def handler(stop_event: threading.Event) -> None:
             running.set()
-            _stop_event.wait(2)
+            stop_event.wait(2)
 
         scheduler.add_task(
             task_name="no-timeout",
@@ -1674,9 +1820,9 @@ def test_cancelled_job_does_not_retry(
     try:
         started = threading.Event()
 
-        def cooperative(_stop_event: threading.Event) -> None:
+        def cooperative(stop_event: threading.Event) -> None:
             started.set()
-            _stop_event.wait(5)
+            stop_event.wait(5)
             raise RuntimeError("raised after cancel")
 
         task_id = scheduler.add_task(
@@ -1781,8 +1927,8 @@ def test_timeout_message_leads_when_handler_also_raises(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        def raises_on_cancel(_stop_event: threading.Event) -> None:
-            _stop_event.wait(10)
+        def raises_on_cancel(stop_event: threading.Event) -> None:
+            stop_event.wait(10)
             raise RuntimeError("aborted by handler")
 
         scheduler.add_task(

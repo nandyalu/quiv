@@ -236,6 +236,25 @@ def test_run_on_main_without_active_quiv_raises(
         run_on_main(lambda: None)
 
 
+def test_main_loop_unavailable_error_catches_both_ways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The v1.0.0 exception keeps 0.x ``except RuntimeError`` working.
+
+    It inherits QuivError and RuntimeError, so both clauses catch it.
+    """
+    from quiv.exceptions import MainLoopUnavailableError, QuivError
+
+    assert issubclass(MainLoopUnavailableError, QuivError)
+    assert issubclass(MainLoopUnavailableError, RuntimeError)
+
+    monkeypatch.setattr(quiv_context, "_active_quiv", None)
+    with pytest.raises(QuivError):
+        run_on_main(lambda: None)
+    with pytest.raises(MainLoopUnavailableError):
+        run_on_main(lambda: None)
+
+
 def test_run_on_main_logs_and_swallows_target_exception(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,

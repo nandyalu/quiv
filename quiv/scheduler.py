@@ -102,6 +102,36 @@ def _validate_kwargs_type(value: dict[str, Any]) -> None:
         )
 
 
+def _validate_no_legacy_params(legacy: frozenset[str]) -> None:
+    # A handler written for 0.x keeps its default instead of being injected,
+    # so cooperative cancellation and timeouts would stop working with no
+    # error. Fail at registration, before the task row exists.
+    if not legacy:
+        return
+    renames = ", ".join(f"'{name}' -> '{name[1:]}'" for name in sorted(legacy))
+    raise ConfigurationError(
+        f"Handler declares parameters that quiv renamed in 1.0.0: {renames}. "
+        "Rename them in the handler signature. The behavior of each is "
+        "unchanged."
+    )
+
+
+def _validate_no_injectable_clash(
+    kwargs: dict[str, Any], injectable: frozenset[str]
+) -> None:
+    # An injected value overwrites a caller value of the same name, so the
+    # caller would silently lose it. quiv cannot tell which value was meant.
+    clash = sorted(injectable & kwargs.keys())
+    if not clash:
+        return
+    names = ", ".join(f"'{name}'" for name in clash)
+    raise ConfigurationError(
+        f"kwargs keys {names} collide with the parameters quiv injects into "
+        "this handler. Rename the keys, or remove the parameters from the "
+        "handler signature."
+    )
+
+
 def _pickle_or_raise(value: Any, label: str) -> bytes:
     try:
         return pickle.dumps(value)
@@ -209,7 +239,11 @@ class Quiv(QuivBase):
                 Not applied to the initial ``delay`` nor to retry backoff.
 
         Raises:
-            ConfigurationError: If scheduling parameters are invalid.
+            ConfigurationError: If scheduling parameters are invalid, if
+                ``func`` declares a pre-1.0 injected parameter
+                (``_job_id``, ``_stop_event``, ``_progress_hook``), or if
+                a key in ``kwargs`` collides with a parameter that quiv
+                injects into ``func``.
             HandlerRegistrationError: If ``func`` or ``progress_callback``
                 is not callable.
 
@@ -239,6 +273,7 @@ class Quiv(QuivBase):
         # would leave an orphaned ACTIVE row that can never dispatch.
         if not callable(func):
             raise HandlerRegistrationError("func must be callable")
+        _validate_no_legacy_params(self.execution._find_legacy_params(func))
         if progress_callback is not None and not callable(progress_callback):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
@@ -249,6 +284,9 @@ class Quiv(QuivBase):
 
         _validate_args_type(resolved_args)
         _validate_kwargs_type(resolved_kwargs)
+        _validate_no_injectable_clash(
+            resolved_kwargs, self.execution._get_injectable_params(func)
+        )
         args_pickled = _pickle_or_raise(resolved_args, "args")
         kwargs_pickled = _pickle_or_raise(resolved_kwargs, "kwargs")
 
@@ -336,7 +374,9 @@ class Quiv(QuivBase):
         Raises:
             TaskNotFoundError: If no task with that id exists.
             ConfigurationError: If a provided value is invalid (same
-                rules as ``add_task``).
+                rules as ``add_task``), or if a key in ``kwargs`` collides
+                with a parameter that quiv injects into the registered
+                handler.
             HandlerRegistrationError: If ``progress_callback`` is not
                 callable.
 
@@ -358,6 +398,15 @@ class Quiv(QuivBase):
             updates["args"] = _pickle_or_raise(args, "args")
         if not isinstance(kwargs, _Unset):
             _validate_kwargs_type(kwargs)
+            # func is not updatable, so the registered handler decides which
+            # names are injected. A handler missing from the registry is left
+            # to the persistence call below, which reports the unknown id.
+            with self._registries_lock:
+                handler = self.registry.get(task_id)
+            if handler is not None:
+                _validate_no_injectable_clash(
+                    kwargs, self.execution._get_injectable_params(handler)
+                )
             updates["kwargs"] = _pickle_or_raise(kwargs, "kwargs")
         if not isinstance(timeout, _Unset):
             _validate_timeout(timeout)

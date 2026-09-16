@@ -29,7 +29,7 @@ If you've reached for APScheduler inside a FastAPI app, you've probably hit one 
 - You want a job id stamped on every log line for one specific run, and you're threading it through call sites by hand.
 - You have a complete async pipeline you want to run in the background, and you're wrapping it in `asyncio.run` just to hand it to a sync-only scheduler.
 
-`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr) — a FastAPI app that outgrew APScheduler for exactly these reasons. It's a single-process, threadpool-backed scheduler with first-class support for cooperative cancellation (`_stop_event`), main-loop progress callbacks (`_progress_hook`), and per-job tracing (`_job_id`).
+`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr) — a FastAPI app that outgrew APScheduler for exactly these reasons. It's a single-process, threadpool-backed scheduler with first-class support for cooperative cancellation (`stop_event`), main-loop progress callbacks (`progress_hook`), and per-job tracing (`job_id`).
 
 It is not a Celery replacement. If you need multi-process workers, durable queues, or distributed execution, use Celery or arq. `quiv` is for the in-process case those tools are overkill for.
 
@@ -77,11 +77,11 @@ app = FastAPI(lifespan=lifespan)
 
 # Create a test function that we can later schedule to broadcast progress
 # sync/async - doesn't matter; quiv handles them all
-def ping(_progress_hook=None):
+def ping(progress_hook=None):
     for i in range(30):
         # do some work
-        if _progress_hook:
-            _progress_hook(message="ping", progress=i, total=30)
+        if progress_hook:
+            progress_hook(message="ping", progress=i, total=30)
 
 # Now the actual progress callback function that we want to run on the main asyncio loop
 async def on_progress(**payload):
@@ -108,7 +108,7 @@ APScheduler has asyncio integrations, but async pipelines can still end up wrapp
 
 
 ```python
-async def fetch_updates(_stop_event=None):
+async def fetch_updates(stop_event=None):
     await some_async_api_call()
 
 scheduler.add_task(task_name="fetch", func=fetch_updates, interval=60)
@@ -116,19 +116,19 @@ scheduler.add_task(task_name="fetch", func=fetch_updates, interval=60)
 
 ### Cancel a running task from an HTTP endpoint
 
-`_stop_event` is a per-job `threading.Event` injected into your handler. Check it at natural breakpoints and exit early when an endpoint calls `scheduler.cancel_job(job_id)` — no thread killing, no exceptions raised across thread boundaries.
+`stop_event` is a per-job `threading.Event` injected into your handler. Check it at natural breakpoints and exit early when an endpoint calls `scheduler.cancel_job(job_id)` — no thread killing, no exceptions raised across thread boundaries.
 
 ```python
-def download(media_id: int, _stop_event=None):
+def download(media_id: int, stop_event=None):
     for chunk in stream_chunks(media_id):
-        if _stop_event and _stop_event.is_set():
+        if stop_event and stop_event.is_set():
             return  # cooperative exit
         write(chunk)
 ```
 
 ### Stream progress to a websocket without the `run_coroutine_threadsafe` dance
 
-Your handler calls `_progress_hook(**payload)` from inside the threadpool. `quiv` dispatches your registered async callback on the main asyncio loop — where it can broadcast over a websocket, update app state, or push to a metrics client.
+Your handler calls `progress_hook(**payload)` from inside the threadpool. `quiv` dispatches your registered async callback on the main asyncio loop — where it can broadcast over a websocket, update app state, or push to a metrics client.
 
 ```python
 async def on_progress(**payload):
@@ -144,17 +144,17 @@ scheduler.add_task(
 
 ### Correlate logs for one job, across threads
 
-Every invocation gets a `_job_id` (UUID). Stamp it into a `LoggerAdapter` (or a `ContextVar`) and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
+Every invocation gets a `job_id` (UUID). Stamp it into a `LoggerAdapter` (or a `ContextVar`) and every log line from that run carries the same trace id — filtering logs by a single job is one query, even when N tasks run concurrently.
 
 ```python
 import logging
 
 base_logger = logging.getLogger(__name__)
 
-def download_trailer(media_id: int, _job_id: str | None = None, _stop_event=None):
-    logger = logging.LoggerAdapter(base_logger, {"trace_id": _job_id})
+def download_trailer(media_id: int, job_id: str | None = None, stop_event=None):
+    logger = logging.LoggerAdapter(base_logger, {"trace_id": job_id})
     logger.info("Starting download for media %s", media_id)
-    # every log line through `logger` below carries trace_id=<_job_id>
+    # every log line through `logger` below carries trace_id=<job_id>
 ```
 
 Trailarr uses a `ContextVar` flavor of this in production so downstream modules pick up the trace id automatically — see [Getting Started](getting-started.md) for that variant.

@@ -4,11 +4,11 @@ quiv provides three per-task knobs for handling slow, failing, or synchronized t
 
 ## Timeouts
 
-Timeout is **cooperative**: when a job exceeds `timeout` seconds, quiv sets its stop event — exactly as `cancel_job()` would. A handler that checks `_stop_event` exits promptly and the job finalizes as `cancelled` with `error_message = "Job exceeded timeout of {timeout}s"`. A handler that ignores its stop event keeps occupying its pool thread (quiv never kills threads); it still finalizes as `cancelled` when it eventually returns. There is no separate job status for timeouts — they are cancellations with an error message. If a timed-out handler also raises, the timeout message still leads and the handler's exception is appended (`... (handler raised: ...)`), so timeouts stay distinguishable from failures and manual cancellations.
+Timeout is **cooperative**: when a job exceeds `timeout` seconds, quiv sets its stop event — exactly as `cancel_job()` would. A handler that checks `stop_event` exits promptly and the job finalizes as `cancelled` with `error_message = "Job exceeded timeout of {timeout}s"`. A handler that ignores its stop event keeps occupying its pool thread (quiv never kills threads); it still finalizes as `cancelled` when it eventually returns. There is no separate job status for timeouts — they are cancellations with an error message. If a timed-out handler also raises, the timeout message still leads and the handler's exception is appended (`... (handler raised: ...)`), so timeouts stay distinguishable from failures and manual cancellations.
 
 ```python
-def poll_api(_stop_event):
-    while not _stop_event.wait(1):
+def poll_api(stop_event):
+    while not stop_event.wait(1):
         do_one_poll()
 
 scheduler.add_task("poll", poll_api, interval=60, timeout=30)
@@ -17,7 +17,7 @@ scheduler.add_task("poll", poll_api, interval=60, timeout=30)
 Timeouts are enforced by the scheduler loop, which wakes for the soonest pending deadline — enforcement latency is milliseconds, not tied to any polling interval.
 
 !!! tip
-    Write handlers to check `_stop_event` regularly (see [Cancellation](cancellation.md)); this makes both `cancel_job()` and timeouts effective.
+    Write handlers to check `stop_event` regularly (see [Cancellation](cancellation.md)); this makes both `cancel_job()` and timeouts effective.
 
 ## Retries
 

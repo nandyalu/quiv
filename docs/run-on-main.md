@@ -4,15 +4,15 @@
 
 It is the right tool when a piece of code, sometimes shared between task handlers and request handlers, needs to hop onto the main loop to touch resources that live there (WebSocket managers, background queues, async clients) but you don't want to thread a callback parameter through every intermediate function.
 
-## When to use this vs `_progress_hook`
+## When to use this vs `progress_hook`
 
 | Use case                                                      | Reach for           |
 | ------------------------------------------------------------- | ------------------- |
-| A single progress channel per task, registered up front       | `_progress_hook`    |
+| A single progress channel per task, registered up front       | `progress_hook`    |
 | Ad-hoc main-loop work from deeply nested code                 | `run_on_main`       |
 | The same utility called from both task code and route handlers | `run_on_main`      |
 
-`_progress_hook` is per-task and is dispatched only to the `progress_callback` you registered with `add_task()`. `run_on_main` is global to the active Quiv instance — any callable, any arguments, called from any depth in any task.
+`progress_hook` is per-task and is dispatched only to the `progress_callback` you registered with `add_task()`. `run_on_main` is global to the active Quiv instance — any callable, any arguments, called from any depth in any task.
 
 ## Basic usage
 
@@ -41,7 +41,7 @@ scheduler.add_task(task_name="deep-task", func=handler, interval=60)
 scheduler.start()
 ```
 
-`level_three` does not need `_progress_hook` injected, does not need a scheduler reference, and does not need to know it is inside a task — it just imports `run_on_main` at module level and calls it.
+`level_three` does not need `progress_hook` injected, does not need a scheduler reference, and does not need to know it is inside a task — it just imports `run_on_main` at module level and calls it.
 
 ## Dispatch behavior
 
@@ -110,7 +110,7 @@ If both are unset, `run_on_main` raises `RuntimeError`.
 
 ## Exception handling
 
-If `func` raises, `run_on_main` logs the error via the active Quiv's logger and swallows it. The caller's code continues normally. This mirrors `_progress_hook` and event-listener semantics — a broken main-loop callback should never take down the task that triggered it.
+If `func` raises, `run_on_main` logs the error via the active Quiv's logger and swallows it. The caller's code continues normally. This mirrors `progress_hook` and event-listener semantics — a broken main-loop callback should never take down the task that triggered it.
 
 ```mermaid
 flowchart TD

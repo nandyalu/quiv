@@ -1,3 +1,78 @@
+<a id="v1.0.0"></a>
+## v1.0.0 - Unreleased
+
+The first stable release. `v1.0.0` freezes the public API.
+
+### Breaking changes
+
+!!! warning "Injected handler parameters lost the underscore prefix"
+
+    `add_task()` rejects a handler that still declares `_job_id`, `_stop_event`, or `_progress_hook`. Rename the parameter. The behavior of each one is unchanged.
+
+quiv injects three parameters into a handler that declares them. Those names are now public names:
+
+| Before (`0.x`) | Now (`v1.0.0`) |
+| --- | --- |
+| `_job_id` | `job_id` |
+| `_stop_event` | `stop_event` |
+| `_progress_hook` | `progress_hook` |
+
+A leading underscore means "private, do not touch" in Python. These three parameters are the opposite of private. You declare them, you read them, and cooperative cancellation is built on them. They are part of the contract for writing a handler, so they now read as public names.
+
+#### How to migrate a handler
+
+Rename the parameter in the signature and in the body. Nothing else changes.
+
+```python
+# 0.x
+def sync_users(_job_id=None, _stop_event=None, _progress_hook=None):
+    if _stop_event and _stop_event.is_set():
+        return
+    _progress_hook(percent=50)
+
+# v1.0.0
+def sync_users(job_id=None, stop_event=None, progress_hook=None):
+    if stop_event and stop_event.is_set():
+        return
+    progress_hook(percent=50)
+```
+
+#### quiv reports a missed rename
+
+`add_task()` raises `ConfigurationError` when a handler still declares an old name. The message names the parameter and its new spelling. quiv raises it at registration, before it writes the task row and before any job runs.
+
+This check exists because the failure is otherwise silent. quiv no longer injects `_stop_event`, so the parameter keeps its default value. The handler never sees a cancellation. `cancel_job()` stops working, and every `timeout` stops working, because a timeout sets the same stop event. Nothing raises, and nothing is written to the log.
+
+A handler that declares `**kwargs` is not affected. It asks for no name, so quiv has nothing to check.
+
+#### A new conflict to know about
+
+`job_id`, `stop_event`, and `progress_hook` are ordinary names now, so a key in `kwargs` can collide with one:
+
+```python
+scheduler.add_task("sync", sync_users, interval=60, kwargs={"job_id": "external-123"})
+```
+
+An injected value overwrites a caller value of the same name. If `sync_users` accepts `job_id`, quiv would replace `"external-123"` with its own job id, and you would never know. `add_task()` and `update_task()` raise `ConfigurationError` instead, because quiv cannot tell which value you wanted. Rename the key, or remove the parameter from the handler signature. A handler that declares `**kwargs` accepts every injected name, so this check covers it too.
+
+### `TaskNotScheduledError` was removed
+
+`v0.9.0` deprecated this name and stopped raising it. `v1.0.0` removes the class and its export. Catch `TaskNotFoundError` instead.
+
+```python
+# 0.x
+from quiv import TaskNotScheduledError
+
+# v1.0.0
+from quiv import TaskNotFoundError
+```
+
+### `run_on_main()` raises a quiv exception
+
+`run_on_main()` raised a bare `RuntimeError` when it could not reach a main event loop. It now raises `MainLoopUnavailableError`, which inherits both `QuivError` and `RuntimeError`.
+
+This is not a breaking change. An existing `except RuntimeError` clause still catches it, and `except QuivError` now catches it as well. Every exception that quiv raises is under `QuivError`.
+
 <a id="v0.10.0"></a>
 ## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-08
 
