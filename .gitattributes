@@ -1,0 +1,23 @@
+# Line endings.
+#
+# The repository was started on Windows without this file and with
+# core.autocrlf unset, so CRLF bytes were committed verbatim into the git
+# objects. Files that tooling later rewrote came back as LF, which left the
+# tree split between the two and produced diffs where unrelated lines
+# appeared to change.
+#
+# Every text file is now stored and checked out with LF. The one-off
+# normalization commit is listed in .git-blame-ignore-revs, so `git blame`
+# still reports the real author of each line.
+
+* text=auto eol=lf
+
+# Binary assets. `text=auto` detects these on its own; naming them makes the
+# intent explicit and protects them if the detection ever changes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
