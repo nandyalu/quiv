@@ -163,7 +163,9 @@ Starts the background thread that runs the scheduler loop. You can call it more 
 
 Always call it when your application stops.
 
-With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application. A job left behind can write errors later, when it reaches the database that quiv already deleted.
+With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application.
+
+A job left behind still holds its database connection. When it finishes, its write reaches the database that quiv already deleted. Two things follow: the job can write errors to the log, and SQLite recreates the temporary database file, because a write creates the file again. The file is small and nothing reads it. Delete it yourself if a stray file in the temp directory matters to you.
 
 !!! success "`stop()` is an alias for `shutdown()`"
     `shutdown()` is the canonical name, and this documentation uses it everywhere. `stop()` calls the same code and keeps working.

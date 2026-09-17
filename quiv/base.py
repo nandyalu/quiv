@@ -601,7 +601,10 @@ class QuivBase(ABC):
                 indefinitely (previous behavior). With a timeout, jobs that
                 do not exit within the deadline are abandoned on their
                 daemon threads and may log errors afterwards (e.g. writing
-                to the already-deleted database).
+                to the already-deleted database). Such a write also
+                recreates the temporary database file, because SQLite
+                creates the file again when it writes. Delete it yourself
+                if a stray file matters to you.
         """
 
         from .context import _unregister_active

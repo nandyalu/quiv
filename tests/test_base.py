@@ -250,8 +250,12 @@ def test_quiv_base_loop_abstract_method_raises() -> None:
 def test_shutdown_handles_db_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     running_main_loop: asyncio.AbstractEventLoop,
+    leftover_db_paths: list[str],
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
+    # Deletion is about to fail on purpose, so nothing removes this file
+    # during the test. The fixture removes it at teardown.
+    leftover_db_paths.append(scheduler._db_path)
     monkeypatch.setattr("quiv.base.os.path.exists", lambda _path: True)
 
     def fail_remove(_path: str) -> None:
@@ -507,13 +511,18 @@ def test_shutdown_only_cancels_running_jobs(
 
 def test_shutdown_timeout_with_hung_handler(
     running_main_loop: asyncio.AbstractEventLoop,
+    leftover_db_paths: list[str],
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
+    leftover_db_paths.append(scheduler._db_path)
     started = threading.Event()
 
     def hung() -> None:
         started.set()
-        time.sleep(10)
+        # Long enough to outlast the 2s shutdown timeout below, short
+        # enough that the abandoned thread writes again while the
+        # leftover_db_paths fixture is still waiting to clean up.
+        time.sleep(4)
 
     scheduler.add_task(
         task_name="hung", func=hung, interval=60, run_once=True
@@ -532,6 +541,7 @@ def test_shutdown_timeout_with_hung_handler(
 def test_shutdown_warns_when_loop_thread_outlives_the_timeout(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
+    leftover_db_paths: list[str],
 ) -> None:
     """shutdown() warns when the scheduler thread misses its deadline.
 
@@ -558,6 +568,7 @@ def test_shutdown_warns_when_loop_thread_outlives_the_timeout(
             self._real.start()
 
     scheduler = Quiv(main_loop=running_main_loop)
+    leftover_db_paths.append(scheduler._db_path)
     scheduler.start()
     real_thread = scheduler.thread
     stand_in = NeverStops(real_thread)

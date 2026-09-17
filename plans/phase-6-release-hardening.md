@@ -59,9 +59,11 @@ These are scripts, not pytest — no CI integration (perf assertions in CI are f
 
 ## 5. Soak test
 
-- [ ] `scripts/soak.py` (repo root `scripts/`, not packaged, not CI): runs a scheduler for a configurable duration (default 10 minutes, `--hours 24` for the release run) with a mixed workload — recurring sync task, recurring async task, a failing task with retries, a task cancelled periodically, a task with timeout, a sub-second task, plus a thread calling `stats()`/`get_all_jobs()` every second.
-- [ ] The script self-checks and exits non-zero on: `threading.active_count()` growth beyond a fixed baseline, job_history_count exceeding what the retention window allows, any ERROR record on the "Quiv" logger (except the expected ones from the deliberately-failing task — match on message), or scheduler thread death.
-- [ ] Run the 24 h soak once before tagging 1.0.0; paste the summary output into the release PR description.
+- [x] `scripts/soak.py` (repo root `scripts/`, not packaged, not CI): runs a scheduler for a configurable duration (default 10 minutes, `--hours 24` for the release run) with a mixed workload — recurring sync task, recurring async task, a failing task with retries, a task cancelled periodically, a task with timeout, a sub-second task, plus a thread calling `stats()`/`get_all_jobs()` every second.
+- [x] The script self-checks and exits non-zero on: `threading.active_count()` growth beyond a fixed baseline, job_history_count exceeding what the retention window allows, any ERROR record on the "Quiv" logger (except the expected ones from the deliberately-failing task — match on message), or scheduler thread death.
+- [x] Run the 24 h soak once before tagging 1.0.0; paste the summary output into the release PR description.
+
+**Result (2026-09-17):** ran the full 24 h on commit `a844410`, Intel i5-11600 / Linux / Python 3.10.12. **PASS**, exit code 0. 294,400 jobs finished (3.4/s): 234,876 completed, 32,229 failed, 27,295 cancelled, 21,486 retries queued. Threads 8 baseline and 8 peak. Job history peaked at 2,264 against a bound of 5,006, flat after the first hour. Peak RSS 53 MB. Zero unexpected ERROR records. Full log kept at `~/quiv-soak-20260916-0055.log`; paste the summary block into the release PR.
 
 ## 6. Release
 
