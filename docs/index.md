@@ -200,6 +200,8 @@ The table describes the default behavior of each tool. All four can be stretched
 
 Read the last three rows first. quiv keeps no state across a restart, runs no cron expression, and spreads no work beyond one process. If you need any of those, use APScheduler or Celery. quiv is for the case where a job must run in your process, report progress to your event loop, and stop when a user asks it to.
 
+Before the `1.0.0` release quiv ran for 24 hours under a mixed workload — recurring, async, failing, cancelled, timing out, and sub-second tasks at once. It finished 294,400 jobs with the thread count unchanged, the retained job history flat after the first hour, and memory steady at 53 MB. The log is in the repository at [`benchmarks/results/soak-24h-2026-09-17.log`](https://github.com/nandyalu/quiv/blob/main/benchmarks/results/soak-24h-2026-09-17.log).
+
 ## Important caveats
 
 - **A temporary database**: each `Quiv` instance creates a temporary SQLite file, and `shutdown()` deletes it. The state of your tasks and jobs does not survive a restart.

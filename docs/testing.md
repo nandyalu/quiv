@@ -178,3 +178,46 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - JSON serialization produces correct output (tested with `model_dump_json()`)
 - Time helpers (`next_run_time`, `get_current_time`) return UTC-aware datetimes
 - `id_generator()` returns UUID strings
+
+## Soak test
+
+The test suite runs in under a minute, so it cannot show what happens to a scheduler that runs for a day. A separate script does that. `scripts/soak.py` runs a mixed workload for as long as you ask, and checks for the faults that only appear with time: threads that accumulate, a database that never stops growing, memory that climbs, and errors that nobody sees.
+
+```bash
+uv run python scripts/soak.py --minutes 10    # while you work
+uv run python scripts/soak.py --hours 24      # before a release
+```
+
+The workload covers every execution path at once: a sync task, an async task, a task that fails and retries, a task that another thread cancels, a task that passes its timeout, and a task on a sub-second interval. A separate thread calls `stats()` and `get_all_jobs()` every second, the way an admin page would.
+
+The script exits non-zero on any of four conditions:
+
+- The number of live threads grows past its settled baseline.
+- The retained job history grows past what the retention window allows.
+- The `"Quiv"` logger records an ERROR that the failing task does not explain.
+- The scheduler thread dies.
+
+### Result for v1.0.0
+
+Run on 2026-09-17, for the full 24 hours, on an Intel Core i5-11600 with Python 3.10.12 on Linux. **It passed.** The complete log is in the repository at [`benchmarks/results/soak-24h-2026-09-17.log`](https://github.com/nandyalu/quiv/blob/main/benchmarks/results/soak-24h-2026-09-17.log).
+
+| Measurement | Result |
+| --- | --- |
+| Ran for | 24.00 h |
+| Jobs finished | 294,400, at 3.4 each second |
+| — completed | 234,876 |
+| — failed | 32,229 |
+| — cancelled | 27,295 |
+| — retries queued | 21,486 |
+| Live threads | 8 at the baseline, 8 at the peak |
+| Retained job history | 2,264 rows at the peak, against a bound of 5,006 |
+| Peak memory | 53 MB |
+| Unexpected errors | 0 |
+
+Three of those rows carry the weight:
+
+**The thread count never moved.** It read 8 in all 280 samples, across roughly 294,000 job lifecycles. Each of those built a stop event and a set of injected arguments, and each run of the async task built its own event loop and closed it again. Nothing accumulated.
+
+**The database stopped growing after the first hour.** The retained history reached about 2,260 rows and stayed there for the next 22 hours, which means the cleanup keeps pace with the work indefinitely. The file does not grow without limit.
+
+**Memory held at 53 MB** for the whole day. That rules out the slow leaks: job rows kept in memory, stop events never dropped from the registry, and event loops retained after their job ends.

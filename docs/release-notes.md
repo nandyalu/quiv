@@ -126,6 +126,23 @@ The first row is the one to remember. A task starts within about 18 ms of its du
 
 **A larger pool does not raise the rate of short jobs.** Between `pool_size=4` and `pool_size=64` the rate stays near 200 jobs per second. The limit is the database, not the pool: each job writes four times, and a write takes the writer lock, so those writes queue behind the writes of every other job. Raise `pool_size` when your handlers wait on something. For work that lasts a few milliseconds, the bookkeeping costs more than the work itself.
 
+### Reliability
+
+`v1.0.0` ran for 24 hours without a pause, under a workload that mixes every execution path: a sync task, an async task, a task that fails and retries, a task that another thread cancels, a task that passes its timeout, and a task on a sub-second interval. A separate thread read `stats()` and `get_all_jobs()` every second throughout.
+
+| Measurement | Result over 24 hours |
+| --- | --- |
+| Jobs finished | 294,400 — 234,876 completed, 32,229 failed, 27,295 cancelled |
+| Retries queued | 21,486 |
+| Live threads | 8 at the start, 8 at the end, 8 at every sample between |
+| Retained job history | reached 2,264 rows in the first hour, then flat |
+| Memory | 53 MB, start to finish |
+| Unexpected errors | none |
+
+The thread count is the number to look at. It did not move across roughly 294,000 job lifecycles, each of which created a stop event and a set of injected arguments, and each run of the async task built its own event loop and closed it. The retained history stopped growing after the first hour, so the cleanup keeps pace with the work for as long as the process runs. Memory held flat, which rules out job rows, stop events, and event loops accumulating behind the scenes.
+
+Reproduce it with `uv run python scripts/soak.py --hours 24`. The full log of the release run is in the repository at [`benchmarks/results/soak-24h-2026-09-17.log`](https://github.com/nandyalu/quiv/blob/main/benchmarks/results/soak-24h-2026-09-17.log), and [Testing](testing.md#soak-test) describes the method.
+
 <a id="v0.10.0"></a>
 ## [v0.10.0 - Absolute-time scheduling](https://github.com/nandyalu/quiv/releases/tag/v0.10.0) - 2026-09-08
 

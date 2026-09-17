@@ -82,6 +82,10 @@ Two practical consequences:
 - Raising `pool_size` helps only when your handlers wait on something. It does not raise the rate of short jobs.
 - quiv suits jobs that last longer than a few milliseconds. For very short jobs in very large numbers, the bookkeeping costs more than the work.
 
+## Soak results
+
+`results/` holds the log of the 24-hour soak that ran before the `v1.0.0` release. The soak is not a benchmark: it runs a mixed workload for a day and checks that threads, the job history, and memory all stay flat. `scripts/soak.py` runs it, and [the Testing page](../docs/testing.md#soak-test) describes the method and the result.
+
 ## Reading these numbers
 
 Treat them as one machine on one day, not as a specification.
