@@ -1,8 +1,8 @@
 # Roadmap to v1.0.0
 
-This page tracks the planned work between the current release and `v1.0.0`. The scope was reviewed and frozen on 2026-07-10; items listed under [Out of scope](#out-of-scope-for-v100) were considered and explicitly deferred.
+This page tracked the work between `v0.4` and `v1.0.0`. Every phase is complete, and `v1.0.0` is the result. The scope was reviewed and frozen on 2026-07-10; the items under [Out of scope](#out-of-scope-for-v100) were considered and deferred, and that section stands as the record of what quiv deliberately does not do.
 
-The roadmap is organized into six phases. Each phase ships independently as its own minor release, and later phases build on machinery introduced by earlier ones. One release, `v0.10.0`, sits outside the phases: the phase numbers stay consecutive, so the version numbers do not.
+The roadmap was organized into six phases. Each phase shipped independently as its own minor release, and later phases built on machinery from earlier ones. One release, `v0.10.0`, sat outside the phases: the phase numbers stay consecutive, so the version numbers do not.
 
 Detailed implementation plans — one per phase, with prescriptive design decisions, test lists, pitfalls, and exit checklists — live in the repository under [`plans/`](https://github.com/nandyalu/quiv/tree/main/plans).
 
@@ -67,12 +67,16 @@ Not a roadmap phase. `add_task()` gained a `run_at` parameter that takes the abs
 
 This is not calendar scheduling. `run_at` names one instant for one run. Recurrence stays interval-based — see [Out of scope](#out-of-scope-for-v100).
 
-## Phase 6 — v1.0.0 Hardening & Release
+## Phase 6 — v1.0.0 Hardening & Release (`v1.0.0`)
+
+**Status: ✅ complete** — implemented 2026-09-17, ships as `v1.0.0`.
 
 1. API freeze review: a naming pass over the entire public surface (last chance for breaking changes), `__all__` audit, and removal of anything deprecated during the 0.x series.
 2. Documentation overhaul: migration notes from 0.x, "Failure handling" and "Observability" pages, an updated README comparison table, and a Simplified Technical English (ASD-STE100) pass over the user-facing docs pages.
 3. A committed benchmark suite (dispatch latency, throughput at pool saturation) with numbers published in the release notes.
 4. Coverage target of at least 95% and a 24-hour soak test with mixed sync/async/failing/cancelled tasks — zero leaked threads or event loops, and database size bounded by the retention window.
+
+**What it produced.** The three parameters that quiv injects into a handler lost their underscore: `job_id`, `stop_event`, and `progress_hook`. That was the one breaking change, and `add_task()` rejects the old names rather than letting cancellation fail in silence. `TaskNotScheduledError`, deprecated in `v0.9.0`, is gone. Coverage reached 100%, against the 95% target. The benchmark suite lives in [`benchmarks/`](https://github.com/nandyalu/quiv/tree/main/benchmarks), and the 24-hour soak passed: 294,400 jobs, no thread growth, a job history that stopped growing after the first hour, and memory flat at 53 MB. Its log is committed. Decisions from the API freeze, including the alternatives that were rejected, are recorded in [`plans/api-freeze-notes.md`](https://github.com/nandyalu/quiv/blob/main/plans/api-freeze-notes.md).
 
 ## Out of scope for v1.0.0
 

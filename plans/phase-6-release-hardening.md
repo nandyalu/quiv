@@ -67,9 +67,9 @@ These are scripts, not pytest — no CI integration (perf assertions in CI are f
 
 ## 6. Release
 
-- [ ] Version `1.0.0` in `pyproject.toml`.
-- [ ] Full gate: `uv run pytest --cov=quiv && uv run mypy quiv && uv run zensical build --clean`.
-- [ ] `docs/roadmap.md`: mark all phases complete; move the page's framing to past tense ("This page tracked...") — keep the out-of-scope section as the standing record of rejected features.
+- [x] Version `1.0.0` in `pyproject.toml`.
+- [x] Full gate: `uv run pytest --cov=quiv && uv run mypy quiv && uv run zensical build --clean`.
+- [x] `docs/roadmap.md`: mark all phases complete; move the page's framing to past tense ("This page tracked...") — keep the out-of-scope section as the standing record of rejected features.
 - [ ] Tag + GitHub release per the repo's existing release process (check `.github/workflows/build.yml` for how publishing works before assuming anything).
 
 ## Pitfalls

@@ -36,6 +36,13 @@ uv run mypy quiv
 
 # Build docs (uses Zensical, not MkDocs)
 uv run zensical build --clean
+
+# Benchmarks (scripts, not tests; never run in CI)
+uv run python benchmarks/bench_dispatch_latency.py
+uv run python benchmarks/bench_throughput.py
+
+# Soak test (long-running; --hours 24 before a release)
+uv run python scripts/soak.py --minutes 10
 ```
 
 ## Architecture
@@ -86,3 +93,9 @@ Three artifacts teach AI assistants how to use quiv; when the public API or key 
 ## Testing
 
 Tests use pytest. Most tests require the `running_main_loop` fixture (from `conftest.py`) which spins up an asyncio event loop in a background thread. Always call `scheduler.shutdown()` in a `finally` block to clean up threads and temp DB files.
+
+Coverage is gated: `[tool.coverage.report] fail_under = 95` in `pyproject.toml` makes pytest exit non-zero below that, in CI as well as locally. The suite currently sits at 100%.
+
+A test that deliberately leaves a temp database behind must request the `leftover_db_paths` fixture and append `scheduler._db_path` to it. Two situations need this: a thread abandoned by `shutdown(timeout=...)` recreates the file when its write lands (SQLite creates a missing file on write), and a test that patches `os.remove` to fail never deletes it. Without the fixture each run drops a file in the temp directory.
+
+`scripts/soak.py` runs the long mixed workload — sync, async, failing/retrying, cancelled, timing out, and sub-second tasks at once — and fails on thread growth, unbounded job history, an unexplained ERROR, or a dead scheduler thread. The 24-hour run before `v1.0.0` is logged at `benchmarks/results/soak-24h-2026-09-17.log`.

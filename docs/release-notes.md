@@ -1,5 +1,5 @@
 <a id="v1.0.0"></a>
-## v1.0.0 - Unreleased
+## [v1.0.0 - Hardening & Release](https://github.com/nandyalu/quiv/releases/tag/v1.0.0) - 2026-09-17
 
 The first stable release. `v1.0.0` freezes the public API.
 
