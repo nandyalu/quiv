@@ -125,9 +125,13 @@ class ExecutionLayer:
         return frozenset(
             parameter.name
             for parameter in signature.parameters.values()
-            if parameter.name in _LEGACY_INJECTABLE_KWARGS
+            # ``**kwargs`` and ``*args`` name a collector, not a parameter
+            # the caller can fill. A handler that writes ``**_stop_event``
+            # accepts every injected name, so it needs no rename.
+            if parameter.kind
+            not in (parameter.VAR_KEYWORD, parameter.VAR_POSITIONAL)
+            and parameter.name in _LEGACY_INJECTABLE_KWARGS
         )
-
 
     def prepare_invocation(
         self,

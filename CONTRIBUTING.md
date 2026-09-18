@@ -51,7 +51,7 @@ uv run zensical build --clean
 - Use type annotations for all function signatures
 - Use `str, Enum` for enum classes (not `StrEnum`) to maintain Python 3.10 compatibility
 - Use SQLModel's `col()` wrapper for typed WHERE clauses in persistence code
-- Keep handler injection parameters prefixed with `_` (`_stop_event`, `_progress_hook`)
+- Name the injected handler parameters `job_id`, `stop_event`, and `progress_hook`, with no leading underscore. They carried one before v1.0.0; `add_task()` now rejects the old spellings.
 - All internal datetime handling must use UTC — the `timezone` parameter is for log display only
 - Do not set log levels in library code — that is the application's responsibility
 

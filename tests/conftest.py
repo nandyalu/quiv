@@ -52,8 +52,11 @@ def leftover_db_paths() -> Generator[list[str], None, None]:
     for path in paths:
         for suffix in ("", "-wal", "-shm"):
             candidate = path + suffix
-            if real_exists(candidate):
+            try:
                 real_remove(candidate)
+            except FileNotFoundError:
+                # Never written, or removed between the check and now.
+                pass
 
 
 @pytest.fixture

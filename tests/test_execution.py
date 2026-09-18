@@ -153,6 +153,31 @@ def test_find_legacy_params_ignores_var_keyword() -> None:
     assert layer._find_legacy_params(handler) == frozenset()
 
 
+def test_find_legacy_params_ignores_a_legacy_named_collector() -> None:
+    """``**_stop_event`` is a collector, not a request for the old name.
+
+    Such a handler accepts every injected name through its ``**kwargs``,
+    so it works under the 1.0 names and must not be told to rename.
+    """
+    layer = ExecutionLayer(
+        run_async=lambda _f, _a, _k: None,
+        run_progress_callback=lambda *_a, **_k: None,
+    )
+
+    def handler(**_stop_event: Any) -> None:
+        return None
+
+    def positional(*_job_id: Any) -> None:
+        return None
+
+    assert layer._find_legacy_params(handler) == frozenset()
+    assert layer._find_legacy_params(positional) == frozenset()
+    # It still accepts every injected parameter, being **kwargs.
+    assert layer._get_injectable_params(handler) == frozenset(
+        {"job_id", "stop_event", "progress_hook"}
+    )
+
+
 def test_find_legacy_params_handles_uninspectable_callable() -> None:
     layer = ExecutionLayer(
         run_async=lambda _f, _a, _k: None,

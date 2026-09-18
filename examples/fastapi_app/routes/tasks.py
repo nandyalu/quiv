@@ -3,7 +3,11 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from quiv.exceptions import ConfigurationError, TaskNotFoundError
+from quiv.exceptions import (
+    ConfigurationError,
+    TaskNotActiveError,
+    TaskNotFoundError,
+)
 
 from examples.fastapi_app.scheduler import scheduler
 
@@ -46,32 +50,36 @@ def update_task(task_id: str, update: TaskUpdate):
     return task
 
 
-@router.post("/{task_name}/run")
-def run_task_now(task_name: str):
+@router.post("/{task_id}/run")
+def run_task_now(task_id: str):
     """Trigger a scheduled task to run immediately."""
     try:
-        count = scheduler.run_task_immediately(task_name)
-    except Exception as e:
+        count = scheduler.run_task_immediately(task_id)
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except TaskNotActiveError as e:
+        # The task is already running, or it is paused. Neither is a
+        # missing task, so 409 says more than 404 would.
+        raise HTTPException(status_code=409, detail=str(e))
     return {"queued": count}
 
 
-@router.post("/{task_name}/pause")
-def pause_task(task_name: str):
-    """Pause a task by name."""
+@router.post("/{task_id}/pause")
+def pause_task(task_id: str):
+    """Pause a task by id."""
     try:
-        scheduler.pause_task(task_name)
-    except Exception as e:
+        scheduler.pause_task(task_id)
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "paused"}
 
 
-@router.post("/{task_name}/resume")
-def resume_task(task_name: str, delay: int = 0):
+@router.post("/{task_id}/resume")
+def resume_task(task_id: str, delay: int = 0):
     """Resume a paused task, optionally with a delay."""
     try:
-        scheduler.resume_task(task_name, delay=delay)
-    except Exception as e:
+        scheduler.resume_task(task_id, delay=delay)
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "resumed"}
 
