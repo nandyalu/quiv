@@ -1,6 +1,6 @@
-# Roadmap to v1.0.0
+# Roadmap
 
-This page tracked the work between `v0.4` and `v1.0.0`. Every phase is complete, and `v1.0.0` is the result. The scope was reviewed and frozen on 2026-07-10; the items under [Out of scope](#out-of-scope-for-v100) were considered and deferred, and that section stands as the record of what quiv deliberately does not do.
+This page tracked the work between `v0.4` and `v1.0.0`. Every phase is complete, and `v1.0.0` is the result. The scope was reviewed and frozen on 2026-07-10; the items under [Out of scope](#out-of-scope-for-v100) were considered and deferred, and that section stands as the record of what quiv deliberately does not do. The work after the release continues under [After v1.0.0](#after-v100).
 
 The roadmap was organized into six phases. Each phase shipped independently as its own minor release, and later phases built on machinery from earlier ones. One release, `v0.10.0`, sat outside the phases: the phase numbers stay consecutive, so the version numbers do not.
 
@@ -78,11 +78,36 @@ This is not calendar scheduling. `run_at` names one instant for one run. Recurre
 
 **What it produced.** The three parameters that quiv injects into a handler lost their underscore: `job_id`, `stop_event`, and `progress_hook`. That was the one breaking change, and `add_task()` rejects the old names rather than letting cancellation fail in silence. `TaskNotScheduledError`, deprecated in `v0.9.0`, is gone. Coverage reached 100%, against the 95% target. The benchmark suite lives in [`benchmarks/`](https://github.com/nandyalu/quiv/tree/main/benchmarks), and the 24-hour soak passed: 294,400 jobs, no thread growth, a job history that stopped growing after the first hour, and memory flat at 53 MB. Its log is committed. Decisions from the API freeze, including the alternatives that were rejected, are recorded in [`plans/api-freeze-notes.md`](https://github.com/nandyalu/quiv/blob/main/plans/api-freeze-notes.md).
 
+## After v1.0.0
+
+`v1.0.0` froze the public API. Each phase after it is additive and ships as a minor release in the 1.x series. A change that breaks the 1.0 API waits for `2.0.0`.
+
+The three caveats in the README were reviewed on 2026-09-17: the temporary database, the single process, and the picklable arguments. Process jobs became Phase 7. The other two stay out of scope, and [Out of scope](#out-of-scope-for-v100) records why.
+
+## Phase 7 — Process jobs (`v1.1.0`)
+
+**Status: 📋 planned** — decisions settled 2026-09-17; the plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md).
+
+quiv keeps its thread pool and gains a pool of processes. A process job runs in a process that quiv spawns for that job alone, and quiv can terminate it. That is the one thing a thread can never offer.
+
+1. **Two pools, one switch per task** — `process_pool_size` joins the configuration, default 0. `add_task()` and `update_task()` gain `executor`, either `"thread"` or `"process"`. A thread pool of size 0 is allowed when the process pool has a size, and then process is the default.
+2. **One process per job** — started with the `spawn` method on every platform, never forked, never reused. The handler must be a function that a new process can import by name. A lambda, an inner function, or a bound method is rejected at `add_task()`.
+3. **One kill rule** — `process_kill_grace`, default 5 seconds. A stop signal that a process job ignores for that long becomes a terminate. The rule covers `timeout`, `cancel_job()`, `remove_task()`, and `shutdown()`. A thread job is never killed.
+4. **The same handler contract** — `job_id`, `stop_event`, `progress_hook`, and `run_on_main()` work in a process job. Progress payloads must be picklable. Everything else stays in the parent: job state, the database, events, retries, and the progress callback.
+5. **An inert scheduler in the child** — spawn imports the handler's module, and in a FastAPI app that module builds the scheduler. Inside a worker process `Quiv()` is inert, and its lifecycle methods raise `WorkerProcessError`.
+6. **CI on three platforms** — the test suite runs on Linux, macOS, and Windows from this phase on.
+
+**Exit criteria:** every test in the plan passes on all three platforms with coverage at the gate; a 10-minute soak with process jobs leaves no child process behind; the start cost of a process job is measured and published in the release notes; a "Process Jobs" page in the docs.
+
+`forkserver` would cut the start cost of each job on Linux and macOS. It is documented as a later option and not implemented in this phase.
+
 ## Out of scope for v1.0.0
 
 The following were reviewed and explicitly deferred:
 
 - **Cron / calendar scheduling** — interval-based scheduling remains the model; the `timezone` parameter stays display-only. `run_at` (v0.10.0) sets the absolute time of a *first* run and does not change this: there is still no calendar expression and no recurrence rule.
-- **Durable persistence** — each `Quiv` instance keeps its temporary SQLite database, deleted on `shutdown()`.
+- **Durable persistence** — each `Quiv` instance keeps its temporary SQLite database, deleted on `shutdown()`. Reviewed again on 2026-09-17, after the release, and still out. The need was to keep the next run time across a restart. An application can do that itself: store the last run time, compute the next one at startup, and pass it as `delay` or `run_at`. A durable store inside quiv would also have to bring the handler back, and the database never holds the handler.
+- **Lambdas and unpicklable arguments** — reviewed on 2026-09-17 and out. `args` and `kwargs` stay pickled, so a lambda, an inner function, or an open connection cannot be an argument. A value that a job must compute at run time belongs inside the handler: pass an id or a name, and resolve it there. Other schedulers stop at the same place. Celery and Dramatiq accept JSON only, and APScheduler with a persistent store needs a function it can import.
+- **Work on other machines** — Phase 7 spreads work over processes on one machine. quiv does not become a distributed queue; Celery and arq exist for that.
 - **Event-loop reuse for async handlers** — each async invocation keeps its own fresh event loop by design: closing the loop after every job guarantees that leaked `asyncio` tasks or loop state from one job can never bleed into the next. Isolation wins over the micro-optimization.
 - **Lazy logging** — eager f-string formatting in log calls stays as-is.
