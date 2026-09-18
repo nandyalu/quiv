@@ -7,10 +7,16 @@ on:
       - "docs/**"
       - "zensical.toml"
   workflow_dispatch:
-# Pages serves one build at a time. Without a shared group the docs.yml run
-# from the merge commit and the two release runs deploy at once, and whichever
-# artifact lands last wins at random. Both workflows use this one group, so
-# they queue in arrival order and the newest build is the one that survives.
+# Both docs workflows share this group so that two builds never deploy to
+# Pages at the same time. Simultaneous deploys are what served a stale
+# artifact after v1.0.0.
+#
+# This is NOT a FIFO queue. GitHub keeps one running and one pending run per
+# group, and a newly queued run cancels the pending one; cancel-in-progress
+# only protects the run that is already executing. Correctness therefore does
+# not rest on ordering. It rests on changelog-from-release reading the
+# Releases API at execution time, so any build that runs after a release is
+# published contains it, whichever workflow started it.
 concurrency:
   group: pages
   cancel-in-progress: false
