@@ -1,8 +1,19 @@
 name: Docs-Release Notes
 on:
   release:
-    types: [published, released, edited]
+    # `published` and `released` BOTH fire for an ordinary release, which
+    # started two identical runs racing each other to deploy. `published`
+    # alone covers every release this project makes, prereleases included.
+    types: [published, edited]
   workflow_dispatch:
+# Pages serves one build at a time. Without a shared group the docs.yml run
+# from the merge commit and the two release runs deploy at once, and whichever
+# artifact lands last wins at random. Both workflows use this one group, so
+# they queue in arrival order and the newest build is the one that survives.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 permissions:
   contents: read
   pages: write
