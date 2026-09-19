@@ -121,7 +121,7 @@ Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `TASK_UPDAT
 
 ## Management & observability
 
-- `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. Not updatable: `run_once`, `delay`, `func`.
+- `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=..., run_at=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. `run_at` names the next run's absolute time instead — naive is UTC, a past time runs at once, and it is mutually exclusive with `interval`. Use it to move a pending one-off rather than `remove_task` + `add_task`, which changes the `task_id` and leaves a gap with nothing scheduled. Not updatable: `run_once`, `delay`, `func`.
 - `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0)` — filters + pagination; `order_by` is `"started_at"` or `"ended_at"` only. `get_all_tasks(include_run_once=False, status=None, limit=None, offset=0)` orders by `next_run_at`.
 - `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`. Serialize with `dataclasses.asdict()`.
 

@@ -131,6 +131,7 @@ update_task(
     retry_backoff: float = ...,
     jitter: float = ...,
     progress_callback: Callable[..., Any] | None = ...,
+    run_at: datetime = ...,
 ) -> Task
 ```
 
@@ -140,10 +141,31 @@ Changes a scheduled task in place and keeps its `task_id`. Only the parameters t
 
 Three things cannot change: `run_once`, `delay`, and the handler `func`. `delay` belongs to the moment when you create the task. To change the handler, remove the task and add it again.
 
+#### Moving the next run with `run_at`
+
+`run_at` names the absolute time of the next run, the same way it does in `add_task()`. Naive input is read as UTC, never as the display timezone, and a time already past runs at once.
+
+This is how a one-off alarm changes its time:
+
+```python
+task_id = scheduler.add_task(
+    task_name="wakeup", func=wake, run_at=tonight, run_once=True
+)
+
+# Later: the alarm should ring earlier instead.
+scheduler.update_task(task_id, run_at=this_afternoon)
+```
+
+Without it, moving an alarm means `remove_task()` followed by `add_task()`. That hands back a new `task_id` for the caller to store, and it leaves a window with no task scheduled at all. `update_task()` keeps the id and writes one row.
+
+`run_at` and `interval` are mutually exclusive. Changing the interval already reschedules the next run, so passing both is ambiguous and raises `ConfigurationError`.
+
+A run-once task that has already started is deleted when it finishes, so a new time has nothing left to apply to.
+
 Raises:
 
 - `TaskNotFoundError` for unknown ids
-- `ConfigurationError` for invalid values (same rules as `add_task`)
+- `ConfigurationError` for invalid values (same rules as `add_task`), or for `run_at` together with `interval`
 
 ### `start() -> None` / `startup() -> None`
 

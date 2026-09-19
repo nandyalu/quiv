@@ -610,6 +610,137 @@ def test_run_at_task_executes(
         scheduler.shutdown()
 
 
+def test_update_task_run_at_moves_a_pending_one_off(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """The point of run_at on update_task: an alarm changes its time and
+    keeps its task_id, instead of being removed and added again."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        first = datetime.now(timezone.utc) + timedelta(hours=2)
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, run_at=first, run_once=True
+        )
+
+        moved = datetime.now(timezone.utc) + timedelta(minutes=10)
+        task = scheduler.update_task(task_id, run_at=moved)
+
+        assert task.id == task_id
+        assert task.next_run_at == moved
+        assert scheduler.get_task(task_id).next_run_at == moved
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_reads_a_naive_datetime_as_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Naive means UTC here too, never the display timezone."""
+    scheduler = Quiv(main_loop=running_main_loop, timezone="America/New_York")
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, interval=60
+        )
+        naive = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(
+            tzinfo=None
+        )
+
+        scheduler.update_task(task_id, run_at=naive)
+
+        assert scheduler.get_task(task_id).next_run_at == naive.replace(
+            tzinfo=timezone.utc
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_in_the_past_runs_at_once(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Same rule as add_task: a missed time runs late, never dropped."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm",
+            func=lambda: None,
+            run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            run_once=True,
+        )
+        before = datetime.now(timezone.utc)
+
+        scheduler.update_task(task_id, run_at=before - timedelta(days=1))
+
+        next_run = scheduler.get_task(task_id).next_run_at
+        assert next_run >= before
+        assert next_run <= datetime.now(timezone.utc)
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_and_interval_are_mutually_exclusive(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Changing the interval already reschedules the next run, and that
+    recompute would silently overwrite run_at. Refuse instead of picking."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="recurring", func=lambda: None, interval=60
+        )
+        when = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        with pytest.raises(ConfigurationError, match="mutually exclusive"):
+            scheduler.update_task(task_id, run_at=when, interval=30)
+
+        # Neither half was applied.
+        task = scheduler.get_task(task_id)
+        assert task.interval_seconds == 60
+        assert task.next_run_at != when
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_rejects_a_non_datetime(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A bad run_at reports ConfigurationError, not TypeError."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm", func=lambda: None, interval=60
+        )
+        with pytest.raises(ConfigurationError, match="run_at must be"):
+            scheduler.update_task(task_id, run_at="tomorrow")  # type: ignore[arg-type]
+    finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_wakes_the_loop_and_the_task_fires(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Moving a task earlier must not wait out the loop's current sleep."""
+    ran = threading.Event()
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="alarm",
+            func=ran.set,
+            run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            run_once=True,
+        )
+        scheduler.start()
+        assert not ran.wait(timeout=0.3)
+
+        scheduler.update_task(
+            task_id,
+            run_at=datetime.now(timezone.utc) + timedelta(milliseconds=200),
+        )
+
+        assert ran.wait(timeout=5)
+    finally:
+        scheduler.shutdown()
+
+
 def test_add_task_validates_args_type(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

@@ -342,14 +342,23 @@ class Quiv(QuivBase):
         retry_backoff: float | _Unset = _UNSET,
         jitter: float | _Unset = _UNSET,
         progress_callback: Callable[..., Any] | None | _Unset = _UNSET,
+        run_at: datetime | _Unset = _UNSET,
     ) -> Task:
         """Mutate a scheduled task in place, preserving its ``task_id``.
 
         Only the parameters you pass change; everything else is
         untouched. If ``interval`` is changed, the next run is
-        rescheduled to ``now + interval``. Updating a ``RUNNING`` task
-        is allowed — the changes take effect from the next run. Emits
+        rescheduled to ``now + interval``; pass ``run_at`` instead to
+        name that time yourself. Updating a ``RUNNING`` task is allowed
+        — the changes take effect from the next run. Emits
         ``Event.TASK_UPDATED`` with the post-update :class:`Task`.
+
+        ``run_at`` moves a task that has not run yet. That is how a
+        one-off alarm changes its time without being removed and added
+        again, which would hand back a new ``task_id`` and leave a
+        window with no task scheduled at all. A run-once task that has
+        already started is deleted when it finishes, so a new time has
+        nothing left to apply to.
 
         Not updatable: ``run_once``, ``delay`` (initial delay is a
         creation-time concept), and the handler ``func`` (remove and
@@ -370,19 +379,34 @@ class Quiv(QuivBase):
             jitter (float, Optional): New jitter bound.
             progress_callback (Callable | None, Optional): New progress
                 callback; ``None`` clears the existing one.
+            run_at (datetime, Optional): Absolute time of the next run.
+                Naive input is read as UTC, never as the display
+                timezone. A time already past runs at once, matching
+                ``add_task``. Mutually exclusive with ``interval``.
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
             ConfigurationError: If a provided value is invalid (same
-                rules as ``add_task``), or if a key in ``kwargs`` collides
+                rules as ``add_task``), if a key in ``kwargs`` collides
                 with a parameter that quiv injects into the registered
-                handler.
+                handler, or if ``run_at`` and ``interval`` are both
+                passed.
             HandlerRegistrationError: If ``progress_callback`` is not
                 callable.
 
         Returns:
             Task: The post-update task record.
         """
+
+        if not isinstance(run_at, _Unset) and not isinstance(interval, _Unset):
+            # persistence.update_task recomputes next_run_at from the new
+            # interval, so it would silently overwrite this run_at. Refuse
+            # rather than pick one, the same rule add_task applies to
+            # run_at and delay.
+            raise ConfigurationError(
+                "run_at and interval are mutually exclusive; changing the"
+                " interval already reschedules the next run"
+            )
 
         updates: dict[str, Any] = {}
         if not isinstance(task_name, _Unset):
@@ -391,6 +415,12 @@ class Quiv(QuivBase):
         if not isinstance(interval, _Unset):
             _validate_interval(interval)
             updates["interval_seconds"] = interval
+        if not isinstance(run_at, _Unset):
+            # A time already past runs at once rather than raising, the
+            # same reason as in add_task: the process may have been down
+            # when it came due, and dropping the run is worse than
+            # running it late.
+            updates["next_run_at"] = max(_to_utc(run_at), self._now_utc())
         if not isinstance(fixed_interval, _Unset):
             updates["fixed_interval"] = fixed_interval
         if not isinstance(args, _Unset):
