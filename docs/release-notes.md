@@ -1,3 +1,16 @@
+<a id="v1.0.1"></a>
+## [v1.0.1 - Cancellation fix for `run_on_main`](https://github.com/nandyalu/quiv/releases/tag/v1.0.1) - 2026-09-19
+
+A patch release. `run_on_main()` no longer logs an error when the main loop cancels a coroutine. Nothing in the API changed.
+
+### Fixes
+
+- **`run_on_main()` no longer logs a traceback for a cancelled coroutine.** A coroutine that you send from a worker thread rides a `concurrent.futures` future, because quiv passes it to the main loop with `asyncio.run_coroutine_threadsafe()`. When that future is cancelled, it raises `concurrent.futures.CancelledError`. That class has been separate from `asyncio.CancelledError` since Python 3.8, and quiv caught only the `asyncio` one. The done-callback of the future then raised, and the `concurrent.futures` module logged `exception calling callback` with a traceback. An application saw this at shutdown, once for every coroutine that the loop cancelled.
+
+    quiv now asks the future whether it was cancelled before it asks for the exception. Both kinds of future answer that question the same way. A cancelled coroutine writes nothing to the log. An exception raised by your own callable is still logged, as before.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.0.0...v1.0.1
+
 <a id="v1.0.0"></a>
 ## [v1.0.0 - Hardening & Release](https://github.com/nandyalu/quiv/releases/tag/v1.0.0) - 2026-09-17
 

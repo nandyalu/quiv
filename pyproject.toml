@@ -1,6 +1,6 @@
 [project]
 name = "quiv"
-version = "1.0.0"
+version = "1.0.1"
 description = "Quiv: threadpool-backed scheduler for Python applications"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
