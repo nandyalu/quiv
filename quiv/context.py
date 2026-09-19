@@ -144,11 +144,16 @@ def run_on_main(
     is_coro_fn = inspect.iscoroutinefunction(func)
 
     def _on_done(fut: Any) -> None:
-        try:
-            exc = fut.exception()
-        except asyncio.CancelledError:  # pragma: no cover
+        # Ask the future whether it was cancelled before asking for its
+        # exception. A future from run_coroutine_threadsafe raises
+        # concurrent.futures.CancelledError from exception(), a different
+        # class from asyncio.CancelledError since Python 3.8, and an
+        # uncaught error in a done-callback makes the futures module log a
+        # traceback for every coroutine cancelled at shutdown.
+        if fut.cancelled():
             return
-        if exc is None or isinstance(exc, asyncio.CancelledError):
+        exc = fut.exception()
+        if exc is None:
             return
         logger.error(
             f"run_on_main callable {func!r} failed: {exc}",

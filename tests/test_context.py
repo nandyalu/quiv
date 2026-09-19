@@ -292,6 +292,48 @@ def test_run_on_main_logs_and_swallows_target_exception(
         scheduler.shutdown()
 
 
+def test_run_on_main_cancelled_async_target_from_worker_is_not_an_error(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A coroutine sent from a worker thread rides a concurrent.futures
+    future. When that future is cancelled, ``exception()`` raises
+    ``concurrent.futures.CancelledError``, a different class from
+    ``asyncio.CancelledError`` since Python 3.8, so the done-callback used
+    to raise and the futures module logged a traceback for every coroutine
+    cancelled at shutdown. Seen in a FastAPI app on 2026-09-19."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    cancelled = threading.Event()
+
+    async def cancels_itself() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        try:
+            await asyncio.sleep(0)
+        finally:
+            cancelled.set()
+
+    def handler() -> None:
+        run_on_main(cancels_itself)
+
+    try:
+        scheduler.add_task(
+            task_name="cancelled-target",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        with caplog.at_level(logging.ERROR):
+            scheduler.start()
+            assert cancelled.wait(timeout=3)
+            time.sleep(0.2)  # the done-callback runs after the task settles
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert errors == []
+    finally:
+        scheduler.shutdown()
+
+
 def test_run_on_main_on_loop_async_target_exception_is_logged(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
