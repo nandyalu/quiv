@@ -388,7 +388,13 @@ class QuivBase(ABC):
             loop (asyncio.AbstractEventLoop | None): Main event loop.
         """
 
-        def _on_listener_done(fut: Future[Any]) -> None:  # pragma: no cover
+        def _on_listener_done(fut: Future[Any]) -> None:
+            # Ask whether the future was cancelled before asking for its
+            # exception, the same order run_on_main uses. exception() raises
+            # on a cancelled future, and an uncaught error in a done-callback
+            # makes the futures module log a traceback of its own.
+            if fut.cancelled():
+                return
             exc = fut.exception()
             if exc is not None:
                 self._logger.error(
@@ -483,7 +489,10 @@ class QuivBase(ABC):
 
         loop = self._resolve_main_loop()
 
-        def _on_progress_done(fut: Future[Any]) -> None:  # pragma: no cover
+        def _on_progress_done(fut: Future[Any]) -> None:
+            # Cancelled first, then the exception. See _on_listener_done.
+            if fut.cancelled():
+                return
             exc = fut.exception()
             if exc is not None:
                 self._logger.error(

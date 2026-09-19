@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from typing import Any
@@ -356,6 +357,68 @@ def test_listener_exception_is_swallowed(
             scheduler.add_task("error-listen", lambda: None, interval=60)
         assert good_received.wait(timeout=2)
         assert len(good_captured) == 1
+    finally:
+        scheduler.shutdown()
+
+
+def test_async_listener_exception_is_logged(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An async listener that raises is reported and swallowed.
+
+    The sync path had a test; the async one was exempt from coverage, so the
+    line that logs it had never run.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    raised = threading.Event()
+
+    async def bad_listener(event: Event, task: Task) -> None:
+        raised.set()
+        raise RuntimeError("async listener error")
+
+    try:
+        scheduler.add_listener(Event.TASK_ADDED, bad_listener)
+        with caplog.at_level(logging.ERROR, logger="Quiv"):
+            scheduler.add_task("async-error-listen", lambda: None, interval=60)
+            assert raised.wait(timeout=3)
+            time.sleep(0.2)  # the done-callback runs after the task settles
+        assert any("async listener error" in r.message for r in caplog.records)
+    finally:
+        scheduler.shutdown()
+
+
+def test_cancelled_async_listener_is_not_an_error(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cancelled listener is not a listener that failed.
+
+    An async listener rides a ``concurrent.futures`` future, whose
+    ``exception()`` raises ``CancelledError`` rather than returning it. The
+    done-callback used to call ``exception()`` first, so a cancelled
+    listener made the futures module log a traceback of its own. The same
+    fault was fixed in ``run_on_main`` in v1.0.1.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    cancelled = threading.Event()
+
+    async def cancels_itself(event: Event, task: Task) -> None:
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel()
+        try:
+            await asyncio.sleep(0)
+        finally:
+            cancelled.set()
+
+    try:
+        scheduler.add_listener(Event.TASK_ADDED, cancels_itself)
+        with caplog.at_level(logging.ERROR):
+            scheduler.add_task("cancelled-listen", lambda: None, interval=60)
+            assert cancelled.wait(timeout=3)
+            time.sleep(0.2)  # the done-callback runs after the task settles
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
     finally:
         scheduler.shutdown()
 

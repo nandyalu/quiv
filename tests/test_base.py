@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
@@ -225,6 +226,41 @@ def test_run_progress_callback_logs_when_async_callback_fails(
         scheduler._register_progress_callback("bad-async", bad_async_callback)
         scheduler.run_progress_callback("bad-async", 1)
         time.sleep(0.2)
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_progress_callback_cancelled_async_is_not_an_error(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cancelled progress callback is not a failure to report.
+
+    An async callback rides a ``concurrent.futures`` future, whose
+    ``exception()`` raises ``CancelledError`` rather than returning it. The
+    done-callback used to call ``exception()`` first, so a cancelled
+    callback made the futures module log a traceback of its own. The same
+    fault was fixed in ``run_on_main`` in v1.0.1.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    cancelled = threading.Event()
+
+    async def cancels_itself(_value: int) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        try:
+            await asyncio.sleep(0)
+        finally:
+            cancelled.set()
+
+    try:
+        scheduler._register_progress_callback("cancelled", cancels_itself)
+        with caplog.at_level(logging.ERROR):
+            scheduler.run_progress_callback("cancelled", 1)
+            assert cancelled.wait(timeout=3)
+            time.sleep(0.2)  # the done-callback runs after the task settles
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
     finally:
         scheduler.shutdown()
 
