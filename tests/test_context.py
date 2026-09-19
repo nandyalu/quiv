@@ -334,6 +334,54 @@ def test_run_on_main_cancelled_async_target_from_worker_is_not_an_error(
         scheduler.shutdown()
 
 
+def test_shutdown_does_not_block_on_main_loop_work(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """shutdown() must not wait for work handed over by run_on_main.
+
+    The handler returns the instant it hands the work over, so its job is
+    already complete and there is nothing running for shutdown() to wait
+    on. This is documented rather than fixed: shutdown() is synchronous and
+    the FastAPI lifespan calls it from the main loop's own thread, so
+    blocking there would wait on the very thread the work needs and would
+    deadlock. This test guards against someone adding that wait.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    finished = threading.Event()
+    stopped = False
+
+    async def slow_work() -> None:
+        started.set()
+        await asyncio.sleep(2.0)
+        finished.set()
+
+    def handler() -> None:
+        run_on_main(slow_work)
+
+    try:
+        scheduler.add_task(
+            task_name="hand-off",
+            func=handler,
+            interval=60,
+            run_once=True,
+        )
+        scheduler.start()
+        assert started.wait(timeout=3)
+
+        before = time.monotonic()
+        scheduler.shutdown()
+        stopped = True
+        elapsed = time.monotonic() - before
+
+        assert elapsed < 1.0, "shutdown() waited for main-loop work"
+        assert not finished.is_set(), "the work was still pending"
+    finally:
+        # shutdown() deletes the temp database, so calling it twice fails.
+        if not stopped:
+            scheduler.shutdown()
+
+
 def test_run_on_main_on_loop_async_target_exception_is_logged(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,

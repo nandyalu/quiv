@@ -194,6 +194,9 @@ Always call it when your application stops.
 
 With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application.
 
+!!! warning "`shutdown()` does not wait for `run_on_main` work"
+    It waits for the scheduler loop and for running jobs. Work that a handler handed to the main loop with [`run_on_main`](run-on-main.md) is not a running job: the handler returned the moment it handed the work over. So `shutdown()` can return while that work is still queued, and in a FastAPI application the loop closes soon afterwards and cancels it. quiv cannot wait for it, because `shutdown()` is called from the lifespan, on the main loop's own thread, and blocking there would deadlock. [Draining it yourself](run-on-main.md#shutdown-does-not-wait-for-this-work) is the remedy.
+
 A job left behind still holds its database connection. When it finishes, its write reaches the database that quiv already deleted. Two things follow: the job can write errors to the log, and SQLite recreates the temporary database file, because a write creates the file again. The file is small and nothing reads it. Delete it yourself if a stray file in the temp directory matters to you.
 
 !!! success "`stop()` is an alias for `shutdown()`"

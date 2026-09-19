@@ -105,6 +105,13 @@ def run_on_main(
     instance and continues. The exception never reaches the caller.
     ``progress_hook`` and the event listeners behave the same way.
 
+    **This is fire-and-forget, and ``Quiv.shutdown`` does not wait for
+    it.** The calling job finishes as soon as the work is handed over, so
+    quiv counts that job as complete while the work has not started. Work
+    that must not be lost at shutdown needs an owner on the main loop that
+    the application can await itself; ``shutdown`` cannot await it, because
+    it is called from the loop's own thread.
+
     The active Quiv instance reaches nested sync calls, the event loops
     that quiv creates on worker threads for async handlers, and a task
     started with ``asyncio.create_task`` inside an async handler. It does

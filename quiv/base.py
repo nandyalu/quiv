@@ -604,6 +604,20 @@ class QuivBase(ABC):
     def shutdown(self, timeout: float | None = None) -> None:
         """Stop scheduler loop, cancel jobs, and release resources.
 
+        **Does not wait for work handed to the main loop by**
+        ``run_on_main``. That work is not a running job: the handler
+        returned the moment it handed the work over, so the job was already
+        complete. ``shutdown`` can therefore return while the work is still
+        queued on the loop, and in a FastAPI application the loop closes
+        soon afterwards and cancels it.
+
+        Waiting for it here is not an option. ``shutdown`` is synchronous
+        and the documented pattern calls it from the lifespan, which runs
+        on the main loop's own thread, so blocking would wait on work that
+        needs that very thread to progress. An application that must not
+        lose the work keeps an owner for it on the main loop and awaits
+        that after calling this. See the run_on_main guide.
+
         Args:
             timeout (float, Optional=None): Maximum seconds to wait for the
                 scheduler thread and in-flight jobs to drain. ``None`` waits

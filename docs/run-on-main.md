@@ -139,6 +139,55 @@ def run_on_main(
 - `run_on_main` returns `None`. It returns at once on every path that crosses threads, and for an async target that it puts on the current loop. One case blocks: a **sync** target called from the thread of the main loop runs inline, on the stack of the caller, and the caller waits for it to finish.
 - `run_on_main` raises `MainLoopUnavailableError` when no active Quiv instance is registered, and when the active Quiv has no main loop that it can resolve. Both are configuration faults, such as a call to `run_on_main` before `Quiv.start()`. The exception inherits `QuivError` and `RuntimeError`.
 
+## `shutdown()` does not wait for this work
+
+`run_on_main` returns as soon as it hands the work over. The job that called it then finishes, and quiv counts that job as complete, although the work itself has not started.
+
+`shutdown()` waits for the scheduler loop and for running jobs. It does not wait for work already handed to the main loop.
+
+!!! warning "A clean shutdown can still cut this work in half"
+    A handler that hands over a one-second coroutine and returns makes its job finish in milliseconds. `shutdown()` then finds nothing running and returns at once, measured at about 12 ms, while the coroutine is still waiting its turn on the loop.
+
+In a FastAPI application this matters more than the numbers suggest. The loop closes soon after the lifespan returns, so work still queued on it is **cancelled**, not merely late.
+
+### Why quiv does not simply wait for it
+
+`shutdown()` is a synchronous function, and the documented pattern calls it from the lifespan:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start()
+    yield
+    scheduler.shutdown()      # this runs ON the main loop
+```
+
+The lifespan is a coroutine, so `shutdown()` runs on the thread of the main loop. If it blocked there waiting for main-loop work, it would be waiting for work that needs that very thread to make progress. Nothing would move until the timeout expired. A blocking wait inside `shutdown()` is a deadlock, not a fix.
+
+### What to do when the work must finish
+
+You are on the main loop in the lifespan, so you can await what quiv cannot. Let the main-loop side own the work, and drain it yourself:
+
+```python
+outbox: asyncio.Queue[dict] = asyncio.Queue()
+
+async def enqueue(payload: dict) -> None:
+    await outbox.put(payload)
+
+def handler() -> None:                      # runs on a quiv worker
+    run_on_main(enqueue, {"event": "done"})  # returns at once
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start()
+    yield
+    scheduler.shutdown()                     # no job is running any more
+    while not outbox.empty():                # now finish what they handed over
+        await deliver(outbox.get_nowait())
+```
+
+The rule of thumb: `run_on_main` is for fire-and-forget work such as a broadcast or a progress update. Work that must not be lost needs an owner on the main loop that you can await.
+
 ## A note about blocking the main loop
 
 A **sync** target called from the thread of the main loop runs inline, on the current call stack, exactly as a direct call would. If that target does blocking I/O or heavy work on the CPU, it blocks the loop. `run_on_main` does not add this behavior. It is how a coroutine calls sync code in Python. Pass an async target instead, or move the blocking work to a thread pool yourself.
