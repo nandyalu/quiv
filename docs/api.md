@@ -225,7 +225,14 @@ It works in two steps:
 1. `shutdown()` runs on a worker thread, leaving the loop free. A job still finishing can hand over more work, and that work still progresses.
 2. Once no job is running, no new work can arrive, so what was already handed over is drained.
 
-`timeout` bounds each step separately, so the total wait can reach twice the value. Work unfinished at the deadline is left behind with a warning, so one stuck callable cannot hold up your exit.
+`timeout` bounds each step separately, so the total wait can reach twice the value. Work unfinished at the deadline is left behind with a warning, so one stuck callable cannot hold up your exit. With no `timeout` it waits for both steps however long they take, matching `shutdown()`.
+
+Safe to call from a loop other than the one you gave `Quiv()`. The tracked work belongs to the main loop, so the drain is marshalled there and only its result is awaited where you called it.
+
+!!! warning "A `timeout` leaves one case uncovered"
+    `shutdown(timeout=...)` abandons a job that did not exit in time, and an abandoned job keeps running on its daemon thread. It can hand work over **after** the drain has finished, and that late handoff is not waited for. Nothing can close this, because the thread cannot be stopped. `ashutdown()` warns when it ends with jobs still running.
+
+    Without a `timeout` the case does not arise: every job has exited before the drain begins.
 
 ### `run_task_immediately(task_id: str) -> int`
 

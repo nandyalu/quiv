@@ -179,6 +179,20 @@ It works in two steps, in this order:
 
 `ashutdown(timeout=5.0)` bounds each step separately, so the total can reach twice the value. Work still unfinished at the deadline is left behind, with a warning, so one stuck callable cannot hold up your exit.
 
+With no `timeout` it waits for both steps however long they take, matching `shutdown()`.
+
+### The one case it cannot cover
+
+With a `timeout`, `shutdown()` abandons a job that did not exit in time, and an abandoned job keeps running on its daemon thread. It can hand work over **after** the drain has already finished, and that late handoff is not waited for.
+
+Nothing can close this. The thread cannot be stopped, so there is no point at which no further work can arrive. `ashutdown()` warns when it ends with jobs still running, so you know the queue was not closed.
+
+Without a `timeout` the case does not arise: every job has exited before the drain begins.
+
+### Calling it from another loop
+
+`ashutdown()` is safe to call from a loop other than the one quiv was given. The tracked work belongs to the main loop, so the drain is marshalled there and only its result is awaited where you called it. Awaiting a task across loops raises `ValueError: The future belongs to a different loop`, which is what this avoids.
+
 ### What is tracked
 
 All four dispatch shapes, including a **sync** callable sent with `call_soon_threadsafe`, which has no future to await. quiv holds a marker for one of those from the moment it is queued until it has run. Without it, a drain could see an empty set while the callback was still sitting in the loop's ready queue, and return too early.

@@ -719,6 +719,14 @@ class QuivBase(ABC):
         with self._main_loop_work_lock:
             self._main_loop_work.discard(item)
 
+    def _warn_undrained(self, reason: str) -> None:
+        """Report work that can no longer be waited for, if there is any."""
+
+        with self._main_loop_work_lock:
+            left = len(self._main_loop_work)
+        if left:
+            self._logger.warning(f"{reason} {left} callable(s) left.")
+
     async def _drain_main_loop_work(
         self, timeout: float | None = None
     ) -> None:
@@ -785,9 +793,23 @@ class QuivBase(ABC):
 
         Two steps, in this order. First :meth:`shutdown` runs on a worker
         thread, which keeps this loop free: a job that is still finishing
-        can hand over more work, and that work still progresses. Once it
-        returns, no job is running and no new work can arrive. Then the
-        queue of work already handed over is drained.
+        can hand over more work, and that work still progresses. Then the
+        queue of work already handed over is drained, including anything
+        that arrives while the drain is running.
+
+        **One case is not covered, and cannot be.** With a ``timeout``,
+        :meth:`shutdown` abandons jobs that did not exit in time, and an
+        abandoned job keeps running on its daemon thread. It can call
+        ``run_on_main`` after the drain has already seen an empty set, and
+        that late handoff is not waited for. Nothing can close this: the
+        thread cannot be stopped, so there is no point at which no further
+        work can arrive. This method warns when it ends with jobs still
+        running. Without a ``timeout`` the case does not arise, because
+        every job has exited before the drain begins.
+
+        Safe to call from a loop other than the configured main loop. The
+        tracked work belongs to the main loop, so the drain is marshalled
+        there and awaited from here.
 
         Args:
             timeout (float, Optional=None): Bounds each step separately, so
@@ -797,6 +819,9 @@ class QuivBase(ABC):
         """
 
         loop = asyncio.get_running_loop()
+        # Resolved before shutting down, while the loop is certainly still
+        # reachable.
+        main_loop = self._resolve_main_loop()
         self._will_drain_main_loop_work = True
         try:
             await loop.run_in_executor(
@@ -804,7 +829,45 @@ class QuivBase(ABC):
             )
         finally:
             self._will_drain_main_loop_work = False
-        await self._drain_main_loop_work(timeout)
+
+        if main_loop is None:
+            # The loop was already gone before this call. Nothing tracked
+            # can make progress without it, so waiting would hang with
+            # timeout=None. Say what is left instead.
+            self._warn_undrained(
+                "The main loop is no longer running, so work handed to it"
+                " by run_on_main could not be drained."
+            )
+        elif main_loop is loop:
+            await self._drain_main_loop_work(timeout)
+        else:
+            # The tracked tasks belong to main_loop. Awaiting them from
+            # this loop would raise a cross-loop ValueError, so the drain
+            # runs over there and only its result is awaited here.
+            drain_coro = self._drain_main_loop_work(timeout)
+            try:
+                drain = asyncio.run_coroutine_threadsafe(
+                    drain_coro, main_loop
+                )
+            except RuntimeError:
+                # The main loop closed while we were shutting down. Close
+                # the coroutine so it does not warn about never being
+                # awaited, and say what was left rather than failing here.
+                drain_coro.close()
+                self._warn_undrained(
+                    "The main loop stopped while quiv was shutting down, so"
+                    " work handed to it by run_on_main could not be drained."
+                )
+            else:
+                await asyncio.wrap_future(drain)
+
+        with self._job_count_lock:
+            still_running = self._active_job_count
+        if still_running:
+            self._logger.warning(
+                f"{still_running} abandoned job(s) are still running. Work"
+                " they hand to the main loop from here is not waited for."
+            )
 
     def stop(self, timeout: float | None = None) -> None:  # pragma: no cover
         """Stop scheduler loop, cancel jobs, and release resources.

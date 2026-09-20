@@ -227,4 +227,13 @@ def run_on_main(
         finally:
             quiv._untrack_main_loop_work(marker)
 
-    main_loop.call_soon_threadsafe(_call_sync)
+    try:
+        main_loop.call_soon_threadsafe(_call_sync)
+    except BaseException:
+        # The loop can close between _resolve_main_loop() above and this
+        # call. Without this the marker would stay in the set for good:
+        # a later ashutdown() would wait out its whole timeout, and
+        # shutdown() would report work that was never queued. The
+        # exception still reaches the caller, as it always did.
+        quiv._untrack_main_loop_work(marker)
+        raise
