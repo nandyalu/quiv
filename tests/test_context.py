@@ -359,10 +359,10 @@ def test_shutdown_does_not_block_on_main_loop_work(
 
     The handler returns the instant it hands the work over, so its job is
     already complete and there is nothing running for shutdown() to wait
-    on. It cannot wait either: it is synchronous and the FastAPI lifespan
-    calls it from the main loop's own thread, so blocking there would wait
-    on the very thread the work needs. ``ashutdown`` is the way to wait;
-    this test guards against a blocking wait being added here.
+    on. quiv does not wait for it and does not cancel it, because the loop
+    is the application's. It reports what it left, and the count stays
+    readable through pending_main_loop_work(). This test guards against a
+    wait being added here.
     """
     scheduler = Quiv(main_loop=running_main_loop)
     started = threading.Event()
@@ -400,7 +400,8 @@ def test_shutdown_does_not_block_on_main_loop_work(
         assert elapsed < 1.0, "shutdown() waited for main-loop work"
         assert not finished.is_set(), "the work was still pending"
         # Silence is the real hazard here, so it says what it left behind.
-        assert any("still pending" in r.message for r in caplog.records)
+        assert any("cannot stop them" in r.message for r in caplog.records)
+        assert scheduler.pending_main_loop_work() == 1
     finally:
         # shutdown() deletes the temp database, so calling it twice fails.
         if not stopped:
@@ -408,198 +409,14 @@ def test_shutdown_does_not_block_on_main_loop_work(
         _cancel_and_settle(running_main_loop, holder.get("task"))
 
 
-def test_ashutdown_waits_for_main_loop_work(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """The point of ashutdown(): awaiting yields the thread, so the work
-    being waited on can actually run."""
-    finished = threading.Event()
-    started = threading.Event()
-
-    async def scenario() -> None:
-        scheduler = Quiv(main_loop=asyncio.get_running_loop())
-
-        async def slow_work() -> None:
-            started.set()
-            await asyncio.sleep(0.4)
-            finished.set()
-
-        def handler() -> None:
-            run_on_main(slow_work)
-
-        scheduler.add_task(
-            task_name="hand-off", func=handler, interval=60, run_once=True
-        )
-        scheduler.start()
-        while not started.is_set():
-            await asyncio.sleep(0.01)
-        await scheduler.ashutdown()
-
-    asyncio.run_coroutine_threadsafe(scenario(), running_main_loop).result(
-        timeout=10
-    )
-    assert finished.is_set(), "ashutdown() returned before the work finished"
-
-
-def test_ashutdown_waits_for_a_queued_sync_callable(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """A sync callable sent with call_soon_threadsafe has no future to
-    await. Without a marker standing in for it, a drain would see an empty
-    set while the callback was still in the loop's ready queue."""
-    ran = threading.Event()
-
-    async def scenario() -> None:
-        scheduler = Quiv(main_loop=asyncio.get_running_loop())
-
-        def on_loop() -> None:
-            time.sleep(0.2)
-            ran.set()
-
-        def handler() -> None:
-            run_on_main(on_loop)
-
-        scheduler.add_task(
-            task_name="queued", func=handler, interval=60, run_once=True
-        )
-        scheduler.start()
-        await asyncio.sleep(0.3)  # let the job dispatch and hand over
-        await scheduler.ashutdown()
-
-    asyncio.run_coroutine_threadsafe(scenario(), running_main_loop).result(
-        timeout=10
-    )
-    assert ran.is_set(), "ashutdown() returned before the callable ran"
-
-
-def test_drain_yields_for_a_marker_that_cannot_be_awaited(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """A queued sync callable is represented by a plain marker, which has
-    no future. The drain waits those out by yielding to the loop instead of
-    awaiting, so it must not return while one is still present."""
-
-    async def scenario() -> None:
-        scheduler = Quiv(main_loop=asyncio.get_running_loop())
-        marker = object()
-        scheduler._track_main_loop_work(marker)
-
-        async def release_later() -> None:
-            await asyncio.sleep(0.05)
-            scheduler._untrack_main_loop_work(marker)
-
-        asyncio.ensure_future(release_later())
-        try:
-            await scheduler._drain_main_loop_work(timeout=2.0)
-            assert not scheduler._main_loop_work
-        finally:
-            scheduler.shutdown()
-
-    asyncio.run_coroutine_threadsafe(scenario(), running_main_loop).result(
-        timeout=10
-    )
-
-
-def test_ashutdown_from_another_loop_marshals_the_drain(
-    running_main_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """A drain must run on the loop that owns the work it waits on.
-
-    ``run_on_main`` called from main-loop code, such as a FastAPI route,
-    creates an ``asyncio.Task`` on that loop. ``asyncio.wait`` on a task
-    from a different loop raises ``ValueError: The future belongs to a
-    different loop``, so the drain is marshalled to the owning loop rather
-    than awaited from wherever ``ashutdown`` was called.
-
-    A handoff from a worker thread is not affected: that one produces a
-    ``concurrent.futures.Future``, which ``asyncio.wrap_future`` adopts on
-    any loop. Only a task hits this.
-    """
-    scheduler = Quiv(main_loop=running_main_loop)
-    started = threading.Event()
-    finished = threading.Event()
-
-    async def slow_work() -> None:
-        started.set()
-        # Long enough to still be pending once shutdown() has returned,
-        # which is what puts a foreign-loop task in front of the drain.
-        await asyncio.sleep(1.5)
-        finished.set()
-
-    async def prime() -> None:
-        # On the main loop, so this creates a Task rather than a Future.
-        run_on_main(slow_work)
-
-    scheduler.start()
-    asyncio.run_coroutine_threadsafe(prime(), running_main_loop).result(
-        timeout=3
-    )
-    assert started.wait(timeout=3)
-
-    # A second, unrelated loop on this thread — not the one Quiv was given.
-    asyncio.run(scheduler.ashutdown())
-
-    assert finished.is_set(), "the drain did not wait from the other loop"
-
-
-def test_ashutdown_says_so_when_the_main_loop_is_already_gone(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """If the main loop closed while quiv was shutting down, the drain
-    cannot run. Say what was left instead of raising out of shutdown."""
-    dead_loop = asyncio.new_event_loop()
-    dead_loop.close()
-
-    scheduler = Quiv(main_loop=dead_loop)
-    try:
-        scheduler._track_main_loop_work(object())
-        with caplog.at_level(logging.WARNING, logger="Quiv"):
-            asyncio.run(scheduler.ashutdown())
-        assert any(
-            "no longer running" in r.message for r in caplog.records
-        )
-    finally:
-        with contextlib.suppress(Exception):
-            scheduler.shutdown()
-
-
-def test_ashutdown_says_so_when_the_loop_stops_mid_shutdown(
-    running_main_loop: asyncio.AbstractEventLoop,
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The loop can still be alive when ashutdown() resolves it and gone by
-    the time the drain is marshalled. Report it rather than raising out of
-    shutdown."""
-    scheduler = Quiv(main_loop=running_main_loop)
-    try:
-        scheduler._track_main_loop_work(object())
-
-        def gone(*args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("Event loop is closed")
-
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", gone)
-        with caplog.at_level(logging.WARNING, logger="Quiv"):
-            asyncio.run(scheduler.ashutdown())
-
-        assert any(
-            "stopped while quiv was shutting down" in r.message
-            for r in caplog.records
-        )
-    finally:
-        monkeypatch.undo()
-        with contextlib.suppress(Exception):
-            scheduler.shutdown()
-
-
 def test_marker_is_removed_when_the_loop_enqueue_fails(
     running_main_loop: asyncio.AbstractEventLoop,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The marker is tracked before the enqueue, so a failing enqueue would
-    otherwise leave it in the set for good: a later ashutdown() would wait
-    out its whole timeout, and shutdown() would report work that was never
-    queued."""
+    otherwise leave it in the set for good and the count would never return
+    to zero: pending_main_loop_work() would report work that was never
+    queued, and shutdown() would warn about it forever."""
     scheduler = Quiv(main_loop=running_main_loop)
     try:
         scheduler.start()
@@ -611,85 +428,47 @@ def test_marker_is_removed_when_the_loop_enqueue_fails(
         with pytest.raises(RuntimeError, match="Event loop is closed"):
             run_on_main(lambda: None)
 
-        assert not scheduler._main_loop_work, "the marker was left behind"
+        assert scheduler.pending_main_loop_work() == 0
     finally:
         monkeypatch.undo()
         scheduler.shutdown()
 
 
-def test_ashutdown_warns_when_it_leaves_abandoned_jobs_running(
+def test_pending_main_loop_work_counts_and_clears(
     running_main_loop: asyncio.AbstractEventLoop,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """With a timeout, a job that ignores its stop event is abandoned and
-    keeps running. It can hand work over after the drain has finished, and
-    nothing can prevent that, so ashutdown() says so rather than implying
-    the queue is closed."""
-    records: list[str] = []
+    """The number an application polls to decide when its loop may close."""
+    scheduler = Quiv(main_loop=running_main_loop)
     release = threading.Event()
+    started = threading.Event()
 
-    async def scenario() -> None:
-        scheduler = Quiv(main_loop=asyncio.get_running_loop())
+    async def work() -> None:
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.01)
 
-        def ignores_cancellation() -> None:
-            release.wait(timeout=5)
-
-        scheduler.add_task(
-            task_name="stubborn",
-            func=ignores_cancellation,
-            interval=60,
-            run_once=True,
-            delay=0,
-        )
-        scheduler.start()
-        await asyncio.sleep(0.3)
-        with caplog.at_level(logging.WARNING, logger="Quiv"):
-            await scheduler.ashutdown(timeout=0.3)
-        records.extend(r.message for r in caplog.records)
+    def handler() -> None:
+        run_on_main(work)
 
     try:
-        asyncio.run_coroutine_threadsafe(
-            scenario(), running_main_loop
-        ).result(timeout=15)
-        assert any("abandoned job" in m for m in records)
-    finally:
-        release.set()
-
-
-def test_ashutdown_drain_timeout_gives_up_with_a_warning(
-    running_main_loop: asyncio.AbstractEventLoop,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A drain is bounded, so one stuck callable cannot hold up exit."""
-    holder: dict[str, asyncio.Task[Any]] = {}
-    records: list[str] = []
-
-    async def scenario() -> None:
-        scheduler = Quiv(main_loop=asyncio.get_running_loop())
-
-        async def never_finishes() -> None:
-            current = asyncio.current_task()
-            assert current is not None
-            holder["task"] = current
-            await asyncio.sleep(30)
-
-        def handler() -> None:
-            run_on_main(never_finishes)
+        assert scheduler.pending_main_loop_work() == 0
 
         scheduler.add_task(
-            task_name="stuck", func=handler, interval=60, run_once=True
+            task_name="hand-off", func=handler, interval=60, run_once=True
         )
         scheduler.start()
-        await asyncio.sleep(0.3)
-        with caplog.at_level(logging.WARNING, logger="Quiv"):
-            await scheduler.ashutdown(timeout=0.3)
-        records.extend(r.message for r in caplog.records)
+        assert started.wait(timeout=3)
+        assert scheduler.pending_main_loop_work() == 1
 
-    asyncio.run_coroutine_threadsafe(scenario(), running_main_loop).result(
-        timeout=10
-    )
-    assert any("drain timeout" in m for m in records)
-    _cancel_and_settle(running_main_loop, holder.get("task"))
+        release.set()
+        deadline = time.monotonic() + 3
+        while scheduler.pending_main_loop_work() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert scheduler.pending_main_loop_work() == 0
+    finally:
+        release.set()
+        scheduler.shutdown()
 
 
 def test_run_on_main_on_loop_async_target_exception_is_logged(

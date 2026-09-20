@@ -197,42 +197,34 @@ With `timeout=None`, the default, `shutdown()` waits for every running job to fi
 !!! warning "`shutdown()` does not wait for `run_on_main` work"
     It waits for the scheduler loop and for running jobs. Work that a handler handed to the main loop with [`run_on_main`](run-on-main.md) is not a running job: the handler returned the moment it handed the work over. So `shutdown()` can return while that work is still queued, and in a FastAPI application the loop closes soon afterwards and cancels it. It writes a warning naming how many callables it left behind.
 
-    Await [`ashutdown()`](#ashutdowntimeout-float-none-none-none) instead, from any shutdown path that is a coroutine.
+    It does not cancel that work either. The loop is your application's, and closing it is your decision. Poll [`pending_main_loop_work()`](#pending_main_loop_work-int) to make it.
 
 A job left behind still holds its database connection. When it finishes, its write reaches the database that quiv already deleted. Two things follow: the job can write errors to the log, and SQLite recreates the temporary database file, because a write creates the file again. The file is small and nothing reads it. Delete it yourself if a stray file in the temp directory matters to you.
 
 !!! success "`stop()` is an alias for `shutdown()`"
     `shutdown()` is the canonical name, and this documentation uses it everywhere. `stop()` calls the same code and keeps working.
 
-### `ashutdown(timeout: float | None = None) -> None`
+### `pending_main_loop_work() -> int`
 
-The async counterpart of `shutdown()`. It does everything `shutdown()` does, and it also waits for work that [`run_on_main`](run-on-main.md) handed to the main loop.
+How many callables handed to the main loop by [`run_on_main`](run-on-main.md) have not finished.
 
-Use it wherever your shutdown path is a coroutine, which in FastAPI it always is:
+`run_on_main` is fire-and-forget. The job that called it finishes as soon as the work is handed over, so `shutdown()` finds nothing running and returns while the work may still be queued.
+
+quiv does not wait for that work and does not cancel it. The loop is your application's: quiv never closes it, and it cannot know whether a half-finished callable should be stopped or allowed to end. This is the number your application needs in order to decide:
 
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.start()
     yield
-    await scheduler.ashutdown()
+    scheduler.shutdown()
+    while scheduler.pending_main_loop_work():
+        await asyncio.sleep(0.05)
 ```
 
-`shutdown()` cannot do this itself. It is synchronous, and the lifespan calls it from the main loop's own thread, so blocking there would wait on the very thread that work needs in order to run. `ashutdown()` is awaited, and awaiting yields the thread, so the work can finish.
+Cheap enough to poll. It reads one set under a lock and never touches the database, unlike [`stats()`](#stats-quivstats).
 
-It works in two steps:
-
-1. `shutdown()` runs on a worker thread, leaving the loop free. A job still finishing can hand over more work, and that work still progresses.
-2. Once no job is running, no new work can arrive, so what was already handed over is drained.
-
-`timeout` bounds each step separately, so the total wait can reach twice the value. Work unfinished at the deadline is left behind with a warning, so one stuck callable cannot hold up your exit. With no `timeout` it waits for both steps however long they take, matching `shutdown()`.
-
-Safe to call from a loop other than the one you gave `Quiv()`. The tracked work belongs to the main loop, so the drain is marshalled there and only its result is awaited where you called it.
-
-!!! warning "A `timeout` leaves one case uncovered"
-    `shutdown(timeout=...)` abandons a job that did not exit in time, and an abandoned job keeps running on its daemon thread. It can hand work over **after** the drain has finished, and that late handoff is not waited for. Nothing can close this, because the thread cannot be stopped. `ashutdown()` warns when it ends with jobs still running.
-
-    Without a `timeout` the case does not arise: every job has exited before the drain begins.
+It counts every shape `run_on_main` dispatches, including a sync callable that is queued but has not started and so has no future of its own.
 
 ### `run_task_immediately(task_id: str) -> int`
 

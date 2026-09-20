@@ -32,8 +32,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_task(task_name="reindex", func=reindex, interval=300)
     scheduler.start()
     yield
-    await scheduler.ashutdown()   # ALWAYS — cancels jobs, deletes temp DB,
-                                  # and waits for run_on_main work
+    scheduler.shutdown()   # ALWAYS — cancels jobs, deletes temp DB
 
 app = FastAPI(lifespan=lifespan)
 ```
@@ -72,6 +71,6 @@ Async handlers pass the same way; each invocation gets a fresh event loop on a w
 2. Passing both `config=QuivConfig(...)` and individual kwargs to `Quiv()` — raises `ConfigurationError`; pick one.
 3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning.
 4. Blocking on main-loop resources inside a handler instead of using `progress_hook` / `run_on_main`.
-5. Expecting `shutdown()` to wait for `run_on_main` work — it does not, and it warns when it leaves some behind. The handler returns as soon as it hands the work over, so the job is already complete and `shutdown()` finds nothing running; in FastAPI the loop then closes and cancels the work. Use `await scheduler.ashutdown()` in an async shutdown path instead (a lifespan always is one). The sync version cannot wait: it runs on the loop's own thread, so blocking stalls the thread the work needs.
+5. Expecting quiv to wait for `run_on_main` work — it never does, and never cancels it either; it warns when `shutdown()` leaves some behind. The handler returns as soon as it hands the work over, so the job is already complete and `shutdown()` finds nothing running. **The loop is yours**, so closing it is your call: poll `scheduler.pending_main_loop_work()` in the lifespan (cheap, no DB) and bound the wait however you like before the loop closes.
 6. `timezone=` only affects log formatting — scheduling and persistence are always UTC.
 7. Calling `run_task_immediately()` on a `running` or `paused` task raises `TaskNotActiveError` — resume paused tasks with `resume_task()` instead.

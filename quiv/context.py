@@ -105,12 +105,13 @@ def run_on_main(
     instance and continues. The exception never reaches the caller.
     ``progress_hook`` and the event listeners behave the same way.
 
-    **This is fire-and-forget, and ``Quiv.shutdown`` does not wait for
-    it.** The calling job finishes as soon as the work is handed over, so
-    quiv counts that job as complete while the work has not started.
-    ``await Quiv.ashutdown()`` does wait for it: awaiting yields the main
-    loop's thread, so the work can run, where a synchronous wait would
-    block the very thread it needs.
+    **This is fire-and-forget, and quiv never waits for it.** The calling
+    job finishes as soon as the work is handed over, so quiv counts that
+    job as complete while the work has not started. ``Quiv.shutdown`` does
+    not wait for it either, and does not cancel it: the loop belongs to the
+    application, not to quiv. ``Quiv.pending_main_loop_work()`` reports how
+    many callables are still outstanding, so the application can decide
+    when its own loop may close.
 
     The active Quiv instance reaches nested sync calls, the event loops
     that quiv creates on worker threads for async handlers, and a task
@@ -151,8 +152,8 @@ def run_on_main(
     is_coro_fn = inspect.iscoroutinefunction(func)
 
     def _on_done(fut: Any) -> None:
-        # Always stop tracking first, whatever the outcome, so ashutdown()
-        # can never wait on work that has already settled.
+        # Stop tracking first, whatever the outcome, so the pending count
+        # never includes work that has already settled.
         quiv._untrack_main_loop_work(fut)
         # Ask the future whether it was cancelled before asking for its
         # exception. A future from run_coroutine_threadsafe raises
@@ -206,7 +207,7 @@ def run_on_main(
         return
 
     # A queued sync callable has no future to await, so a marker stands in
-    # for it until it runs. Without one, ashutdown() would see an empty set
+    # for it until it runs. Without one, the count would read zero
     # while the callback was still sitting in the loop's ready queue.
     marker = object()
     quiv._track_main_loop_work(marker)
@@ -232,7 +233,7 @@ def run_on_main(
     except BaseException:
         # The loop can close between _resolve_main_loop() above and this
         # call. Without this the marker would stay in the set for good:
-        # a later ashutdown() would wait out its whole timeout, and
+        # the count would never return to zero, and
         # shutdown() would report work that was never queued. The
         # exception still reaches the caller, as it always did.
         quiv._untrack_main_loop_work(marker)

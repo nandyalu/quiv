@@ -174,12 +174,10 @@ class QuivBase(ABC):
         # Work that run_on_main handed to the main loop and that has not
         # finished yet. Holds an asyncio.Task, a concurrent.futures.Future,
         # or a plain sentinel object for a sync callback that is queued but
-        # has not started. ashutdown() drains this; shutdown() cannot.
+        # has not started. pending_main_loop_work() reports the count;
+        # quiv never waits for it, because the loop is the app's.
         self._main_loop_work: set[Any] = set()
         self._main_loop_work_lock = threading.Lock()
-        # Set by ashutdown() around its own shutdown() call, so shutdown()
-        # stays quiet about work that is about to be drained.
-        self._will_drain_main_loop_work = False
 
         self.persistence = PersistenceLayer(self._engine, self._now_utc)
         self.execution = ExecutionLayer(
@@ -617,15 +615,13 @@ class QuivBase(ABC):
         ``run_on_main``. That work is not a running job: the handler
         returned the moment it handed the work over, so the job was already
         complete. ``shutdown`` can therefore return while the work is still
-        queued on the loop, and in a FastAPI application the loop closes
-        soon afterwards and cancels it.
+        queued on the loop.
 
-        Waiting for it here is not an option. ``shutdown`` is synchronous
-        and the documented pattern calls it from the lifespan, which runs
-        on the main loop's own thread, so blocking would wait on work that
-        needs that very thread to progress. Await :meth:`ashutdown`
-        instead, which yields the thread and can therefore wait. This
-        method writes a warning naming how many callables it left behind.
+        quiv does not wait for it and does not cancel it, because the loop
+        is the application's. It writes a warning naming how many callables
+        it left behind, and :meth:`pending_main_loop_work` reports the
+        same count at any time, so the application can decide when its own
+        loop may close.
 
         Args:
             timeout (float, Optional=None): Maximum seconds to wait for the
@@ -696,16 +692,16 @@ class QuivBase(ABC):
         except Exception as e:
             self._logger.warning(f"Could not cleanup database file: {e}")
 
-        if not self._will_drain_main_loop_work:
-            with self._main_loop_work_lock:
-                pending = len(self._main_loop_work)
-            if pending:
-                self._logger.warning(
-                    f"{pending} run_on_main callable(s) are still pending on"
-                    " the main loop. shutdown() does not wait for them, and"
-                    " the loop closing next will cancel them. Use"
-                    " `await ashutdown()` to wait instead."
-                )
+        with self._main_loop_work_lock:
+            pending = len(self._main_loop_work)
+        if pending:
+            self._logger.warning(
+                f"{pending} callable(s) handed to the main loop by"
+                " run_on_main have not finished. quiv cannot stop them: the"
+                " loop belongs to your application, and quiv never closes"
+                " it or cancels what is queued on it. Check"
+                " pending_main_loop_work() before closing the loop."
+            )
 
     def _track_main_loop_work(self, item: Any) -> None:
         """Record work that ``run_on_main`` handed to the main loop."""
@@ -719,155 +715,43 @@ class QuivBase(ABC):
         with self._main_loop_work_lock:
             self._main_loop_work.discard(item)
 
-    def _warn_undrained(self, reason: str) -> None:
-        """Report work that can no longer be waited for, if there is any."""
+    def pending_main_loop_work(self) -> int:
+        """How many ``run_on_main`` callables have not finished yet.
 
-        with self._main_loop_work_lock:
-            left = len(self._main_loop_work)
-        if left:
-            self._logger.warning(f"{reason} {left} callable(s) left.")
+        ``run_on_main`` is fire-and-forget. It hands a callable to the main
+        loop and returns, so the job that called it finishes while the work
+        may not have started, and :meth:`shutdown` finds nothing running to
+        wait for.
 
-    async def _drain_main_loop_work(
-        self, timeout: float | None = None
-    ) -> None:
-        """Wait on the main loop until ``run_on_main`` work has finished.
+        **quiv does not wait for this work, and cannot.** The loop belongs
+        to your application. quiv never closes it, never cancels what is
+        queued on it, and has no way to know whether a half-finished
+        callable should be cancelled or allowed to end. Deciding that, and
+        deciding when the loop may close, is the application's job.
 
-        Must be awaited from the main loop's own thread, which is what makes
-        it work where a blocking wait cannot: awaiting yields control, so the
-        very work being waited on can run.
-
-        A sync callable that is queued but has not started yet has no future
-        to await, so those are waited out by yielding instead.
-
-        Args:
-            timeout (float, Optional=None): Seconds to wait in total.
-                ``None`` waits until the work finishes.
-        """
-
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while True:
-            with self._main_loop_work_lock:
-                items = list(self._main_loop_work)
-            if not items:
-                return
-            remaining = (
-                None if deadline is None else deadline - time.monotonic()
-            )
-            if remaining is not None and remaining <= 0:
-                self._logger.warning(
-                    f"{len(items)} run_on_main callable(s) had not finished"
-                    f" within the {timeout}s drain timeout. Continuing"
-                    " shutdown without them."
-                )
-                return
-            awaitables = [
-                asyncio.wrap_future(item)
-                if isinstance(item, Future)
-                else item
-                for item in items
-                if isinstance(item, (Future, asyncio.Task))
-            ]
-            if awaitables:
-                await asyncio.wait(awaitables, timeout=remaining)
-            else:
-                # Only queued sync callables are left, and a queued callback
-                # cannot be awaited. Yield so the loop runs them.
-                await asyncio.sleep(0.001)
-
-    async def ashutdown(self, timeout: float | None = None) -> None:
-        """Shut down, and wait for work handed to the main loop.
-
-        The async counterpart of :meth:`shutdown`, for an application whose
-        shutdown path is a coroutine — a FastAPI lifespan, for instance::
+        This is the number it needs to decide::
 
             @asynccontextmanager
             async def lifespan(app: FastAPI):
                 scheduler.start()
                 yield
-                await scheduler.ashutdown()
+                scheduler.shutdown()
+                while scheduler.pending_main_loop_work():
+                    await asyncio.sleep(0.05)
 
-        :meth:`shutdown` alone cannot wait for ``run_on_main`` work. It is
-        synchronous and is called from the main loop's own thread, so
-        blocking there would block the thread that work needs in order to
-        finish. Awaiting yields the thread instead, so the work can run.
+        Cheap enough to poll. It reads one set under a lock and never
+        touches the database, unlike :meth:`stats`.
 
-        Two steps, in this order. First :meth:`shutdown` runs on a worker
-        thread, which keeps this loop free: a job that is still finishing
-        can hand over more work, and that work still progresses. Then the
-        queue of work already handed over is drained, including anything
-        that arrives while the drain is running.
+        Counts every shape ``run_on_main`` dispatches, including a sync
+        callable that is queued but has not started and so has no future of
+        its own. :meth:`shutdown` warns when it leaves any behind.
 
-        **One case is not covered, and cannot be.** With a ``timeout``,
-        :meth:`shutdown` abandons jobs that did not exit in time, and an
-        abandoned job keeps running on its daemon thread. It can call
-        ``run_on_main`` after the drain has already seen an empty set, and
-        that late handoff is not waited for. Nothing can close this: the
-        thread cannot be stopped, so there is no point at which no further
-        work can arrive. This method warns when it ends with jobs still
-        running. Without a ``timeout`` the case does not arise, because
-        every job has exited before the drain begins.
-
-        Safe to call from a loop other than the configured main loop. The
-        tracked work belongs to the main loop, so the drain is marshalled
-        there and awaited from here.
-
-        Args:
-            timeout (float, Optional=None): Bounds each step separately, so
-                the total wait can reach twice this value. ``None`` waits
-                for both. Work still unfinished at the deadline is left,
-                with a warning.
+        Returns:
+            int: Callables handed over that have not finished.
         """
 
-        loop = asyncio.get_running_loop()
-        # Resolved before shutting down, while the loop is certainly still
-        # reachable.
-        main_loop = self._resolve_main_loop()
-        self._will_drain_main_loop_work = True
-        try:
-            await loop.run_in_executor(
-                None, partial(self.shutdown, timeout=timeout)
-            )
-        finally:
-            self._will_drain_main_loop_work = False
-
-        if main_loop is None:
-            # The loop was already gone before this call. Nothing tracked
-            # can make progress without it, so waiting would hang with
-            # timeout=None. Say what is left instead.
-            self._warn_undrained(
-                "The main loop is no longer running, so work handed to it"
-                " by run_on_main could not be drained."
-            )
-        elif main_loop is loop:
-            await self._drain_main_loop_work(timeout)
-        else:
-            # The tracked tasks belong to main_loop. Awaiting them from
-            # this loop would raise a cross-loop ValueError, so the drain
-            # runs over there and only its result is awaited here.
-            drain_coro = self._drain_main_loop_work(timeout)
-            try:
-                drain = asyncio.run_coroutine_threadsafe(
-                    drain_coro, main_loop
-                )
-            except RuntimeError:
-                # The main loop closed while we were shutting down. Close
-                # the coroutine so it does not warn about never being
-                # awaited, and say what was left rather than failing here.
-                drain_coro.close()
-                self._warn_undrained(
-                    "The main loop stopped while quiv was shutting down, so"
-                    " work handed to it by run_on_main could not be drained."
-                )
-            else:
-                await asyncio.wrap_future(drain)
-
-        with self._job_count_lock:
-            still_running = self._active_job_count
-        if still_running:
-            self._logger.warning(
-                f"{still_running} abandoned job(s) are still running. Work"
-                " they hand to the main loop from here is not waited for."
-            )
+        with self._main_loop_work_lock:
+            return len(self._main_loop_work)
 
     def stop(self, timeout: float | None = None) -> None:  # pragma: no cover
         """Stop scheduler loop, cancel jobs, and release resources.

@@ -139,63 +139,49 @@ def run_on_main(
 - `run_on_main` returns `None`. It returns at once on every path that crosses threads, and for an async target that it puts on the current loop. One case blocks: a **sync** target called from the thread of the main loop runs inline, on the stack of the caller, and the caller waits for it to finish.
 - `run_on_main` raises `MainLoopUnavailableError` when no active Quiv instance is registered, and when the active Quiv has no main loop that it can resolve. Both are configuration faults, such as a call to `run_on_main` before `Quiv.start()`. The exception inherits `QuivError` and `RuntimeError`.
 
-## Waiting for this work at shutdown
+## This work outlives shutdown, and closing the loop is yours
 
 `run_on_main` returns as soon as it hands the work over. The job that called it then finishes, and quiv counts that job as complete, although the work itself has not started.
 
-`shutdown()` waits for the scheduler loop and for running jobs. It does **not** wait for work already handed to the main loop, because that work is not a running job.
+`shutdown()` waits for the scheduler loop and for running jobs. It does **not** wait for work already handed to the main loop, and it does not cancel it.
 
-!!! warning "`shutdown()` alone can cut this work in half"
-    A handler that hands over a one-second coroutine and returns makes its job finish in milliseconds. `shutdown()` then finds nothing running and returns at once, measured at about 12 ms, while the coroutine is still waiting its turn on the loop. In a FastAPI application the loop closes soon after the lifespan returns, so that work is **cancelled**, not merely late.
+!!! info "That loop is yours, not quiv's"
+    You created the event loop and you close it. quiv is a guest on it. It never closes the loop, never cancels what is queued there, and has no way to know whether a half-finished callable should be stopped or allowed to end. Only your application knows that.
 
-    `shutdown()` writes a warning naming how many callables it left behind.
+    So quiv does the one thing a guest can do honestly: it tells you what is still outstanding.
 
-### `ashutdown()` waits
+A handler that hands over a one-second coroutine and returns makes its job finish in milliseconds, so `shutdown()` finds nothing running and returns at once, measured at about 12 ms. If your loop closes straight afterwards, that coroutine is cancelled.
 
-Use it wherever your shutdown path is a coroutine, which in FastAPI it always is:
+### `shutdown()` says what it left
+
+```
+WARNING Quiv: 2 callable(s) handed to the main loop by run_on_main have not
+finished. quiv cannot stop them: the loop belongs to your application, and
+quiv never closes it or cancels what is queued on it. Check
+pending_main_loop_work() before closing the loop.
+```
+
+Silence was the real hazard. Work vanished with nothing in the log to explain it.
+
+### `pending_main_loop_work()` is the number to act on
 
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.start()
     yield
-    await scheduler.ashutdown()    # waits for run_on_main work too
+    scheduler.shutdown()
+    while scheduler.pending_main_loop_work():
+        await asyncio.sleep(0.05)
 ```
 
-That is the whole change. Nothing else about the pattern moves.
+You are on the loop in the lifespan, so awaiting yields the thread and the outstanding work runs. Bound the wait however your application wants to: a deadline, a cap on iterations, or not at all if the work is a broadcast you are happy to drop.
 
-### Why the synchronous one cannot do it
+It is cheap enough to poll. It reads one set under a lock and never touches the database, unlike `stats()`.
 
-`shutdown()` is a synchronous function, and the lifespan calls it from the thread of the main loop. If it blocked there waiting for main-loop work, it would be waiting for work that needs that very thread to make progress. Measured: such a wait made no progress at all and consumed its whole timeout.
+### What it counts
 
-`ashutdown()` is awaited, and awaiting yields the thread. The work it waits on can therefore run. That is the entire difference between the two.
-
-It works in two steps, in this order:
-
-1. `shutdown()` runs on a worker thread, which leaves the loop free. A job that is still finishing can hand over more work, and that work still progresses.
-2. Once no job is running, no new work can arrive, so the queue of work already handed over is drained.
-
-### Bounding the wait
-
-`ashutdown(timeout=5.0)` bounds each step separately, so the total can reach twice the value. Work still unfinished at the deadline is left behind, with a warning, so one stuck callable cannot hold up your exit.
-
-With no `timeout` it waits for both steps however long they take, matching `shutdown()`.
-
-### The one case it cannot cover
-
-With a `timeout`, `shutdown()` abandons a job that did not exit in time, and an abandoned job keeps running on its daemon thread. It can hand work over **after** the drain has already finished, and that late handoff is not waited for.
-
-Nothing can close this. The thread cannot be stopped, so there is no point at which no further work can arrive. `ashutdown()` warns when it ends with jobs still running, so you know the queue was not closed.
-
-Without a `timeout` the case does not arise: every job has exited before the drain begins.
-
-### Calling it from another loop
-
-`ashutdown()` is safe to call from a loop other than the one quiv was given. The tracked work belongs to the main loop, so the drain is marshalled there and only its result is awaited where you called it. Awaiting a task across loops raises `ValueError: The future belongs to a different loop`, which is what this avoids.
-
-### What is tracked
-
-All four dispatch shapes, including a **sync** callable sent with `call_soon_threadsafe`, which has no future to await. quiv holds a marker for one of those from the moment it is queued until it has run. Without it, a drain could see an empty set while the callback was still sitting in the loop's ready queue, and return too early.
+Every shape `run_on_main` dispatches, including a **sync** callable sent with `call_soon_threadsafe`, which has no future of its own. quiv holds a marker for one of those from the moment it is queued until it has run, so the count never reads zero while a callback is still sitting in the loop's ready queue.
 
 ## A note about blocking the main loop
 
