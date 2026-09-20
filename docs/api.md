@@ -195,12 +195,37 @@ Always call it when your application stops.
 With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application.
 
 !!! warning "`shutdown()` does not wait for `run_on_main` work"
-    It waits for the scheduler loop and for running jobs. Work that a handler handed to the main loop with [`run_on_main`](run-on-main.md) is not a running job: the handler returned the moment it handed the work over. So `shutdown()` can return while that work is still queued, and in a FastAPI application the loop closes soon afterwards and cancels it. quiv cannot wait for it, because `shutdown()` is called from the lifespan, on the main loop's own thread, and blocking there would deadlock. [Draining it yourself](run-on-main.md#shutdown-does-not-wait-for-this-work) is the remedy.
+    It waits for the scheduler loop and for running jobs. Work that a handler handed to the main loop with [`run_on_main`](run-on-main.md) is not a running job: the handler returned the moment it handed the work over. So `shutdown()` can return while that work is still queued, and in a FastAPI application the loop closes soon afterwards and cancels it. It writes a warning naming how many callables it left behind.
+
+    Await [`ashutdown()`](#ashutdowntimeout-float-none-none-none) instead, from any shutdown path that is a coroutine.
 
 A job left behind still holds its database connection. When it finishes, its write reaches the database that quiv already deleted. Two things follow: the job can write errors to the log, and SQLite recreates the temporary database file, because a write creates the file again. The file is small and nothing reads it. Delete it yourself if a stray file in the temp directory matters to you.
 
 !!! success "`stop()` is an alias for `shutdown()`"
     `shutdown()` is the canonical name, and this documentation uses it everywhere. `stop()` calls the same code and keeps working.
+
+### `ashutdown(timeout: float | None = None) -> None`
+
+The async counterpart of `shutdown()`. It does everything `shutdown()` does, and it also waits for work that [`run_on_main`](run-on-main.md) handed to the main loop.
+
+Use it wherever your shutdown path is a coroutine, which in FastAPI it always is:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.start()
+    yield
+    await scheduler.ashutdown()
+```
+
+`shutdown()` cannot do this itself. It is synchronous, and the lifespan calls it from the main loop's own thread, so blocking there would wait on the very thread that work needs in order to run. `ashutdown()` is awaited, and awaiting yields the thread, so the work can finish.
+
+It works in two steps:
+
+1. `shutdown()` runs on a worker thread, leaving the loop free. A job still finishing can hand over more work, and that work still progresses.
+2. Once no job is running, no new work can arrive, so what was already handed over is drained.
+
+`timeout` bounds each step separately, so the total wait can reach twice the value. Work unfinished at the deadline is left behind with a warning, so one stuck callable cannot hold up your exit.
 
 ### `run_task_immediately(task_id: str) -> int`
 

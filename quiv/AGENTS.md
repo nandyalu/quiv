@@ -106,7 +106,7 @@ def deeply_nested_step():
 
 Works from anywhere in a task's call stack (no parameter threading) and also from main-loop code (e.g. FastAPI routes). Raises `MainLoopUnavailableError` if no active Quiv instance or main loop can be resolved.
 
-**`shutdown()` does not wait for work handed over this way.** The handler returns the instant it hands the work over, so the job is already complete and `shutdown()` finds nothing running — measured at ~12 ms while a 1 s coroutine was still queued. In FastAPI the loop closes just after the lifespan returns, so that work is cancelled, not merely late. quiv cannot wait for it: `shutdown()` is sync and runs on the main loop's own thread inside the lifespan, so blocking there deadlocks. For work that must not be lost, give it an owner on the main loop (e.g. an `asyncio.Queue`) and drain that in the lifespan after `shutdown()`.
+**`shutdown()` does not wait for work handed over this way; `await ashutdown()` does.** The handler returns the instant it hands the work over, so the job is already complete and `shutdown()` finds nothing running — measured at ~12 ms while a 1 s coroutine was still queued. In FastAPI the loop closes just after the lifespan returns, so that work is cancelled, not merely late. `shutdown()` warns, naming how many callables it left. Use `await scheduler.ashutdown()` in any async shutdown path (a FastAPI lifespan always is one). The sync version cannot wait because it runs on the main loop's own thread and blocking there stalls the very thread the work needs; awaiting yields it instead. `ashutdown(timeout=...)` bounds each of its two steps, so one stuck callable cannot hold up exit.
 
 ## Event listeners
 

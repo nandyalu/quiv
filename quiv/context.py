@@ -107,10 +107,10 @@ def run_on_main(
 
     **This is fire-and-forget, and ``Quiv.shutdown`` does not wait for
     it.** The calling job finishes as soon as the work is handed over, so
-    quiv counts that job as complete while the work has not started. Work
-    that must not be lost at shutdown needs an owner on the main loop that
-    the application can await itself; ``shutdown`` cannot await it, because
-    it is called from the loop's own thread.
+    quiv counts that job as complete while the work has not started.
+    ``await Quiv.ashutdown()`` does wait for it: awaiting yields the main
+    loop's thread, so the work can run, where a synchronous wait would
+    block the very thread it needs.
 
     The active Quiv instance reaches nested sync calls, the event loops
     that quiv creates on worker threads for async handlers, and a task
@@ -151,6 +151,9 @@ def run_on_main(
     is_coro_fn = inspect.iscoroutinefunction(func)
 
     def _on_done(fut: Any) -> None:
+        # Always stop tracking first, whatever the outcome, so ashutdown()
+        # can never wait on work that has already settled.
+        quiv._untrack_main_loop_work(fut)
         # Ask the future whether it was cancelled before asking for its
         # exception. A future from run_coroutine_threadsafe raises
         # concurrent.futures.CancelledError from exception(), a different
@@ -180,12 +183,14 @@ def run_on_main(
                 Coroutine[Any, Any, Any], func(*args, **kwargs)
             )
             task = main_loop.create_task(coroutine)
+            quiv._track_main_loop_work(task)
             task.add_done_callback(_on_done)
             return
         try:
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
                 task = main_loop.create_task(result)
+                quiv._track_main_loop_work(task)
                 task.add_done_callback(_on_done)
         except Exception as e:
             logger.error(
@@ -196,17 +201,30 @@ def run_on_main(
     if is_coro_fn:
         coroutine = cast(Coroutine[Any, Any, Any], func(*args, **kwargs))
         future = asyncio.run_coroutine_threadsafe(coroutine, main_loop)
+        quiv._track_main_loop_work(future)
         future.add_done_callback(_on_done)
         return
+
+    # A queued sync callable has no future to await, so a marker stands in
+    # for it until it runs. Without one, ashutdown() would see an empty set
+    # while the callback was still sitting in the loop's ready queue.
+    marker = object()
+    quiv._track_main_loop_work(marker)
 
     def _call_sync() -> None:
         try:
             result = func(*args, **kwargs)
             if asyncio.iscoroutine(result):
-                asyncio.ensure_future(result, loop=main_loop)
+                task = asyncio.ensure_future(result, loop=main_loop)
+                # Track the task before dropping the marker, so the work is
+                # never momentarily invisible to a drain in progress.
+                quiv._track_main_loop_work(task)
+                task.add_done_callback(_on_done)
         except Exception as e:
             logger.error(
                 f"run_on_main callable {func!r} failed: {e}", exc_info=True
             )
+        finally:
+            quiv._untrack_main_loop_work(marker)
 
     main_loop.call_soon_threadsafe(_call_sync)
