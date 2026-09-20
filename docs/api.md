@@ -160,7 +160,12 @@ Without it, moving an alarm means `remove_task()` followed by `add_task()`. That
 
 `run_at` and `interval` are mutually exclusive. Changing the interval already reschedules the next run, so passing both is ambiguous and raises `ConfigurationError`.
 
-A run-once task that has already started is deleted when it finishes, so a new time has nothing left to apply to.
+!!! warning "`run_at` does not survive a task that is already `running`"
+    Finalizing a job rewrites the schedule. A run-once task has its row deleted. A recurring task has its `next_run_at` recomputed from its interval. Either way the time you just set is discarded when the job finishes, so the call looks as if it worked and then does nothing.
+
+    quiv writes a warning to the log when it sees this, but the check is best-effort: a task can start running between the write and the check.
+
+    To move a recurring task reliably, wait until its job finishes. Or change `interval` instead, which finalization does honour.
 
 Raises:
 

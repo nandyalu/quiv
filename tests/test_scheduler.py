@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -712,6 +713,49 @@ def test_update_task_run_at_rejects_a_non_datetime(
         with pytest.raises(ConfigurationError, match="run_at must be"):
             scheduler.update_task(task_id, run_at="tomorrow")  # type: ignore[arg-type]
     finally:
+        scheduler.shutdown()
+
+
+def test_update_task_run_at_on_a_running_task_warns_and_is_overwritten(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Finalizing a job rewrites the schedule, so run_at set mid-run is
+    discarded. The call looks applied and then is not, so quiv warns."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    in_handler = threading.Event()
+    release = threading.Event()
+
+    def blocks() -> None:
+        in_handler.set()
+        release.wait(timeout=5)
+
+    try:
+        task_id = scheduler.add_task(
+            task_name="recurring", func=blocks, interval=3600, delay=0
+        )
+        scheduler.start()
+        assert in_handler.wait(timeout=3)
+        assert scheduler.get_task(task_id).status == TaskStatus.RUNNING
+
+        moved = datetime.now(timezone.utc) + timedelta(minutes=5)
+        with caplog.at_level(logging.WARNING, logger="Quiv"):
+            scheduler.update_task(task_id, run_at=moved)
+
+        assert scheduler.get_task(task_id).next_run_at == moved
+        assert any("will be overwritten" in r.message for r in caplog.records)
+
+        release.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if scheduler.get_task(task_id).status != TaskStatus.RUNNING:
+                break
+            time.sleep(0.05)
+
+        # Finalization recomputed it from the interval, discarding run_at.
+        assert scheduler.get_task(task_id).next_run_at != moved
+    finally:
+        release.set()
         scheduler.shutdown()
 
 

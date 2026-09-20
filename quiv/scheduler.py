@@ -16,7 +16,7 @@ from .exceptions import (
     HandlerRegistrationError,
     TaskNotFoundError,
 )
-from .models import Event, JobStatus, Task, TaskDB
+from .models import Event, JobStatus, Task, TaskDB, TaskStatus
 
 _CLEANUP_INTERVAL_SECONDS = 60.0
 _MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
@@ -356,9 +356,17 @@ class Quiv(QuivBase):
         ``run_at`` moves a task that has not run yet. That is how a
         one-off alarm changes its time without being removed and added
         again, which would hand back a new ``task_id`` and leave a
-        window with no task scheduled at all. A run-once task that has
-        already started is deleted when it finishes, so a new time has
-        nothing left to apply to.
+        window with no task scheduled at all.
+
+        **``run_at`` does not survive a task that is already RUNNING.**
+        Finalizing a job rewrites the schedule: a run-once task has its
+        row deleted, and a recurring task has ``next_run_at`` recomputed
+        from its interval. Either way the new time is discarded when the
+        job finishes, so the call looks applied and then is not. quiv
+        logs a warning when it sees this, but the check is best-effort:
+        a task can enter RUNNING between the write and the check. To
+        move a recurring task reliably, wait for the job to finish, or
+        change ``interval`` instead, which finalization does honour.
 
         Not updatable: ``run_once``, ``delay`` (initial delay is a
         creation-time concept), and the handler ``func`` (remove and
@@ -382,7 +390,8 @@ class Quiv(QuivBase):
             run_at (datetime, Optional): Absolute time of the next run.
                 Naive input is read as UTC, never as the display
                 timezone. A time already past runs at once, matching
-                ``add_task``. Mutually exclusive with ``interval``.
+                ``add_task``. Mutually exclusive with ``interval``, and
+                discarded if the task is already RUNNING (see above).
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
@@ -469,6 +478,21 @@ class Quiv(QuivBase):
 
         self._wake_loop()
         task = self.get_task(task_id)
+        if (
+            not isinstance(run_at, _Unset)
+            and task.status == TaskStatus.RUNNING
+        ):
+            # Finalizing this job rewrites the schedule — the row is
+            # deleted for a run-once task, and next_run_at is recomputed
+            # from the interval for a recurring one — so the time just
+            # written is about to be discarded. Best-effort: the task can
+            # enter RUNNING after this check, and then there is nothing
+            # to warn from.
+            self._logger.warning(
+                f"Task '{task_id}' is running, so the run_at just set will"
+                " be overwritten when its job finishes. Move it once the"
+                " job has completed."
+            )
         updated = ", ".join(updates) if updates else "progress_callback"
         self._logger.info(f"Task '{task_id}' updated ({updated})")
         self._emit_event(Event.TASK_UPDATED, task)
