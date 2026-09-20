@@ -716,6 +716,35 @@ def test_update_task_run_at_rejects_a_non_datetime(
         scheduler.shutdown()
 
 
+def test_update_task_run_at_moves_a_recurring_task_that_already_ran(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """run_at moves the next scheduled run of any task, not only one that
+    has never run. The interval is kept and governs everything after."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    ran = threading.Event()
+
+    try:
+        task_id = scheduler.add_task(
+            task_name="recurring", func=ran.set, interval=3600, delay=0
+        )
+        scheduler.start()
+        assert ran.wait(timeout=3)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if scheduler.get_task(task_id).status == TaskStatus.ACTIVE:
+                break
+            time.sleep(0.05)
+
+        moved = datetime.now(timezone.utc) + timedelta(minutes=7)
+        task = scheduler.update_task(task_id, run_at=moved)
+
+        assert task.next_run_at == moved
+        assert task.interval_seconds == 3600, "the cadence is untouched"
+    finally:
+        scheduler.shutdown()
+
+
 def test_update_task_run_at_on_a_running_task_warns_and_is_overwritten(
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,

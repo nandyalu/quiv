@@ -145,7 +145,9 @@ Three things cannot change: `run_once`, `delay`, and the handler `func`. `delay`
 
 `run_at` names the absolute time of the next run, the same way it does in `add_task()`. Naive input is read as UTC, never as the display timezone, and a time already past runs at once.
 
-This is how a one-off alarm changes its time:
+It applies to any task, whether or not it has run before. A recurring task keeps its interval and simply runs next at the time you give; the interval governs everything after that.
+
+A one-off alarm is the clearest case:
 
 ```python
 task_id = scheduler.add_task(

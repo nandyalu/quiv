@@ -353,10 +353,12 @@ class Quiv(QuivBase):
         — the changes take effect from the next run. Emits
         ``Event.TASK_UPDATED`` with the post-update :class:`Task`.
 
-        ``run_at`` moves a task that has not run yet. That is how a
-        one-off alarm changes its time without being removed and added
-        again, which would hand back a new ``task_id`` and leave a
-        window with no task scheduled at all.
+        ``run_at`` moves the task's **next scheduled run**, whether or
+        not it has run before. A recurring task keeps its interval and
+        simply runs next at the time given; the interval governs
+        everything after that. A one-off alarm changes its time without
+        being removed and added again, which would hand back a new
+        ``task_id`` and leave a window with no task scheduled at all.
 
         **``run_at`` does not survive a task that is already RUNNING.**
         Finalizing a job rewrites the schedule: a run-once task has its
