@@ -747,10 +747,12 @@ class QuivBase(ABC):
         its own. :meth:`shutdown` warns when it leaves any behind.
 
         It can read one higher than the number of handoffs for a few
-        microseconds, while a queued sync callable that returned a
-        coroutine is counted both as itself and as the task it created. It
-        never reads lower than the truth, which is the safe direction for
-        deciding whether a loop may close.
+        microseconds, while a callable is counted both as the marker that
+        reserved its place and as the task or future that replaced it.
+        **It never reads lower than the truth**, which is the direction
+        that matters: a count that briefly missed work already running
+        would tell an application its loop was safe to close when it was
+        not.
 
         Returns:
             int: Callables handed over that have not finished.

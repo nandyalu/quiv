@@ -66,7 +66,7 @@ while scheduler.pending_main_loop_work():
 
 Unlike `stats()`, it reads one set under a lock and never touches the database, so it is cheap to poll.
 
-It can read one higher than the number of handoffs for a few microseconds, while a queued sync callable that returned a coroutine is briefly counted both as itself and as the task it created. It never reads lower than the truth, which is the safe direction for deciding whether to close a loop.
+It can read one higher than the number of handoffs for a few microseconds, while a callable is counted both as the marker that reserved its place and as the task or future that replaced it. It **never** reads lower than the truth, which is the direction that matters: a count that briefly missed work already running would tell you the loop was safe to close when it was not.
 
 ## Example endpoints
 

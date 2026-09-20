@@ -201,9 +201,25 @@ def run_on_main(
 
     if is_coro_fn:
         coroutine = cast(Coroutine[Any, Any, Any], func(*args, **kwargs))
-        future = asyncio.run_coroutine_threadsafe(coroutine, main_loop)
+        # The loop can start the coroutine the instant it is scheduled, on
+        # its own thread, before this one reaches the tracking call below.
+        # A marker held across that gap keeps the count from reading zero
+        # while the work is already running. On the two branches above we
+        # are on the loop's own thread, so nothing can run until we yield
+        # and there is no such gap.
+        marker = object()
+        quiv._track_main_loop_work(marker)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, main_loop)
+        except BaseException:
+            quiv._untrack_main_loop_work(marker)
+            # Nothing will ever await it now, and an unawaited coroutine
+            # warns on garbage collection.
+            coroutine.close()
+            raise
         quiv._track_main_loop_work(future)
         future.add_done_callback(_on_done)
+        quiv._untrack_main_loop_work(marker)
         return
 
     # A queued sync callable has no future to await, so a marker stands in

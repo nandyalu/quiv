@@ -415,8 +415,20 @@ def test_marker_is_removed_when_the_loop_enqueue_fails(
     """The marker is tracked before the enqueue, so a failing enqueue would
     otherwise leave it in the set for good and the count would never return
     to zero: pending_main_loop_work() would report work that was never
-    queued, and shutdown() would warn about it forever."""
+    queued, and shutdown() would warn about it forever.
+
+    Both off-loop paths reserve a place this way, so both have to release
+    it: a sync callable sent with call_soon_threadsafe, and a coroutine
+    sent with run_coroutine_threadsafe.
+    """
     scheduler = Quiv(main_loop=running_main_loop)
+
+    async def never_scheduled() -> None:  # pragma: no cover - never runs
+        pass
+
+    # run_on_main closes the coroutine it could not schedule, so this test
+    # raises no "coroutine was never awaited" warning.
+
     try:
         scheduler.start()
 
@@ -426,7 +438,11 @@ def test_marker_is_removed_when_the_loop_enqueue_fails(
         monkeypatch.setattr(running_main_loop, "call_soon_threadsafe", boom)
         with pytest.raises(RuntimeError, match="Event loop is closed"):
             run_on_main(lambda: None)
+        assert scheduler.pending_main_loop_work() == 0
 
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", boom)
+        with pytest.raises(RuntimeError, match="Event loop is closed"):
+            run_on_main(never_scheduled)
         assert scheduler.pending_main_loop_work() == 0
     finally:
         monkeypatch.undo()
@@ -457,7 +473,10 @@ def test_pending_main_loop_work_counts_and_clears(
         )
         scheduler.start()
         assert started.wait(timeout=3)
-        assert scheduler.pending_main_loop_work() == 1
+        # At least one: a handoff is briefly counted twice, as its marker
+        # and as the future that replaced it. Never zero while it runs,
+        # which is the direction that matters.
+        assert scheduler.pending_main_loop_work() >= 1
 
         release.set()
         deadline = time.monotonic() + 3
@@ -467,6 +486,49 @@ def test_pending_main_loop_work_counts_and_clears(
         assert scheduler.pending_main_loop_work() == 0
     finally:
         release.set()
+        scheduler.shutdown()
+
+
+def test_count_is_never_zero_while_handed_over_work_runs(
+    running_main_loop: asyncio.AbstractEventLoop,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop can start a coroutine the instant it is scheduled, on its
+    own thread, before the dispatching thread has tracked the future. A
+    marker reserves the place across that gap.
+
+    Without it the count reads zero while the work is already running,
+    which would tell an application its loop was safe to close when it was
+    not. CI caught this on Python 3.14 before the marker existed; the sleep
+    below just widens the gap so it fails every time instead of sometimes.
+    """
+    scheduler = Quiv(main_loop=running_main_loop)
+    seen: list[int] = []
+    done = threading.Event()
+
+    async def work() -> None:
+        seen.append(scheduler.pending_main_loop_work())
+        done.set()
+
+    real = asyncio.run_coroutine_threadsafe
+
+    def slow_to_return(coro: Any, loop: Any) -> Any:
+        future = real(coro, loop)
+        time.sleep(0.2)
+        return future
+
+    try:
+        scheduler.start()
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", slow_to_return)
+        worker = threading.Thread(target=lambda: run_on_main(work))
+        worker.start()
+
+        assert done.wait(timeout=5)
+        worker.join(timeout=5)
+        assert seen, "the work never ran"
+        assert seen[0] >= 1, f"count read {seen[0]} while the work was running"
+    finally:
+        monkeypatch.undo()
         scheduler.shutdown()
 
 
