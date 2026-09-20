@@ -48,6 +48,26 @@ scheduler.get_all_tasks(status=TaskStatus.PAUSED)
 scheduler.get_all_tasks(limit=50, offset=100)
 ```
 
+## Outstanding main-loop work
+
+`pending_main_loop_work()` returns how many callables handed to the main loop by [`run_on_main`](run-on-main.md) have not finished.
+
+```python
+scheduler.pending_main_loop_work()   # -> int
+```
+
+quiv never waits for that work and never cancels it, because the loop is your application's. This is the number that lets you decide when the loop may close:
+
+```python
+scheduler.shutdown()
+while scheduler.pending_main_loop_work():
+    await asyncio.sleep(0.05)
+```
+
+Unlike `stats()`, it reads one set under a lock and never touches the database, so it is cheap to poll.
+
+It can read one higher than the number of handoffs for a few microseconds, while a queued sync callable that returned a coroutine is briefly counted both as itself and as the task it created. It never reads lower than the truth, which is the safe direction for deciding whether to close a loop.
+
 ## Example endpoints
 
 The [FastAPI example app](https://github.com/nandyalu/quiv/tree/main/examples/fastapi_app) puts all three into routes:

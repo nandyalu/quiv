@@ -20,11 +20,11 @@ Key facts for working with quiv:
 - [Bigger Applications](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/bigger-applications.md): structuring quiv in multi-module apps
 - [Architecture](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/architecture.md): scheduler / persistence / execution layer design
 - [Progress Callbacks](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/progress-callbacks.md): `progress_hook` and main-loop dispatch
-- [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere
+- [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere; why quiv never waits for or cancels that work, and `pending_main_loop_work()`
 - [Event Listeners](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/event-listeners.md): task/job lifecycle events and typed callbacks
 - [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `stop_event`
 - [Failure Handling](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/failure-handling.md): per-task cooperative timeouts, retry with exponential backoff, jitter
-- [Observability](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/observability.md): `stats()` snapshot, filtered/paginated job and task queries, admin endpoints
+- [Observability](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/observability.md): `stats()` snapshot, filtered/paginated job and task queries, `pending_main_loop_work()`, admin endpoints
 - [Exceptions](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/exceptions.md): the `QuivError` hierarchy
 - [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): patterns for testing handlers and the scheduler
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import threading
 import time
@@ -469,6 +468,44 @@ def test_pending_main_loop_work_counts_and_clears(
     finally:
         release.set()
         scheduler.shutdown()
+
+
+def test_pending_main_loop_work_clears_on_failure_and_cancellation(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """The count has to return to zero however the work ends, or an
+    application polling it would never be allowed to close its loop."""
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.start()
+
+        async def raises() -> None:
+            raise RuntimeError("boom")
+
+        async def cancels_itself() -> None:
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+            await asyncio.sleep(0)
+
+        for target in (raises, cancels_itself):
+            asyncio.run_coroutine_threadsafe(
+                _hand_over(scheduler, target), running_main_loop
+            ).result(timeout=5)
+
+            deadline = time.monotonic() + 3
+            while (
+                scheduler.pending_main_loop_work()
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            assert scheduler.pending_main_loop_work() == 0, target.__name__
+    finally:
+        scheduler.shutdown()
+
+
+async def _hand_over(scheduler: Quiv, target: Any) -> None:
+    run_on_main(target)
 
 
 def test_run_on_main_on_loop_async_target_exception_is_logged(
