@@ -1,4 +1,4 @@
-# Phase 7 — Process jobs (v1.1.0)
+# Phase 7 — Process jobs (v1.2.0)
 
 quiv keeps its thread pool and gains a second pool: processes. A task chooses one pool with `executor="thread"` or `executor="process"`. A process job runs in a process that quiv spawns for that job alone, and quiv can terminate it. That is the one thing a thread can never offer. Everything else — job state, the temporary database, events, retries, and the progress callback — stays in the parent. Requires Phase 6 merged (`v1.0.0`).
 
@@ -871,7 +871,7 @@ Validation tests, in `tests/test_scheduler.py`: lambda, inner function, bound me
 - `docs/failure-handling.md`: the timeout section gains the process case. `docs/cancellation.md`: `cancel_job()` on a process job. `docs/run-on-main.md`: from a process job. `docs/exceptions.md`: `WorkerProcessError`. `docs/architecture.md`: `_worker.py`, the pipe, and the waiter. `docs/observability.md`: the new stats fields. `docs/testing.md`: the three-platform matrix.
 - README and `docs/index.md` (keep them in sync): the pitch sentence "It is a scheduler for one process, backed by a thread pool" gains the optional process pool; the comparison row "Spreads work over processes or machines" becomes "processes on this machine, yes; other machines, no"; the "One process" caveat becomes a "One machine" caveat that names process jobs.
 - `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt`: `executor="process"`, the importable-handler rule, and the kill rule.
-- `docs/release-notes.md`: a `v1.1.0` entry, in Simplified Technical English, with the benchmark number.
+- `docs/release-notes.md`: a `v1.2.0` entry, in Simplified Technical English, with the benchmark number.
 - `CLAUDE.md`: architecture gains `_worker.py`; key patterns gain a "Process jobs" bullet; the testing section gains the coverage concurrency setting and the CI matrix.
 
 All prose follows the global `orwell-writing` skill, one paragraph per line.
@@ -907,4 +907,4 @@ All prose follows the global `orwell-writing` skill, one paragraph per line.
 - [ ] `docs/process-jobs.md` in the nav; every page in §14 updated; `uv run zensical build --clean` clean; README and `docs/index.md` diffed against each other.
 - [ ] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
 - [ ] `CLAUDE.md` updated per §14.
-- [ ] Version `1.1.0`; `docs/roadmap.md` Phase 7 marked complete with the date.
+- [ ] Version `1.2.0`; `docs/roadmap.md` Phase 7 marked complete with the date.

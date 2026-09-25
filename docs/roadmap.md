@@ -2,7 +2,7 @@
 
 This page tracked the work between `v0.4` and `v1.0.0`. Every phase is complete, and `v1.0.0` is the result. The scope was reviewed and frozen on 2026-07-10; the items under [Out of scope](#out-of-scope-for-v100) were considered and deferred, and that section stands as the record of what quiv deliberately does not do. The work after the release continues under [After v1.0.0](#after-v100).
 
-The roadmap was organized into six phases. Each phase shipped independently as its own minor release, and later phases built on machinery from earlier ones. One release, `v0.10.0`, sat outside the phases: the phase numbers stay consecutive, so the version numbers do not.
+The roadmap was organized into six phases. Each phase shipped independently as its own minor release, and later phases built on machinery from earlier ones. Two releases, `v0.10.0` and `v1.1.0`, sat outside the phases: the phase numbers stay consecutive, so the version numbers do not.
 
 Detailed implementation plans — one per phase, with prescriptive design decisions, test lists, pitfalls, and exit checklists — live in the repository under [`plans/`](https://github.com/nandyalu/quiv/tree/main/plans).
 
@@ -84,7 +84,15 @@ This is not calendar scheduling. `run_at` names one instant for one run. Recurre
 
 The three caveats in the README were reviewed on 2026-09-17: the temporary database, the single process, and the picklable arguments. Process jobs became Phase 7. The other two stay out of scope, and [Out of scope](#out-of-scope-for-v100) records why.
 
-## Phase 7 — Process jobs (`v1.1.0`)
+## `v1.1.0` — `run_at` on `update_task()` and `pending_main_loop_work()`
+
+**Status: ✅ complete** — implemented 2026-09-24, ships as `v1.1.0`.
+
+Not a roadmap phase. Two additive changes shipped ahead of Phase 7. `update_task()` gained `run_at`, so the next run of a task moves to an absolute time and the task keeps its `task_id` ([#79](https://github.com/nandyalu/quiv/pull/79)). `pending_main_loop_work()` returns how many callables handed to the main loop by `run_on_main()` have not finished, and `shutdown()` warns when it leaves any behind ([#80](https://github.com/nandyalu/quiv/pull/80)).
+
+quiv never waits for that work and never cancels it, because the loop belongs to the application. A `shutdown` that drained the work was written and then removed during review. It could hang in three ways, and one case has no fix: a job abandoned by `shutdown(timeout=...)` runs on a thread that cannot be stopped, so it can hand work over after any drain has finished. The count is the feature. `CLAUDE.md` records the decision so that a drain is not proposed again.
+
+## Phase 7 — Process jobs (`v1.2.0`)
 
 **Status: 📋 planned** — decisions settled 2026-09-17; the plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md).
 

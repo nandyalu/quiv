@@ -1,3 +1,53 @@
+<a id="v1.1.0"></a>
+## [v1.1.0 - run_at on update_task and pending_main_loop_work](https://github.com/nandyalu/quiv/releases/tag/v1.1.0) - 2026-09-24
+
+A minor release. `update_task()` can move the next run to an absolute time, and `pending_main_loop_work()` counts the callables that `run_on_main()` handed to the main loop and that have not finished. Both additions are keyword-only or new names. Nothing in the 1.0 API changed.
+
+### What's new
+
+- **`update_task(task_id, run_at=...)` moves the next run** ([#79](https://github.com/nandyalu/quiv/pull/79)). `run_at` names the absolute time of the next run, with the same rules as `run_at` on `add_task()`. A naive `datetime` is read as UTC, never as the display `timezone`. A time already past runs at once. A value that is not a `datetime` raises `ConfigurationError`. The task keeps its `task_id`.
+
+    Before this release, moving a one-off alarm meant `remove_task()` followed by `add_task()`. That returned a new id for the caller to store, and it left a window with nothing scheduled.
+
+    ```python
+    task_id = scheduler.add_task(task_name="wakeup", func=wake, run_at=tonight, run_once=True)
+
+    # Later: the alarm should ring earlier instead.
+    scheduler.update_task(task_id, run_at=this_afternoon)
+    ```
+
+    It applies to any task, whether or not it has run before. A recurring task keeps its interval and runs next at the time you give. Two rules:
+
+    - `run_at` and `interval` are mutually exclusive. A new interval already reschedules the next run, so passing both raises `ConfigurationError`, and neither change is applied.
+    - `run_at` does not survive a task that is already `running`. When the job finishes, quiv deletes a run-once row and recomputes `next_run_at` from the interval for a recurring task, so the time you set is discarded. quiv logs a warning when it sees this. To move a recurring task, wait for its job to finish, or change `interval` instead.
+
+- **`pending_main_loop_work() -> int`** ([#80](https://github.com/nandyalu/quiv/pull/80)) returns how many callables handed to the main loop by `run_on_main()` have not finished. `run_on_main()` is fire-and-forget. The job that called it finishes as soon as the work is handed over, so `shutdown()` finds nothing running and can return while the work is still queued. quiv does not wait for that work and does not cancel it. The loop belongs to your application, and only your application knows whether a half-finished callable should stop or run to the end. This is the number that lets you decide when the loop may close:
+
+    ```python
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        scheduler.start()
+        yield
+        scheduler.shutdown()
+        while scheduler.pending_main_loop_work():
+            await asyncio.sleep(0.05)
+    ```
+
+    It reads one set under a lock and never touches the database, so it is cheap to poll. It counts every shape `run_on_main()` dispatches, including a sync callable that is queued but has not started.
+
+- **`shutdown()` warns when it leaves main-loop work behind.** The warning names the count and points to `pending_main_loop_work()`. Before this release, that work vanished with nothing in the log to say so.
+
+### Fixes
+
+- **A cancelled listener or progress callback no longer logs a traceback** ([#78](https://github.com/nandyalu/quiv/pull/78)). `v1.0.1` fixed this fault in `run_on_main()`. The same fault was in two more done-callbacks: the one for an async event listener and the one for an async progress callback. Both asked the future for its exception before asking whether it was cancelled, and a cancelled `concurrent.futures` future raises from `exception()`. The `concurrent.futures` module then logged `exception calling callback` with a traceback, once per cancelled callback at shutdown. Both callbacks now check for cancellation first, and tests now cover both. An exception raised by your own listener or callback is still logged, as before.
+
+### Housekeeping
+
+- `tzdata` moves from 2026.3 to 2026.4 in the lock file ([#81](https://github.com/nandyalu/quiv/pull/81)). The published package does not pin `tzdata`, so nothing changes for an install.
+- Phase 7, process jobs, moves from `v1.1.0` to `v1.2.0`. This release took the number. The phase numbers stay consecutive, and the version numbers do not.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.0.1...v1.1.0
+
 <a id="v1.0.1"></a>
 ## [v1.0.1 - Cancellation fix for `run_on_main`](https://github.com/nandyalu/quiv/releases/tag/v1.0.1) - 2026-09-19
 
