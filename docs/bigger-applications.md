@@ -371,6 +371,21 @@ def cancel_job(job_id: str):
     return {"status": "cancelled"}
 ```
 
+An endpoint that starts work and wants to report how it went adds a one-off task and waits for its job. The endpoint holds a `task_id`, not a job id, so it waits with `await_task`:
+
+```python
+@router.post("/refresh")
+async def refresh_now():
+    """Refresh the index now, and report the result."""
+    task_id = scheduler.add_task(task_name="refresh", func=refresh_index, run_once=True)
+    job = await scheduler.await_task(task_id, timeout=120)
+    if job.status != "completed":
+        raise HTTPException(status_code=502, detail=job.error_message or job.status)
+    return {"duration_seconds": job.duration_seconds}
+```
+
+The job comes back finalized, so the endpoint answers with the real outcome instead of "queued". Bound the wait with `timeout`. It raises the builtin `TimeoutError` when the deadline passes, and the job keeps running.
+
 !!! tip "Task IDs in your API"
     `add_task()` returns a `task_id`, a UUID string. Store it in the state of your application, or return it to the client. Every later operation uses it: `pause_task`, `resume_task`, `run_task_immediately`, and `remove_task`.
 
