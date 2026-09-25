@@ -145,7 +145,7 @@ def test_job_cancelled_error_without_a_stop_is_a_failure(
         raise JobCancelledError("raised by hand")
 
     try:
-        task_id = scheduler.add_task("manual", handler, run_once=True)
+        task_id = scheduler.add_task("manual", handler, run_once=True, delay=0.2)
         scheduler.start()
         job = scheduler.wait_for_task(task_id, timeout=5)
 

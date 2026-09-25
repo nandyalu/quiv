@@ -68,7 +68,10 @@ def test_wait_for_job_on_a_finished_job_returns_at_once(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        task_id = scheduler.add_task("quick", lambda: None, run_once=True)
+        # The waiter must register before the job finalizes, and a one-off due
+        # at once can finish before the test reaches the wait call on a slow
+        # runner. The delay keeps the registration ahead of the dispatch.
+        task_id = scheduler.add_task("quick", lambda: None, run_once=True, delay=0.2)
         scheduler.start()
         first = scheduler.wait_for_task(task_id, timeout=5)
         assert first.id is not None
@@ -144,7 +147,7 @@ def test_wait_for_task_on_a_run_once_task_that_deletes_its_row(
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
     try:
-        task_id = scheduler.add_task("once", lambda: None, run_once=True)
+        task_id = scheduler.add_task("once", lambda: None, run_once=True, delay=0.2)
         scheduler.start()
 
         job = scheduler.wait_for_task(task_id, timeout=5)
@@ -378,7 +381,7 @@ def test_events_are_emitted_before_waiters_resolve(
     monkeypatch.setattr(scheduler, "_emit_event", emit)
     monkeypatch.setattr(scheduler, "_resolve_waiters", resolve)
     try:
-        task_id = scheduler.add_task("once", lambda: None, run_once=True)
+        task_id = scheduler.add_task("once", lambda: None, run_once=True, delay=0.2)
         scheduler.start()
         scheduler.wait_for_task(task_id, timeout=5)
 

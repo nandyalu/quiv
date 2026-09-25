@@ -41,7 +41,7 @@ def test_call_on_main_returns_the_result_of_an_async_target(
         captured["result"] = call_on_main(target, 2, b=3)
 
     try:
-        task_id = scheduler.add_task("hop", handler, run_once=True)
+        task_id = scheduler.add_task("hop", handler, run_once=True, delay=0.2)
         scheduler.start()
         job = scheduler.wait_for_task(task_id, timeout=5)
 
@@ -66,7 +66,7 @@ def test_call_on_main_returns_the_result_of_a_sync_target(
         captured["result"] = call_on_main(target)
 
     try:
-        task_id = scheduler.add_task("hop", handler, run_once=True)
+        task_id = scheduler.add_task("hop", handler, run_once=True, delay=0.2)
         scheduler.start()
         scheduler.wait_for_task(task_id, timeout=5)
 
@@ -88,7 +88,7 @@ def test_call_on_main_propagates_the_targets_exception_and_fails_the_job(
         call_on_main(target)
 
     try:
-        task_id = scheduler.add_task("hop", handler, run_once=True)
+        task_id = scheduler.add_task("hop", handler, run_once=True, delay=0.2)
         scheduler.start()
         job = scheduler.wait_for_task(task_id, timeout=5)
 
@@ -123,7 +123,7 @@ def test_call_on_main_is_cancelled_by_the_stop_event(
 
     try:
         scheduler.add_listener(Event.JOB_STARTED, on_started)
-        task_id = scheduler.add_task("hop", handler, run_once=True)
+        task_id = scheduler.add_task("hop", handler, run_once=True, delay=0.2)
         scheduler.start()
         assert running.wait(timeout=5)
         deadline = time.monotonic() + 5
@@ -218,7 +218,7 @@ def test_call_on_main_is_counted_by_pending_main_loop_work(
         call_on_main(target)
 
     try:
-        task_id = scheduler.add_task("hop", handler, run_once=True)
+        task_id = scheduler.add_task("hop", handler, run_once=True, delay=0.2)
         scheduler.start()
         assert running.wait(timeout=5)
         assert scheduler.pending_main_loop_work() == 1
