@@ -5,10 +5,12 @@ on:
     paths:
       - "quiv/**"
       - "pyproject.toml"
+      - ".github/workflows/typecheck.yml"
   pull_request:
     paths:
       - "quiv/**"
       - "pyproject.toml"
+      - ".github/workflows/typecheck.yml"
   workflow_dispatch:
 
 jobs:
@@ -25,3 +27,9 @@ jobs:
 
       - name: Run mypy
         run: uv run mypy quiv
+
+      - name: Run mypy for Windows
+        # The test suite runs on Windows since 2026-09-25. A stdlib type that
+        # differs on win32 (subprocess, multiprocessing, signal) must fail
+        # here, on one cheap Ubuntu job, before it fails in the matrix.
+        run: uv run mypy quiv --platform win32
