@@ -1,3 +1,38 @@
+<a id="v1.2.0"></a>
+## [v1.2.0 - Waiting on work (Phase 8)](https://github.com/nandyalu/quiv/releases/tag/v1.2.0) - 2026-09-25
+
+Phase 8. Everything in this release lets a caller wait on something, and lets cancellation reach it. It came out of a review of the two applications that run quiv. Four additions, all additive: waiting for a job or for a task's next job, `call_on_main()`, `run_subprocess()`, and two exceptions. The test suite now runs on Linux, macOS, and Windows. Nothing in the 1.0 API changed.
+
+### What's new
+
+- **Wait for a job.** `wait_for_job(job_id, timeout)` blocks until a job finishes and returns it finalized, with `status`, `duration_seconds`, and `error_message` set. `wait_for_task(task_id, timeout)` does the same for the next job of a task, which is what an endpoint holds after it adds a one-off. `await_job()` and `await_task()` are the same methods as coroutines, for code on the application's event loop.
+
+    ```python
+    @app.post("/refresh")
+    async def refresh():
+        task_id = scheduler.add_task("refresh", refresh_all, run_once=True)
+        job = await scheduler.await_task(task_id, timeout=120)
+        return {"status": job.status, "error": job.error_message}
+    ```
+
+    A waiter registers before it reads, and quiv resolves the waiters after it writes the terminal status and emits the `JOB_*` event, so no waiter can miss a job. A timeout raises the builtin `TimeoutError` on every supported Python. `remove_task()` wakes the waiters of a task with nothing running with `TaskNotFoundError`, and `shutdown()` wakes whatever is left with `SchedulerStoppedError`.
+
+    This is also how to test your own handlers against a real scheduler instead of a stub of `add_task`. The [Testing](https://nandyalu.github.io/quiv/testing/) page now opens with that recipe.
+
+- **`call_on_main()`** is the sibling of `run_on_main()` that waits. The result comes back, an exception raised by the target reaches the handler, and the job's stop event cancels the coroutine on the main loop. A handler whose whole body is one hop to the main loop returned in a millisecond before, so quiv recorded a millisecond success whatever the work did, and a task `timeout` could never fire. With `call_on_main()` the job spans the work: it carries the real duration and the real failure, `JOB_FAILED` fires, `max_retries` applies, and `timeout` cancels the coroutine. Every keyword goes to the target, so the function has no options of its own. From the main loop's own thread an async target raises `MainLoopUnavailableError`, because waiting there would block the loop that must run it.
+
+- **`run_subprocess()`** is a drop-in for `subprocess.run` inside a handler that a cancel can stop. A stop event cannot reach a child process: a handler that checks the event between steps still waits for the running child. The helper watches the job's stop event while the child runs. When the event is set, the child gets `terminate()`, then `kill()` after `kill_grace` seconds (default 5), and the helper raises `JobCancelledError`. A `timeout` stops the child the same way and raises `subprocess.TimeoutExpired`, as the stdlib does, so an existing `except` clause keeps working. The stop event is found through the job context, so a call deep inside a service needs no parameter. It stops the direct child only; pass `start_new_session=True` to give the child its own process group.
+
+- **Two exceptions.** `JobCancelledError` is what both helpers raise when the stop event fires while they wait. Let it propagate: quiv treats it as the stop you asked for, finalizes the job as `cancelled`, writes one info line, and leaves `error_message` empty. Raised by hand with no stop requested, it is an ordinary failure. `SchedulerStoppedError` is what a waiter gets when `shutdown()` returned first, or when it is called after `shutdown()`.
+
+### Housekeeping
+
+- **CI runs on Linux, macOS, and Windows**, across Python 3.10 to 3.14, and mypy runs a second time for `win32`. This was §0 of the process-jobs plan, pulled forward because this release holds the platform-sensitive code. Every test passed on Windows at once; the only fix was a test fixture that deletes a temp database an abandoned thread still held open.
+- **The phase order changed.** A review of trailarr and ten-acre on 2026-09-25 produced this phase and the next one. Phase 8 ships as `v1.2.0`, Phase 9 (operations: `is_running`, `run_task_immediately(after_current=True)`, a `task_name` filter, a "Running in a container" page) as `v1.3.0`, and Phase 7 (process jobs) as `v1.4.0`. The [roadmap](https://nandyalu.github.io/quiv/roadmap/) records why.
+- The API page documents the four wait methods and both helpers; the cancellation page covers subprocesses; the bigger-applications page gains an endpoint that awaits the one-off it adds; the agent reference and the skill follow.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.1.0...v1.2.0
+
 <a id="v1.1.0"></a>
 ## [v1.1.0 - run_at on update_task and pending_main_loop_work](https://github.com/nandyalu/quiv/releases/tag/v1.1.0) - 2026-09-24
 

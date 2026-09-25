@@ -372,8 +372,8 @@ Every child is `sys.executable -c "<script>"`, so the tests need nothing install
 - [x] `uv run mypy quiv` zero errors.
 - [x] Every test in §8 present and passing, on Linux, macOS, and Windows, 3.10 through 3.14 (the test names differ from §8 in places; the coverage is the same).
 - [x] `docs/testing.md` opens with "Testing your own handlers".
-- [x] `docs/api.md`, `docs/run-on-main.md`, `docs/cancellation.md`, `docs/exceptions.md` updated; `uv run zensical build --clean` clean. **Not done:** the `docs/bigger-applications.md` §5 endpoint example.
+- [x] `docs/api.md`, `docs/run-on-main.md`, `docs/cancellation.md`, `docs/exceptions.md` updated; `uv run zensical build --clean` clean; the `docs/bigger-applications.md` §5 endpoint example added 2026-09-25.
 - [x] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated.
 - [x] `CLAUDE.md` key patterns updated.
-- [ ] `docs/release-notes.md` entry; version bumped to `1.2.0`; `docs/roadmap.md` Phase 8 marked complete with the date. Release step.
+- [x] `docs/release-notes.md` entry; version bumped to `1.2.0`; `docs/roadmap.md` Phase 8 marked complete with the date (2026-09-25, release PR `dev` → `main`).
 - [ ] `trailarr/quiv_findings.md` and `ten-acre/quiv_findings.md` items for this phase are now actionable; tick nothing there, that is the applications' work.
