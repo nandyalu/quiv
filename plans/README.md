@@ -9,6 +9,8 @@ Phases 1–6 built `v1.0.0`. Phases from 7 on are the work after the release: ea
 1. **Do the phases in order.** Later phases assume earlier machinery (e.g. Phase 4 timeout enforcement rides on Phase 2's wake-event loop).
 
    The phase numbers are consecutive; the version numbers are not. `v0.10.0` shipped between Phase 5 and Phase 6 and has no plan of its own — it was a single additive parameter, not a phase. `v1.1.0` shipped the same way between Phase 6 and Phase 7: `run_at` on `update_task()` and `pending_main_loop_work()`. Read the version column, not the phase number, when you need to know what a release contains.
+
+   **Phases 8 and 9 do not build on Phase 7.** They came out of the 2026-09-25 review of the two applications that run quiv, and both applications need them sooner than process jobs. Ship them in whichever order the applications need, before or after Phase 7. The version in each plan's title is provisional; the version column below is fixed at release, and the phase number never changes.
 2. **Read the whole plan before writing code.** The Pitfalls section exists because each item was hit or foreseen during design review.
 3. **Do not expand scope.** Cron scheduling, durable persistence, lazy or unpicklable arguments, event-loop reuse, and lazy logging were explicitly rejected — see "Out of scope" in [docs/roadmap.md](../docs/roadmap.md). Durable persistence and lazy arguments were reviewed again on 2026-09-17, after `v1.0.0`, and stay rejected; the roadmap records why. In particular, `run_async` must keep creating a **fresh event loop per invocation** (isolation requirement), in the parent and in a worker process alike.
 4. **Every phase must pass before it ships:**
@@ -33,3 +35,5 @@ Phases 1–6 built `v1.0.0`. Phases from 7 on are the work after the release: ea
 | 6 | v1.0.0 | [phase-6-release-hardening.md](phase-6-release-hardening.md) | API freeze, docs, benchmarks, soak |
 | — | v1.1.0 | no plan | `run_at` on `update_task()` ([#79](https://github.com/nandyalu/quiv/pull/79)) and `pending_main_loop_work()` ([#80](https://github.com/nandyalu/quiv/pull/80)) — not a phase |
 | 7 | v1.2.0 | [phase-7-process-jobs.md](phase-7-process-jobs.md) | Process jobs: one spawned process per job, a second pool, one kill rule, CI on three platforms |
+| 8 | v1.3.0 | [phase-8-waiting-on-work.md](phase-8-waiting-on-work.md) | Waiting on work: `wait_for_job`/`await_job`, `wait_for_task`/`await_task`, `call_on_main()`, `run_subprocess()`, `JobCancelledError` |
+| 9 | v1.4.0 | [phase-9-operations.md](phase-9-operations.md) | Operations: `is_running` and `loop_alive`, `run_task_immediately(after_current=True)`, `get_all_tasks(task_name=)`, the "Running in a container" page |

@@ -84,6 +84,8 @@ This is not calendar scheduling. `run_at` names one instant for one run. Recurre
 
 The three caveats in the README were reviewed on 2026-09-17: the temporary database, the single process, and the picklable arguments. Process jobs became Phase 7. The other two stay out of scope, and [Out of scope](#out-of-scope-for-v100) records why.
 
+On 2026-09-25 the two applications that run quiv, trailarr and ten-acre, were reviewed against their running containers. Neither had logged a scheduler fault, and both carried the same workarounds: handlers that hand all their work to the main loop and leave quiv nothing to record, endpoints that add a one-off and cannot report it, a cancel that cannot reach a child process, a `shutdown()` with no timeout inside a ten-second stop grace, no way to ask whether the loop is alive, and tests that stub quiv out. That review produced Phases 8 and 9. They do not build on Phase 7 and may ship before it.
+
 ## `v1.1.0` — `run_at` on `update_task()` and `pending_main_loop_work()`
 
 **Status: ✅ complete** — implemented 2026-09-24, ships as `v1.1.0`.
@@ -109,6 +111,30 @@ quiv keeps its thread pool and gains a pool of processes. A process job runs in 
 
 `forkserver` would cut the start cost of each job on Linux and macOS. It is documented as a later option and not implemented in this phase.
 
+## Phase 8 — Waiting on work (`v1.3.0`)
+
+**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-8-waiting-on-work.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-8-waiting-on-work.md). Does not depend on Phase 7.
+
+Everything here lets a caller wait on something and lets cancellation reach it.
+
+1. **Wait for a job** — `wait_for_job(job_id, timeout)` and `wait_for_task(task_id, timeout)` return the finalized `Job`; `await_job` and `await_task` are their async forms for code on the application's loop. A test can drive a real scheduler, and an endpoint that adds a one-off can report its result.
+2. **`call_on_main()`** — the sibling of `run_on_main()` that waits for the result. The job then carries the real duration and failure, `JOB_FAILED` fires, retries apply, and the task's `timeout` cancels the coroutine. A handler that is one hop to the main loop becomes tracked work.
+3. **`run_subprocess()`** — a drop-in for `subprocess.run` inside a handler. A stop signal terminates the child and kills it after a grace, the same rule Phase 7 applies to a process job. A timeout keeps the stdlib exception.
+4. **`JobCancelledError`** — raised by both helpers when the stop event fires while they wait; the handler lets it propagate and the job finalizes as `CANCELLED`. **`SchedulerStoppedError`** — what a waiter gets when `shutdown()` returns first.
+
+**Exit criteria:** the tests in the plan pass on 3.10 through 3.14; `docs/testing.md` opens with a working recipe for testing an application's own handlers against a real instance.
+
+## Phase 9 — Operations (`v1.4.0`)
+
+**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8.
+
+1. **Health** — `is_running` and `QuivStats.loop_alive`: `start()` was called, `shutdown()` was not, and the loop thread is alive. Cheap enough for a probe.
+2. **`run_task_immediately(after_current=True)`** — a running recurring task runs again as soon as its current job finalizes, instead of the call raising.
+3. **`get_all_tasks(task_name=...)`** — an exact-match filter, for "does a one-off with this name already exist".
+4. **A "Running in a container" page** — the shutdown timeout under the stop grace, the temporary database and `TMPDIR`, logging, the restart practice both applications arrived at, the daily-at-a-time recipe, and health checks. It can ship as a docs-only commit ahead of the code.
+
+**Exit criteria:** the tests in the plan pass; the container page is in the nav; the soak script reads `is_running`.
+
 ## Out of scope for v1.0.0
 
 The following were reviewed and explicitly deferred:
@@ -117,5 +143,6 @@ The following were reviewed and explicitly deferred:
 - **Durable persistence** — each `Quiv` instance keeps its temporary SQLite database, deleted on `shutdown()`. Reviewed again on 2026-09-17, after the release, and still out. The need was to keep the next run time across a restart. An application can do that itself: store the last run time, compute the next one at startup, and pass it as `delay` or `run_at`. A durable store inside quiv would also have to bring the handler back, and the database never holds the handler.
 - **Lambdas and unpicklable arguments** — reviewed on 2026-09-17 and out. `args` and `kwargs` stay pickled, so a lambda, an inner function, or an open connection cannot be an argument. A value that a job must compute at run time belongs inside the handler: pass an id or a name, and resolve it there. Other schedulers stop at the same place. Celery and Dramatiq accept JSON only, and APScheduler with a persistent store needs a function it can import.
 - **Work on other machines** — Phase 7 spreads work over processes on one machine. quiv does not become a distributed queue; Celery and arq exist for that.
+- **Waiting for `run_on_main` work at shutdown** — reviewed on 2026-09-20 and out. A drain was written and removed: it could hang in three ways, and a job abandoned by `shutdown(timeout=...)` can hand work over after any drain has finished. quiv reports the count with `pending_main_loop_work()` and the application decides when its loop may close. Phase 8's `call_on_main()` makes the work part of the job instead.
 - **Event-loop reuse for async handlers** — each async invocation keeps its own fresh event loop by design: closing the loop after every job guarantees that leaked `asyncio` tasks or loop state from one job can never bleed into the next. Isolation wins over the micro-optimization.
 - **Lazy logging** — eager f-string formatting in log calls stays as-is.
