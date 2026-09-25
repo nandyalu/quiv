@@ -52,11 +52,23 @@ def leftover_db_paths() -> Generator[list[str], None, None]:
     for path in paths:
         for suffix in ("", "-wal", "-shm"):
             candidate = path + suffix
-            try:
-                real_remove(candidate)
-            except FileNotFoundError:
-                # Never written, or removed between the check and now.
-                pass
+            release_deadline = time.monotonic() + 10
+            while True:
+                try:
+                    real_remove(candidate)
+                    break
+                except FileNotFoundError:
+                    # Never written, or removed between the check and now.
+                    break
+                except PermissionError:
+                    # Windows refuses to delete a file that another handle
+                    # holds open, and the abandoned thread holds its SQLite
+                    # connection until its write finishes. Wait for that.
+                    # Past the deadline, leave the file: a stray temp file
+                    # on a Windows runner is better than a red suite.
+                    if time.monotonic() >= release_deadline:
+                        break
+                    time.sleep(0.1)
 
 
 @pytest.fixture

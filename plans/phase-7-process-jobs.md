@@ -19,6 +19,8 @@ This is the first phase after the API freeze. Every change is additive. No 1.0 n
 
 ## 0. CI on three platforms (do this first, as its own commit)
 
+**Landed 2026-09-25, ahead of Phase 8.** The matrix went green on Linux and macOS at once. On Windows every test passed and the only failures were in teardown of the `leftover_db_paths` fixture: `PermissionError` (`WinError 32`) deleting a temp database that an abandoned thread still held open. The fixture now retries the delete for up to ten seconds while the handle is released. The Windows note two paragraphs down predicted exactly that.
+
 The existing suite has only ever run on Ubuntu. Windows file locking and macOS runner speed can break tests that have nothing to do with this phase. Make the current suite green on all three platforms before writing a line of process code, so a later failure is attributable.
 
 `.github/workflows/tests.yml`:
