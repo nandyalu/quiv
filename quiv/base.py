@@ -792,12 +792,17 @@ class QuivBase(ABC):
             SchedulerStoppedError: After ``shutdown()``; nothing will finish.
         """
 
-        if self._shutdown:
-            raise SchedulerStoppedError(
-                "The scheduler has shut down; no job will finish."
-            )
         fut: Future[Job] = Future()
         with self._registries_lock:
+            # Under the lock, so the check is atomic with the clear in
+            # _fail_all_waiters(). shutdown() sets _shutdown before it
+            # takes the lock to clear the tables, so a waiter that gets
+            # the lock after the clear sees the flag and never registers
+            # a future that nothing would resolve.
+            if self._shutdown:
+                raise SchedulerStoppedError(
+                    "The scheduler has shut down; no job will finish."
+                )
             table.setdefault(key, []).append(fut)
         return fut
 

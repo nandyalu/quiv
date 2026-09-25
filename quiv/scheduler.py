@@ -504,9 +504,11 @@ class Quiv(QuivBase):
     def remove_task(self, task_id: str) -> None:
         """Remove a scheduled task and its handler/callback registrations.
 
-        If the task has a running job, its stop event is set to signal
-        cancellation. The running job will finish on its own and clean
-        up via ``_run_job``'s finally block.
+        If the task has a job in flight, scheduled or running, its stop
+        event is set to signal cancellation. That job finishes on its
+        own and cleans up via ``_run_job``'s finally block, and it
+        resolves the task's waiters. With nothing in flight the waiters
+        learn the task is gone.
 
         Args:
             task_id (str): Task id to remove.
@@ -518,28 +520,37 @@ class Quiv(QuivBase):
         # Snapshot the task before deletion for the event listener
         task = self.get_task(task_id)
 
-        # Cancel any running job for this task before deleting
-        has_running_job = False
-        running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
-        for job in running_jobs:
-            if job.task_id != task_id or job.id is None:
-                continue
-            has_running_job = True
-            with self._registries_lock:
-                stop_event = self.stop_events.get(job.id)
-            if stop_event is not None:
-                stop_event.set()
-                self._logger.info(
-                    f"Cancelled running job {job.id} for task '{task_id}'"
-                )
+        # Signal every job of this task that is in flight. SCHEDULED
+        # counts: _dispatch_due_task created and submitted it, and its
+        # stop event already exists, so the job sees the cancellation
+        # the moment _run_job starts it.
+        in_flight = False
+        for job_status in (JobStatus.SCHEDULED, JobStatus.RUNNING):
+            for job in self.get_all_jobs(status=job_status, task_id=task_id):
+                if job.id is None:  # pragma: no cover - a stored job has an id
+                    continue
+                in_flight = True
+                with self._registries_lock:
+                    stop_event = self.stop_events.get(job.id)
+                if stop_event is not None:
+                    stop_event.set()
+                    self._logger.info(
+                        f"Cancelled running job {job.id} for task '{task_id}'"
+                    )
 
-        self.persistence.delete_task(task_id)
+        # The delete and the dispatch's mark-running serialize on the
+        # persistence write lock, so the status the row had at deletion
+        # is exact. RUNNING means a dispatch marked it and will either
+        # create the job, which resolves the waiters, or find the row
+        # gone and fail them itself in _dispatch_due_task.
+        if self.persistence.delete_task(task_id) == TaskStatus.RUNNING:
+            in_flight = True
         with self._registries_lock:
             self.registry.pop(task_id, None)
             self.progress_callbacks.pop(task_id, None)
-        if not has_running_job:
-            # A running job finalizes on its own and resolves the task's
-            # waiters with that job. With nothing running, no job will
+        if not in_flight:
+            # A job in flight finalizes on its own and resolves the task's
+            # waiters with that job. With nothing in flight, no job will
             # ever come, so the waiters learn the task is gone.
             self._fail_waiters(
                 self._task_waiters,
@@ -679,6 +690,16 @@ class Quiv(QuivBase):
             self._logger.warning(
                 f"Skipping dispatch for task '{task.id}': task row was"
                 " deleted before dispatch."
+            )
+            # When remove_task() deleted the row after this dispatch
+            # marked it RUNNING, it left the task's waiters for the job it
+            # expected. No job comes from here, so tell them.
+            self._fail_waiters(
+                self._task_waiters,
+                task.id,
+                TaskNotFoundError(
+                    f"Task '{task.id}' was removed before its job started."
+                ),
             )
             return
 

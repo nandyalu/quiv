@@ -153,3 +153,33 @@ def test_job_cancelled_error_without_a_stop_is_a_failure(
         assert job.error_message == "raised by hand"
     finally:
         scheduler.shutdown()
+
+
+def test_input_is_sent_to_the_child() -> None:
+    result = run_subprocess(
+        [PY, "-c", "import sys; print(sys.stdin.read().upper())"],
+        input="abc",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.stdout.strip() == "ABC"
+
+
+def test_input_survives_a_poll_timeout_retry() -> None:
+    """communicate() is retried every poll slice. The unsent input must
+    still reach a child that reads stdin only after the first slice."""
+
+    result = run_subprocess(
+        [PY, "-c", "import sys, time; time.sleep(0.4); print(sys.stdin.read().upper())"],
+        input="late",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.stdout.strip() == "LATE"
+
+
+def test_input_with_an_explicit_stdin_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="stdin and input"):
+        run_subprocess(SLEEPER, input="x", stdin=subprocess.PIPE)

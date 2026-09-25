@@ -431,6 +431,7 @@ from quiv import run_subprocess
 run_subprocess(
     args: Sequence[str] | str,
     *,
+    input: bytes | str | None = None,
     stop_event: threading.Event | None = None,
     timeout: float | None = None,
     kill_grace: float = 5.0,
@@ -444,7 +445,7 @@ A drop-in for `subprocess.run` inside a handler. Cooperative cancellation cannot
 
 - When the stop event is set, the child gets `terminate()`, then `kill()` after `kill_grace` seconds if it is still alive, and `JobCancelledError` is raised. It is the same rule quiv applies to a process job.
 - When `timeout` passes, the child is stopped the same way and `subprocess.TimeoutExpired` is raised, as `subprocess.run` does. An existing `except TimeoutExpired` keeps working.
-- `check` and `capture_output` mean what they mean for `subprocess.run`. Other keywords go to `subprocess.Popen`.
+- `input`, `check`, and `capture_output` mean what they mean for `subprocess.run`. Other keywords go to `subprocess.Popen`.
 - `stop_event` defaults to the stop event of the job the code runs inside, found through the job context, so a function deep inside a service needs nothing passed to it. Outside a job there is no stop event.
 
 The helper stops the direct child only. Pass `start_new_session=True` to give a child that spawns its own children a process group of its own. On Windows `terminate()` and `kill()` are the same call, so the grace has no effect there.

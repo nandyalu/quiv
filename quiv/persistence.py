@@ -98,11 +98,19 @@ class PersistenceLayer:
             session.commit()
             return task.id
 
-    def delete_task(self, task_id: str) -> None:
-        """Delete a task by id.
+    def delete_task(self, task_id: str) -> str:
+        """Delete a task by id, and return the status the row had.
+
+        The delete and ``mark_task_running`` serialize on the write lock,
+        so the returned status is exact at the moment of deletion:
+        ``running`` means a dispatch marked the row before this delete,
+        and a job of the task is in flight or about to be.
 
         Args:
             task_id (str): Task id to delete.
+
+        Returns:
+            str: The task's status at deletion.
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
@@ -112,8 +120,10 @@ class PersistenceLayer:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            status = task.status
             session.delete(task)
             session.commit()
+            return status
 
     def get_all_tasks(
         self,

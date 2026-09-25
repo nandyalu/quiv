@@ -21,6 +21,7 @@ from quiv import (
     Task,
     TaskNotFoundError,
 )
+from quiv.models import TaskDB
 
 
 def _run_on(
@@ -445,3 +446,90 @@ def test_exception_hierarchy_for_the_new_errors() -> None:
 
     assert issubclass(JobCancelledError, QuivError)
     assert issubclass(SchedulerStoppedError, QuivError)
+
+
+def test_remove_task_treats_a_scheduled_job_as_in_flight(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A job that dispatch created but _run_job has not started yet has a
+    stop event already. remove_task signals it and keeps the waiters."""
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("later", lambda: None, interval=60, delay=60)
+        job_id = scheduler.persistence.create_job(task_id, "later", attempt=1)
+        stop_event = threading.Event()
+        scheduler.stop_events[job_id] = stop_event
+        fut = scheduler._add_waiter(scheduler._task_waiters, task_id)
+
+        scheduler.remove_task(task_id)
+
+        assert stop_event.is_set()
+        assert not fut.done()
+        assert task_id in scheduler._task_waiters
+    finally:
+        scheduler.shutdown()
+    with pytest.raises(SchedulerStoppedError):
+        fut.result(timeout=1)
+
+
+def test_remove_task_keeps_waiters_when_the_row_was_running_at_deletion(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Between mark_task_running and create_job there is no job row yet.
+    The status the row had at deletion says a dispatch is in flight."""
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("later", lambda: None, interval=60, delay=60)
+        scheduler.persistence.mark_task_running(task_id)
+        fut = scheduler._add_waiter(scheduler._task_waiters, task_id)
+
+        scheduler.remove_task(task_id)
+
+        assert not fut.done()
+        assert task_id in scheduler._task_waiters
+    finally:
+        scheduler.shutdown()
+
+
+def test_dispatch_fails_the_waiters_when_the_row_vanished_after_marking(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The other half of that race: the dispatch marked the row, remove_task
+    deleted it and kept the waiters, and the dispatch finds it gone."""
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("later", lambda: None, interval=60, delay=60)
+        fut = scheduler._add_waiter(scheduler._task_waiters, task_id)
+        scheduler.persistence.mark_task_running(task_id)
+        assert scheduler.persistence.delete_task(task_id) == "running"
+
+        with caplog.at_level(logging.WARNING, logger="Quiv"):
+            scheduler._dispatch_due_task(
+                TaskDB(id=task_id, task_name="later"), scheduler._now_utc()
+            )
+
+        with pytest.raises(TaskNotFoundError, match="before its job started"):
+            fut.result(timeout=1)
+        assert scheduler._task_waiters == {}
+        assert any("deleted before dispatch" in r.message for r in caplog.records)
+    finally:
+        scheduler.shutdown()
+
+
+def test_delete_task_returns_the_status_the_row_had(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        a = scheduler.add_task("a", lambda: None, interval=60, delay=60)
+        b = scheduler.add_task("b", lambda: None, interval=60, delay=60)
+        scheduler.persistence.mark_task_running(b)
+
+        assert scheduler.persistence.delete_task(a) == "active"
+        assert scheduler.persistence.delete_task(b) == "running"
+    finally:
+        scheduler.shutdown()

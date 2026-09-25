@@ -45,6 +45,7 @@ def _stop_child(
 def run_subprocess(
     args: Sequence[str] | str,
     *,
+    input: Any = None,
     stop_event: threading.Event | None = None,
     timeout: float | None = None,
     kill_grace: float = 5.0,
@@ -78,6 +79,8 @@ def run_subprocess(
 
     Args:
         args (Sequence[str] | str): The command, as for ``subprocess.run``.
+        input (bytes | str, Optional=None): Data for the child's stdin,
+            as for ``subprocess.run``. Sets ``stdin`` to a pipe.
         stop_event (threading.Event, Optional=None): The event to watch.
             Defaults to the stop event of the job this code runs inside,
             or none outside a job.
@@ -103,9 +106,14 @@ def run_subprocess(
         subprocess.CalledProcessError: If ``check`` is true and the child
             returned non-zero.
         ValueError: If ``capture_output`` is combined with ``stdout`` or
-            ``stderr``, as ``subprocess.run`` refuses too.
+            ``stderr``, or ``input`` with ``stdin``, as ``subprocess.run``
+            refuses too.
     """
 
+    if input is not None:
+        if "stdin" in popen_kwargs:
+            raise ValueError("stdin and input arguments may not both be used.")
+        popen_kwargs["stdin"] = subprocess.PIPE
     if capture_output:
         if "stdout" in popen_kwargs or "stderr" in popen_kwargs:
             raise ValueError(
@@ -121,14 +129,19 @@ def run_subprocess(
     name = args if isinstance(args, str) else " ".join(args[:1])
     deadline = None if timeout is None else time.monotonic() + timeout
 
+    pending_input = input
     with subprocess.Popen(args, **popen_kwargs) as proc:
         while True:
             try:
                 # After TimeoutExpired, a retry of communicate() loses no
-                # output; the stdlib promises that.
-                stdout, stderr = proc.communicate(timeout=_POLL_SECONDS)
+                # output and keeps sending what it has not sent yet; the
+                # stdlib promises both. Passing input again would raise.
+                stdout, stderr = proc.communicate(
+                    pending_input, timeout=_POLL_SECONDS
+                )
                 break
             except subprocess.TimeoutExpired:
+                pending_input = None
                 if stop_event is not None and stop_event.is_set():
                     _stop_child(proc, kill_grace)
                     raise JobCancelledError(
