@@ -57,20 +57,22 @@ def work(item_id: int, stop_event=None, progress_hook=None):
 
 Renamed in v1.0.0 (were `_job_id`, `_stop_event`, `_progress_hook`). `add_task()` raises `ConfigurationError` if a handler still declares an old name, or if a `kwargs` key collides with an injected name.
 
-Async handlers pass the same way; each invocation gets a fresh event loop on a worker thread (never the main app loop — do not change this; isolation is a design requirement). To touch main-loop resources from task code use `from quiv import run_on_main; run_on_main(async_or_sync_fn, *args)` (fire-and-forget, exceptions logged and swallowed).
+Async handlers pass the same way; each invocation gets a fresh event loop on a worker thread (never the main app loop — do not change this; isolation is a design requirement). To touch main-loop resources from task code use `from quiv import run_on_main; run_on_main(async_or_sync_fn, *args)` (fire-and-forget, exceptions logged and swallowed). When the job should span that work, use `call_on_main(fn, *args)` instead: it waits, returns the result, lets the exception through (the job fails, retries and `timeout` apply), and a cancel raises `JobCancelledError` in the handler — let it propagate. For a child process, `run_subprocess([...], timeout=...)` is `subprocess.run` that a cancel can stop (terminate, then kill after `kill_grace`).
 
 ## Observability
 
 - Events: `scheduler.add_listener(Event.JOB_FAILED, cb)` — `TASK_*` callbacks get `(event, task)`, `JOB_*` get `(event, task, job)`; `job.error_message` and `job.duration_seconds` are set on finalization.
 - Inspect: `get_all_tasks()`, `get_all_jobs(status="failed")` — return SQLModel objects safe to return from FastAPI endpoints (UTC-aware datetimes).
 - Logging: quiv never configures logging; configure the `"Quiv"` logger to see scheduler output.
+- Wait: `wait_for_task(task_id, timeout)` / `await_task(...)` return the finalized `Job` of the task's next run; `wait_for_job(job_id, timeout)` / `await_job(...)` for a job id you hold. Timeouts raise the builtin `TimeoutError`. Test handlers against a real `Quiv()` this way instead of stubbing `add_task`.
 
 ## Common mistakes to avoid
 
 1. Forgetting `scheduler.shutdown()` (in tests: `finally:` block) — leaks the loop thread and temp DB file.
 2. Passing both `config=QuivConfig(...)` and individual kwargs to `Quiv()` — raises `ConfigurationError`; pick one.
-3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning.
-4. Blocking on main-loop resources inside a handler instead of using `progress_hook` / `run_on_main`.
-5. Expecting quiv to wait for `run_on_main` work — it never does, and never cancels it either; it warns when `shutdown()` leaves some behind. The handler returns as soon as it hands the work over, so the job is already complete and `shutdown()` finds nothing running. **The loop is yours**, so closing it is your call: poll `scheduler.pending_main_loop_work()` in the lifespan (cheap, no DB) and bound the wait however you like before the loop closes.
+3. Expecting `cancel_job()`/`shutdown()` to kill threads — a handler that never checks `stop_event` runs to completion. Use `shutdown(timeout=...)` to bound the wait; jobs exceeding it are abandoned with a warning. A child process is stopped only through `run_subprocess()`.
+4. Blocking on main-loop resources inside a handler instead of using `progress_hook` / `run_on_main`, or `call_on_main` when the job should wait for the work.
+5. Expecting quiv to wait for `run_on_main` work — it never does, and never cancels it either; it warns when `shutdown()` leaves some behind. The handler returns as soon as it hands the work over, so the job is already complete and `shutdown()` finds nothing running. **The loop is yours**, so closing it is your call: poll `scheduler.pending_main_loop_work()` in the lifespan (cheap, no DB) and bound the wait however you like before the loop closes. If the job should span the work, that is `call_on_main`.
 6. `timezone=` only affects log formatting — scheduling and persistence are always UTC.
 7. Calling `run_task_immediately()` on a `running` or `paused` task raises `TaskNotActiveError` — resume paused tasks with `resume_task()` instead.
+8. Catching `Exception` around `call_on_main` / `run_subprocess` — that swallows `JobCancelledError`, and the job keeps running after a cancel. Let it propagate.

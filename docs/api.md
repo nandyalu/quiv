@@ -226,6 +226,44 @@ Cheap enough to poll. It reads one set under a lock and never touches the databa
 
 It counts every shape `run_on_main` dispatches, including a sync callable that is queued but has not started and so has no future of its own.
 
+### `wait_for_job(job_id: str, timeout: float | None = None) -> Job` / `await_job(...)`
+
+Blocks until the job finishes, and returns it finalized: `status`, `duration_seconds`, and `error_message` are set. A job that already finished returns at once. `await_job()` is the same method as a coroutine, for code on the application's event loop.
+
+```python
+job = scheduler.wait_for_job(job_id, timeout=30)
+job = await scheduler.await_job(job_id, timeout=30)   # in an async endpoint
+```
+
+quiv emits the `JOB_*` event for the job before it wakes a waiter. Emitted, not handled: a listener runs on the main loop and may run after the waiter returns.
+
+Raises:
+
+- `JobNotFoundError` for an unknown id
+- `TimeoutError`, the builtin, when `timeout` passes first. quiv raises the builtin on every supported Python. On 3.10 the `concurrent.futures` and `asyncio` timeout classes are separate, and quiv converts them.
+- `SchedulerStoppedError` when `shutdown()` returned before the job finished, or when the call comes after `shutdown()`
+
+### `wait_for_task(task_id: str, timeout: float | None = None) -> Job` / `await_task(...)`
+
+Blocks until the next job of the task finishes, and returns that job. The job is the next one of that task to finalize: the one running when you call, if there is one, otherwise the next one dispatched. A caller that adds a one-off task holds a `task_id`, not a job id, so this is the method for it:
+
+```python
+@app.post("/refresh")
+async def refresh():
+    task_id = scheduler.add_task("refresh", refresh_all, run_once=True)
+    job = await scheduler.await_task(task_id, timeout=120)
+    return {"status": job.status, "error": job.error_message}
+```
+
+A run-once task deletes its row when its job finishes. A waiter registered before that still receives the job.
+
+Raises:
+
+- `TaskNotFoundError` for an unknown id, and when the task is removed while nothing of it is running
+- `TimeoutError` and `SchedulerStoppedError`, as above
+
+Both pairs are the way to test your own handlers against a real scheduler. See [Testing your own handlers](testing.md#testing-your-own-handlers).
+
 ### `run_task_immediately(task_id: str) -> int`
 
 Queues an already-scheduled task to run now.
@@ -357,6 +395,61 @@ Raises:
 - `MainLoopUnavailableError` if no active Quiv instance is registered, or if the active instance has no main event loop that it can resolve. It inherits `QuivError` and `RuntimeError`.
 
 See [Running on the main event loop](run-on-main.md) for the full walkthrough, dispatch table, and caveats.
+
+## `call_on_main`
+
+```python
+from quiv import call_on_main
+
+call_on_main(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any
+```
+
+The sibling of `run_on_main` that waits. It runs `func` on the main loop and returns what `func` returned. An exception raised by `func` reaches the caller. Every keyword goes to `func`, so the function has no options of its own.
+
+Use it when the handler's real work lives on the main loop. With `run_on_main` the handler returns at once, and quiv records a one-millisecond success whatever the work did. With `call_on_main` the job carries the real duration and the real failure, `JOB_FAILED` fires, `max_retries` applies, and the task's `timeout` cancels the coroutine.
+
+Behavior:
+
+- From a worker thread, sync and async targets both run on the main loop, and the thread blocks until the target finishes.
+- From the main loop's own thread, a sync target runs inline and returns its result. An async target cannot be waited for there, because the wait would block the loop that must run it. That raises `MainLoopUnavailableError`; await it instead.
+- While it waits, quiv watches the job's stop event. When the event is set, the coroutine on the main loop is cancelled and `JobCancelledError` is raised. Outside a job there is no stop event, and the wait has no limit.
+- The work counts in `pending_main_loop_work()` while it runs.
+
+Raises:
+
+- `JobCancelledError` when the job's stop event was set while waiting. Let it propagate; quiv finalizes the job as `cancelled` with no error in the log.
+- `MainLoopUnavailableError`, as `run_on_main` does, and for an async target from the main loop's thread.
+- Whatever `func` raised.
+
+See [Waiting for the result](run-on-main.md#waiting-for-the-result-with-call_on_main).
+
+## `run_subprocess`
+
+```python
+from quiv import run_subprocess
+
+run_subprocess(
+    args: Sequence[str] | str,
+    *,
+    stop_event: threading.Event | None = None,
+    timeout: float | None = None,
+    kill_grace: float = 5.0,
+    check: bool = False,
+    capture_output: bool = False,
+    **popen_kwargs: Any,
+) -> subprocess.CompletedProcess
+```
+
+A drop-in for `subprocess.run` inside a handler. Cooperative cancellation cannot reach a child process on its own: a handler that checks its stop event between steps still waits for the running child. This helper watches the stop event while the child runs.
+
+- When the stop event is set, the child gets `terminate()`, then `kill()` after `kill_grace` seconds if it is still alive, and `JobCancelledError` is raised. It is the same rule quiv applies to a process job.
+- When `timeout` passes, the child is stopped the same way and `subprocess.TimeoutExpired` is raised, as `subprocess.run` does. An existing `except TimeoutExpired` keeps working.
+- `check` and `capture_output` mean what they mean for `subprocess.run`. Other keywords go to `subprocess.Popen`.
+- `stop_event` defaults to the stop event of the job the code runs inside, found through the job context, so a function deep inside a service needs nothing passed to it. Outside a job there is no stop event.
+
+The helper stops the direct child only. Pass `start_new_session=True` to give a child that spawns its own children a process group of its own. On Windows `terminate()` and `kill()` are the same call, so the grace has no effect there.
+
+See [Subprocesses](cancellation.md#subprocesses).
 
 ## Hooks and callback injection
 
@@ -505,6 +598,10 @@ When the pool is full, quiv defers due tasks rather than queuing them unboundedl
 
 - `Quiv(...)` — create scheduler instance
 - `run_on_main(func, *args, **kwargs)` — fire-and-forget dispatch onto the active Quiv's main loop
+- `call_on_main(func, *args, **kwargs)` — the same dispatch, waiting for the result; the job's stop event cancels the wait
+- `run_subprocess(args, *, stop_event=None, timeout=None, kill_grace=5.0, ...)` — `subprocess.run` that a cancel can stop
+- `wait_for_job(job_id, timeout)` / `await_job(...)` — block until a job finishes, return it finalized
+- `wait_for_task(task_id, timeout)` / `await_task(...)` — block until the task's next job finishes, return it
 - `add_task(...)` — schedule a task, returns `task_id`
 - `start()` / `startup()` — start the scheduler loop
 - `shutdown(timeout=None)` / `stop(timeout=None)` — stop scheduler and clean up resources

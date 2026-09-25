@@ -113,7 +113,7 @@ quiv keeps its thread pool and gains a pool of processes. A process job runs in 
 
 ## Phase 8 — Waiting on work (`v1.2.0`)
 
-**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-8-waiting-on-work.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-8-waiting-on-work.md). Does not depend on Phase 7 and ships before it.
+**Status: 🚧 implemented, not released** — the code, tests, and docs landed on `dev` on 2026-09-25; the plan is [`plans/phase-8-waiting-on-work.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-8-waiting-on-work.md). Does not depend on Phase 7 and ships before it, as `v1.2.0`.
 
 Everything here lets a caller wait on something and lets cancellation reach it.
 

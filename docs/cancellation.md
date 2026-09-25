@@ -171,6 +171,31 @@ If the signature of your handler has no `stop_event` and no `**kwargs`, quiv doe
 
 Write a handler this way when the task is short. You give up the early exit, and you keep the correct status at shutdown.
 
+## Subprocesses
+
+A stop event cannot reach a child process. A handler that checks the event between steps still waits for the running child, so yt-dlp or ffmpeg runs to its end or to its own timeout. `run_subprocess` closes that gap:
+
+```python
+from quiv import run_subprocess
+
+def convert(path: str) -> None:
+    run_subprocess(["ffmpeg", "-i", path, "-c:v", "libx264", out(path)], timeout=900)
+```
+
+It is a drop-in for `subprocess.run`. While the child runs, quiv watches the job's stop event. When the event is set, the child gets `terminate()`, then `kill()` after `kill_grace` seconds if it is still alive, and the helper raises `JobCancelledError`. The default grace is 5 seconds. A `timeout` stops the child the same way and raises `subprocess.TimeoutExpired`, as the stdlib does.
+
+The stop event is found through the job context, so the call above needs no `stop_event` parameter, at any depth in the handler's call stack. Pass `stop_event=` yourself when the call runs on a thread you started, which the context does not reach.
+
+The helper stops the direct child only. A child that starts children of its own can leave them running; pass `start_new_session=True` to give it a process group of its own. On Windows `terminate()` and `kill()` are the same call.
+
+## Helpers raise `JobCancelledError`
+
+`run_subprocess` and [`call_on_main`](run-on-main.md#waiting-for-the-result-with-call_on_main) both wait on something, and both raise `JobCancelledError` when the job's stop event is set while they wait. Let it propagate. quiv treats it as the stop you asked for: the job finalizes as `cancelled`, the log gets one info line, and `error_message` stays empty, or holds the timeout text when a timeout set the event.
+
+A handler that catches `Exception` around the call swallows the cancellation and keeps running, exactly as a handler that ignores its stop event does. Catch what you need and re-raise, or catch `JobCancelledError` first and return.
+
+Raised by hand with no stop requested, `JobCancelledError` is an ordinary exception, and the job fails.
+
 ## Combining with progress callbacks
 
 Many handlers check `stop_event` and report progress in the same loop:

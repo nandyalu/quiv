@@ -139,6 +139,26 @@ def run_on_main(
 - `run_on_main` returns `None`. It returns at once on every path that crosses threads, and for an async target that it puts on the current loop. One case blocks: a **sync** target called from the thread of the main loop runs inline, on the stack of the caller, and the caller waits for it to finish.
 - `run_on_main` raises `MainLoopUnavailableError` when no active Quiv instance is registered, and when the active Quiv has no main loop that it can resolve. Both are configuration faults, such as a call to `run_on_main` before `Quiv.start()`. The exception inherits `QuivError` and `RuntimeError`.
 
+## Waiting for the result with `call_on_main`
+
+`run_on_main` hands the work over and returns. `call_on_main` hands the work over and waits:
+
+```python
+from quiv import call_on_main
+
+def handler():
+    total = call_on_main(recompute_totals)   # runs on the main loop; this thread waits
+    log.info("recomputed %d rows", total)
+```
+
+Same dispatch, same active instance, same reach. Three things differ. The result comes back. An exception raised by the target reaches the handler, so the job fails, `JOB_FAILED` fires, and `max_retries` applies. And the job's stop event ends the wait: when `cancel_job()`, `remove_task()`, `shutdown()`, or the task's `timeout` sets it, quiv cancels the coroutine on the main loop and raises `JobCancelledError` in the handler. Let that propagate; the job finalizes as `cancelled` with no error in the log.
+
+This matters for a handler whose whole body is one hop. With `run_on_main` such a handler returns in a millisecond, and the job history shows a millisecond success whatever the work did. A task `timeout` can never fire, because the job has already ended. With `call_on_main` the job spans the work.
+
+Every keyword goes to the target, so `call_on_main` has no options of its own. From the main loop's own thread a sync target runs inline, as it does for `run_on_main`. An async target raises `MainLoopUnavailableError` there, because waiting would block the loop that must run it; await it instead.
+
+The work counts in `pending_main_loop_work()` while it runs. A job that `shutdown(timeout=...)` abandons while it waits leaves that count above zero, which is correct: the work is still on your loop.
+
 ## This work outlives shutdown, and closing the loop is yours
 
 `run_on_main` returns as soon as it hands the work over. The job that called it then finishes, and quiv counts that job as complete, although the work itself has not started.

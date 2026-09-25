@@ -368,12 +368,12 @@ Every child is `sys.executable -c "<script>"`, so the tests need nothing install
 
 ## Exit checklist
 
-- [ ] `uv run pytest` green; coverage at or above the gate.
-- [ ] `uv run mypy quiv` zero errors.
-- [ ] Every test in §8 present and passing; the three timeout tests pass on 3.10 as well as 3.14.
-- [ ] `docs/testing.md` opens with "Testing your own handlers", and the example in it runs as written.
-- [ ] `docs/api.md`, `docs/run-on-main.md`, `docs/cancellation.md`, `docs/exceptions.md`, `docs/bigger-applications.md` updated; `uv run zensical build --clean` clean.
-- [ ] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
-- [ ] `CLAUDE.md` key patterns updated.
-- [ ] `docs/release-notes.md` entry; version bumped; `docs/roadmap.md` Phase 8 marked complete with the date.
+- [x] `uv run pytest` green; coverage at or above the gate (269 tests, 100%, 2026-09-25).
+- [x] `uv run mypy quiv` zero errors.
+- [x] Every test in §8 present and passing, on Linux, macOS, and Windows, 3.10 through 3.14 (the test names differ from §8 in places; the coverage is the same).
+- [x] `docs/testing.md` opens with "Testing your own handlers".
+- [x] `docs/api.md`, `docs/run-on-main.md`, `docs/cancellation.md`, `docs/exceptions.md` updated; `uv run zensical build --clean` clean. **Not done:** the `docs/bigger-applications.md` §5 endpoint example.
+- [x] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated.
+- [x] `CLAUDE.md` key patterns updated.
+- [ ] `docs/release-notes.md` entry; version bumped to `1.2.0`; `docs/roadmap.md` Phase 8 marked complete with the date. Release step.
 - [ ] `trailarr/quiv_findings.md` and `ten-acre/quiv_findings.md` items for this phase are now actionable; tick nothing there, that is the applications' work.

@@ -16,17 +16,17 @@ Key facts for working with quiv:
 
 - [Home / overview](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/index.md): what quiv is, quick FastAPI example, caveats
 - [Getting Started](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/getting-started.md): install, scheduler setup, first task, FastAPI lifespan integration, logging, troubleshooting
-- [API reference](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/api.md): `Quiv` constructor, `add_task`, task/job operations, `run_on_main`, models, events, `QuivConfig`, pool sizing
+- [API reference](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/api.md): `Quiv` constructor, `add_task`, task/job operations, waiting for a job (`wait_for_job`/`await_job`, `wait_for_task`/`await_task`), `run_on_main`, `call_on_main`, `run_subprocess`, models, events, `QuivConfig`, pool sizing
 - [Bigger Applications](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/bigger-applications.md): structuring quiv in multi-module apps
 - [Architecture](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/architecture.md): scheduler / persistence / execution layer design
 - [Progress Callbacks](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/progress-callbacks.md): `progress_hook` and main-loop dispatch
-- [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere; why quiv never waits for or cancels that work, and `pending_main_loop_work()`
+- [Run on Main Loop](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/run-on-main.md): `run_on_main` helper — dispatch to the main loop from anywhere; `call_on_main`, the sibling that waits for the result and lets the job span the work; why quiv never waits for or cancels fire-and-forget work, and `pending_main_loop_work()`
 - [Event Listeners](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/event-listeners.md): task/job lifecycle events and typed callbacks
-- [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `stop_event`
+- [Cancellation](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/cancellation.md): cooperative cancellation with `stop_event`; `run_subprocess` for a child process a cancel can stop; `JobCancelledError` from the helpers
 - [Failure Handling](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/failure-handling.md): per-task cooperative timeouts, retry with exponential backoff, jitter
 - [Observability](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/observability.md): `stats()` snapshot, filtered/paginated job and task queries, `pending_main_loop_work()`, admin endpoints
 - [Exceptions](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/exceptions.md): the `QuivError` hierarchy
-- [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): patterns for testing handlers and the scheduler
+- [Testing](https://raw.githubusercontent.com/nandyalu/quiv/main/docs/testing.md): testing your own handlers against a real scheduler with `wait_for_task`; what quiv's own suite covers
 
 ## Optional
 

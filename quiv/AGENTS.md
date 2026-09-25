@@ -108,6 +108,12 @@ Works from anywhere in a task's call stack (no parameter threading) and also fro
 
 **quiv never waits for work handed over this way, and never cancels it.** The handler returns the instant it hands the work over, so the job is already complete and `shutdown()` finds nothing running — measured at ~12 ms while a 1 s coroutine was still queued. **The loop is the application's**: quiv is a guest on it, does not close it, and cannot know whether a half-finished callable should be stopped or allowed to end. `shutdown()` warns, naming how many callables it left. `scheduler.pending_main_loop_work() -> int` reports the same count at any time — poll it in the lifespan before letting the loop close, and bound that wait however the app wants. Cheap to poll: one set under a lock, no database, unlike `stats()`. It counts a queued sync callable too, which has no future of its own.
 
+**`call_on_main(func, *args, **kwargs) -> Any` waits.** Same dispatch, but the result comes back, the target's exception reaches the handler (the job fails, `JOB_FAILED` fires, retries apply), and the job's stop event cancels the coroutine and raises `JobCancelledError` — let it propagate, quiv finalizes the job as `cancelled` with no error logged. Use it when a handler's whole body is a hop to the main loop; with `run_on_main` such a job records a 1 ms success whatever the work did, and the task `timeout` can never fire. Every keyword goes to the target (no options of its own). From the main loop's own thread a sync target runs inline; an async target raises `MainLoopUnavailableError` — await it there.
+
+**`run_subprocess(args, *, stop_event=None, timeout=None, kill_grace=5.0, check=False, capture_output=False, **popen_kwargs)`** — a drop-in for `subprocess.run` inside a handler that a cancel can stop. It watches the job's stop event (found through the job context, no parameter needed at any depth); on stop: `terminate()`, `kill()` after `kill_grace`, then `JobCancelledError`. `timeout` raises `subprocess.TimeoutExpired` as the stdlib does. Stops the direct child only — `start_new_session=True` for a process group. Pass `stop_event=` only on a thread you started yourself.
+
+**Waiting for a job.** `wait_for_job(job_id, timeout)` / `await_job(...)` and `wait_for_task(task_id, timeout)` / `await_task(...)` return the finalized `Job` (`status`, `duration_seconds`, `error_message`). `wait_for_task` returns the next job of the task to finish — the way to wait on a one-off you just added from an endpoint. Timeouts raise the builtin `TimeoutError`; after `shutdown()` they raise `SchedulerStoppedError`; `remove_task` on a task with nothing running fails its waiters with `TaskNotFoundError`. This is how to test handlers against a real `Quiv()` instead of stubbing `add_task`.
+
 ## Event listeners
 
 ```python
@@ -151,15 +157,17 @@ app = FastAPI(lifespan=lifespan)
 1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite file. In tests, call it in a `finally:` block.
 2. **Expecting persistence** — the DB is temporary by design; re-`add_task` on every startup.
 3. **Unpicklable `args`/`kwargs`** — lambdas, inner functions, open handles fail pickle serialization. Pass plain data; make `func` a module-level callable.
-4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `stop_event` runs to completion.
-5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `progress_hook`/`run_on_main` to hop back.
-6. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
-7. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
-8. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
-9. **No log output** — quiv never configures logging. Configure the `"Quiv"` logger (or pass `logger=`) to see scheduler logs.
+4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `stop_event` runs to completion. A child process needs `run_subprocess()` to be stopped; `subprocess.run` never sees the event.
+5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `progress_hook`/`run_on_main` to hop back, or `call_on_main` when the job should span the work.
+6. **Catching `Exception` around `call_on_main`/`run_subprocess`** — that swallows `JobCancelledError` and the job keeps running after a cancel. Let it propagate.
+7. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
+8. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
+9. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
+10. **No log output** — quiv never configures logging. Configure the `"Quiv"` logger (or pass `logger=`) to see scheduler logs.
+11. **Stubbing `add_task` in tests** — a stub proves nothing about the schedule, cancellation, or the events. Use a real `Quiv()` and `wait_for_task(task_id, timeout=...)`.
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`, `MainLoopUnavailableError` (raised by `run_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
 
 `run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).

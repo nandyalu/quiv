@@ -13,6 +13,8 @@ Every exception that quiv raises inherits from `QuivError`.
 	- `TaskNotActiveError`
 	- `TaskNotFoundError`
 	- `JobNotFoundError`
+	- `JobCancelledError`
+	- `SchedulerStoppedError`
 	- `MainLoopUnavailableError` (also inherits `RuntimeError`)
 
 ## Exception reference
@@ -61,9 +63,17 @@ quiv raises this when a task id is unknown. Every method that takes a `task_id` 
 
 quiv raises this when it looks up a job id and finds no row. This happens while it marks a job as running, and while it finalizes a job.
 
+### `JobCancelledError`
+
+A quiv helper raises this inside a handler when the job's stop event was set while the helper waited. `call_on_main()` raises it after it cancels the coroutine on the main loop. `run_subprocess()` raises it after it stops the child. Let it propagate: quiv treats it as the stop you asked for, finalizes the job as `cancelled`, and writes no error to the log. Raised by hand with no stop requested, it is an ordinary exception, and the job fails.
+
+### `SchedulerStoppedError`
+
+The wait methods raise this: `wait_for_job()`, `await_job()`, `wait_for_task()`, and `await_task()`. There are two causes: `shutdown()` returned before the job finished, which happens when `shutdown(timeout=...)` abandons the job, or the call came after `shutdown()`.
+
 ### `MainLoopUnavailableError`
 
-quiv raises this from `run_on_main()` when it cannot reach a main event loop. There are two causes: no active Quiv instance is registered, or the active Quiv has no main loop that it can resolve. Pass `main_loop=` to `Quiv()`, or call `start()` from the thread that runs the main loop.
+quiv raises this from `run_on_main()` and `call_on_main()` when it cannot reach a main event loop. There are two causes: no active Quiv instance is registered, or the active Quiv has no main loop that it can resolve. Pass `main_loop=` to `Quiv()`, or call `start()` from the thread that runs the main loop. `call_on_main()` raises it for one more cause: an async target passed from the main loop's own thread, where waiting would block the loop that must run it.
 
 This exception inherits `RuntimeError` as well as `QuivError`. quiv raised a bare `RuntimeError` here before v1.0.0, so an existing `except RuntimeError` clause keeps working. `except QuivError` now catches it too.
 

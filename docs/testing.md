@@ -16,6 +16,38 @@ uv run pytest tests/test_scheduler.py
 uv run pytest tests/test_scheduler.py::test_backpressure_skips_dispatch_when_pool_full
 ```
 
+## Testing your own handlers
+
+Test a handler through a real scheduler, not through a stub of `add_task`. A stub proves the handler was registered. It proves nothing about the schedule, the injected parameters, cancellation, or the events. `wait_for_task()` makes the real thing a short test:
+
+```python
+from quiv import JobStatus, Quiv
+
+def test_refresh_runs_and_succeeds():
+    scheduler = Quiv()
+    try:
+        task_id = scheduler.add_task("refresh", refresh_all, run_once=True)
+        scheduler.start()
+        job = scheduler.wait_for_task(task_id, timeout=10)
+        assert job.status == JobStatus.COMPLETED
+        assert job.error_message is None
+    finally:
+        scheduler.shutdown()
+```
+
+The job comes back finalized, so `status`, `duration_seconds`, and `error_message` are all there to assert on. For a recurring task, each call to `wait_for_task()` returns the next job. For a job id you already hold, use `wait_for_job()`.
+
+In an async test on the application's loop, `await_task()` and `await_job()` are the same methods as coroutines:
+
+```python
+async def test_refresh_endpoint(client):
+    response = await client.post("/refresh")          # the endpoint adds a one-off
+    job = await scheduler.await_task(response.json()["task_id"], timeout=10)
+    assert job.status == JobStatus.COMPLETED
+```
+
+Both raise the builtin `TimeoutError` when the deadline passes, and `SchedulerStoppedError` if the scheduler shut down first.
+
 ## Test architecture
 
 Most tests need a running asyncio event loop, because quiv dispatches callbacks onto it. The `running_main_loop` fixture in `conftest.py` starts an event loop in a background thread and yields it to the test. Every test calls `scheduler.shutdown()` in a `finally` block, which releases the threads and deletes the temporary database files.
