@@ -1,8 +1,8 @@
-# Phase 8 — Waiting on work (v1.3.0)
+# Phase 8 — Waiting on work (v1.2.0)
 
 Everything in this phase lets a caller wait on something and lets cancellation reach it. It comes from the 2026-09-25 review of the two applications that run quiv. In ten-acre every handler hands its work to the main loop with `run_on_main()` and returns, so quiv records a one-millisecond success while the real work runs, fails, or hangs unseen; a hung request there stalled every alarm for an evening and no quiv timeout could fire. In trailarr the HTTP endpoints that add a one-off task cannot report its result, and a cancel cannot reach the yt-dlp and ffmpeg children a job runs, so they finish or time out on their own. Neither application tests scheduling against a real instance, because nothing lets a test wait for a job.
 
-Four additions, all additive: waiting for a job or for a task's next job (sync and async), `call_on_main()`, `run_subprocess()`, and two exceptions. No 1.0 name or default changes. **This phase does not depend on Phase 7** and may ship before it; the version in the title is provisional and is fixed at release, as `plans/README.md` explains.
+Four additions, all additive: waiting for a job or for a task's next job (sync and async), `call_on_main()`, `run_subprocess()`, and two exceptions. No 1.0 name or default changes. **This phase does not depend on Phase 7 and ships before it**, as `v1.2.0`; the order was decided on 2026-09-25 and `plans/README.md` records it. Phase 7's §0, the three-platform CI matrix, lands before this phase because the code here is platform-sensitive.
 
 **Decisions settled on 2026-09-25** (do not reopen):
 

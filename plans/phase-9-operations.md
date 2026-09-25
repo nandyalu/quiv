@@ -1,8 +1,8 @@
-# Phase 9 — Operations (v1.4.0)
+# Phase 9 — Operations (v1.3.0)
 
 This phase is what running quiv in two containers taught. Neither application can ask quiv whether it is healthy; the soak script reads the loop thread's liveness through an undocumented attribute. Both applications call `shutdown()` with no timeout inside Docker's default ten-second stop grace, and one of them runs nine-minute jobs. Both reinvented the same restart practice: re-add tasks at boot, stagger the delays, restore one-off times from their own store. trailarr checks for an existing one-off by scanning every task's name, and both applications hit "run it again after the current run" and had to drop the request.
 
-Three small code additions and one documentation page, all additive: `is_running` and `QuivStats.loop_alive`, `run_task_immediately(after_current=True)`, `get_all_tasks(task_name=...)`, and a "Running in a container" page with the restart and daily-at-a-time recipes. **This phase does not depend on Phase 7 or Phase 8** and may ship before either; the version in the title is provisional.
+Three small code additions and one documentation page, all additive: `is_running` and `QuivStats.loop_alive`, `run_task_immediately(after_current=True)`, `get_all_tasks(task_name=...)`, and a "Running in a container" page with the restart and daily-at-a-time recipes. **This phase does not depend on Phase 7 or Phase 8.** The order decided on 2026-09-25 is Phase 8, then this phase as `v1.3.0`, then Phase 7.
 
 **Decisions settled on 2026-09-25** (do not reopen):
 

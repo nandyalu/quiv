@@ -84,7 +84,7 @@ This is not calendar scheduling. `run_at` names one instant for one run. Recurre
 
 The three caveats in the README were reviewed on 2026-09-17: the temporary database, the single process, and the picklable arguments. Process jobs became Phase 7. The other two stay out of scope, and [Out of scope](#out-of-scope-for-v100) records why.
 
-On 2026-09-25 the two applications that run quiv, trailarr and ten-acre, were reviewed against their running containers. Neither had logged a scheduler fault, and both carried the same workarounds: handlers that hand all their work to the main loop and leave quiv nothing to record, endpoints that add a one-off and cannot report it, a cancel that cannot reach a child process, a `shutdown()` with no timeout inside a ten-second stop grace, no way to ask whether the loop is alive, and tests that stub quiv out. That review produced Phases 8 and 9. They do not build on Phase 7 and may ship before it.
+On 2026-09-25 the two applications that run quiv, trailarr and ten-acre, were reviewed against their running containers. Neither had logged a scheduler fault, and both carried the same workarounds: handlers that hand all their work to the main loop and leave quiv nothing to record, endpoints that add a one-off and cannot report it, a cancel that cannot reach a child process, a `shutdown()` with no timeout inside a ten-second stop grace, no way to ask whether the loop is alive, and tests that stub quiv out. That review produced Phases 8 and 9. They do not build on Phase 7, and they ship before it: Phase 8 as `v1.2.0`, Phase 9 as `v1.3.0`, and Phase 7 as `v1.4.0`. The phase numbers stay; the versions moved.
 
 ## `v1.1.0` — `run_at` on `update_task()` and `pending_main_loop_work()`
 
@@ -94,7 +94,7 @@ Not a roadmap phase. Two additive changes shipped ahead of Phase 7. `update_task
 
 quiv never waits for that work and never cancels it, because the loop belongs to the application. A `shutdown` that drained the work was written and then removed during review. It could hang in three ways, and one case has no fix: a job abandoned by `shutdown(timeout=...)` runs on a thread that cannot be stopped, so it can hand work over after any drain has finished. The count is the feature. `CLAUDE.md` records the decision so that a drain is not proposed again.
 
-## Phase 7 — Process jobs (`v1.2.0`)
+## Phase 7 — Process jobs (`v1.4.0`)
 
 **Status: 📋 planned** — decisions settled 2026-09-17; the plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md).
 
@@ -111,9 +111,9 @@ quiv keeps its thread pool and gains a pool of processes. A process job runs in 
 
 `forkserver` would cut the start cost of each job on Linux and macOS. It is documented as a later option and not implemented in this phase.
 
-## Phase 8 — Waiting on work (`v1.3.0`)
+## Phase 8 — Waiting on work (`v1.2.0`)
 
-**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-8-waiting-on-work.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-8-waiting-on-work.md). Does not depend on Phase 7.
+**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-8-waiting-on-work.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-8-waiting-on-work.md). Does not depend on Phase 7 and ships before it.
 
 Everything here lets a caller wait on something and lets cancellation reach it.
 
@@ -124,9 +124,9 @@ Everything here lets a caller wait on something and lets cancellation reach it.
 
 **Exit criteria:** the tests in the plan pass on 3.10 through 3.14; `docs/testing.md` opens with a working recipe for testing an application's own handlers against a real instance.
 
-## Phase 9 — Operations (`v1.4.0`)
+## Phase 9 — Operations (`v1.3.0`)
 
-**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8.
+**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8; ships after Phase 8 and before Phase 7.
 
 1. **Health** — `is_running` and `QuivStats.loop_alive`: `start()` was called, `shutdown()` was not, and the loop thread is alive. Cheap enough for a probe.
 2. **`run_task_immediately(after_current=True)`** — a running recurring task runs again as soon as its current job finalizes, instead of the call raising.
