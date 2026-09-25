@@ -14,6 +14,7 @@ from .context import _current_job_id, _current_quiv
 from .exceptions import (
     ConfigurationError,
     HandlerRegistrationError,
+    JobCancelledError,
     TaskNotFoundError,
 )
 from .models import Event, JobStatus, Task, TaskDB, TaskStatus
@@ -720,6 +721,13 @@ class Quiv(QuivBase):
             f_kwargs,
         )
 
+    def _stop_requested(self, job_id: str) -> bool:
+        """Whether the job's stop event is set."""
+
+        with self._registries_lock:
+            stop_event = self.stop_events.get(job_id)
+        return stop_event is not None and stop_event.is_set()
+
     def _run_job(
         self,
         job_id: str,
@@ -779,13 +787,27 @@ class Quiv(QuivBase):
         except Exception as e:
             end_time = self._now_utc()
             duration = end_time - start_time
-            job_error = e
-            self._logger.exception(
-                f"'{task_name}' (Job {job_id}) raised an exception at"
-                f" {self._to_display_timezone(end_time)}"
-                f" [runtime: {duration}]: {e}"
-            )
-            status = JobStatus.FAILED
+            if isinstance(e, JobCancelledError) and self._stop_requested(
+                job_id
+            ):
+                # A quiv helper (call_on_main, run_subprocess) unwound the
+                # handler because the job's stop event was set. That is
+                # the cancellation the caller asked for, not a failure:
+                # no traceback, no error message. The finally block below
+                # sees the stop event and finalizes as CANCELLED.
+                self._logger.info(
+                    f"'{task_name}' (Job {job_id}) stopped at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" (Duration: {duration})"
+                )
+            else:
+                job_error = e
+                self._logger.exception(
+                    f"'{task_name}' (Job {job_id}) raised an exception at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" [runtime: {duration}]: {e}"
+                )
+                status = JobStatus.FAILED
         finally:
             _current_job_id.reset(job_token)
             _current_quiv.reset(ctx_token)

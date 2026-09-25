@@ -5,7 +5,7 @@ exceptions for convenient imports.
 """
 
 from .config import QuivConfig, resolve_timezone
-from .context import run_on_main
+from .context import call_on_main, run_on_main
 from .exceptions import (
     ConfigurationError,
     DatabaseInitializationError,
@@ -22,12 +22,15 @@ from .exceptions import (
 )
 from .models import Event, Job, JobStatus, QuivStats, Task, TaskStatus
 from .scheduler import Quiv
+from .subprocesses import run_subprocess
 
 __all__ = [
     "Quiv",
     "QuivConfig",
     "resolve_timezone",
     "run_on_main",
+    "call_on_main",
+    "run_subprocess",
     "QuivError",
     "ConfigurationError",
     "InvalidTimezoneError",
