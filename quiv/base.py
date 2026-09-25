@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Coroutine
 from datetime import datetime, timezone, tzinfo
@@ -23,6 +24,7 @@ from .exceptions import (
     DatabaseInitializationError,
     HandlerNotRegisteredError,
     HandlerRegistrationError,
+    SchedulerStoppedError,
 )
 from .execution import ExecutionLayer
 from .models import (
@@ -178,6 +180,11 @@ class QuivBase(ABC):
         # quiv never waits for it, because the loop is the app's.
         self._main_loop_work: set[Any] = set()
         self._main_loop_work_lock = threading.Lock()
+
+        # Futures that _run_job resolves with the finalized Job. Keyed by
+        # job id and by task id; both guarded by _registries_lock.
+        self._job_waiters: dict[str, list[Future[Job]]] = {}
+        self._task_waiters: dict[str, list[Future[Job]]] = {}
 
         self.persistence = PersistenceLayer(self._engine, self._now_utc)
         self.execution = ExecutionLayer(
@@ -682,6 +689,17 @@ class QuivBase(ABC):
                 )
             self.executor.shutdown(wait=False, cancel_futures=True)
 
+        # With timeout=None the pool drained and both waiter tables are
+        # empty already. With a timeout, an abandoned job's waiter would
+        # otherwise block until its own timeout, or forever without one;
+        # and that job's _run_job can raise against the deleted database
+        # before it reaches the waiters. This is the one reliable place.
+        self._fail_all_waiters(
+            SchedulerStoppedError(
+                "shutdown() returned before the job finished."
+            )
+        )
+
         try:
             self._engine.dispose()
             for suffix in ("", "-wal", "-shm"):
@@ -760,6 +778,223 @@ class QuivBase(ABC):
 
         with self._main_loop_work_lock:
             return len(self._main_loop_work)
+
+    # ------------------------------------------------------------------
+    # Waiting for a job
+    # ------------------------------------------------------------------
+
+    def _add_waiter(
+        self, table: dict[str, list[Future[Job]]], key: str
+    ) -> Future[Job]:
+        """Register a future that ``_run_job`` resolves when ``key`` finalizes.
+
+        Raises:
+            SchedulerStoppedError: After ``shutdown()``; nothing will finish.
+        """
+
+        if self._shutdown:
+            raise SchedulerStoppedError(
+                "The scheduler has shut down; no job will finish."
+            )
+        fut: Future[Job] = Future()
+        with self._registries_lock:
+            table.setdefault(key, []).append(fut)
+        return fut
+
+    def _remove_waiter(
+        self, table: dict[str, list[Future[Job]]], key: str, fut: Future[Job]
+    ) -> None:
+        """Forget a waiter that returned, timed out, or was cancelled."""
+
+        with self._registries_lock:
+            waiters = table.get(key)
+            if waiters is not None and fut in waiters:
+                waiters.remove(fut)
+                if not waiters:
+                    del table[key]
+
+    def _resolve_waiters(
+        self, table: dict[str, list[Future[Job]]], key: str, job: Job
+    ) -> None:
+        """Hand the finalized job to everyone waiting on ``key``."""
+
+        with self._registries_lock:
+            waiters = table.pop(key, [])
+        for fut in waiters:
+            # A waiter that timed out, or whose coroutine was cancelled,
+            # is already done; set_result on it raises InvalidStateError.
+            if not fut.done():
+                fut.set_result(job)
+
+    def _fail_waiters(
+        self,
+        table: dict[str, list[Future[Job]]],
+        key: str,
+        exc: BaseException,
+    ) -> None:
+        """Wake everyone waiting on ``key`` with ``exc``."""
+
+        with self._registries_lock:
+            waiters = table.pop(key, [])
+        for fut in waiters:
+            if not fut.done():
+                fut.set_exception(exc)
+
+    def _fail_all_waiters(self, exc: BaseException) -> None:
+        """Wake every waiter with ``exc``; used by ``shutdown()``."""
+
+        with self._registries_lock:
+            pending = [
+                fut
+                for waiters in (
+                    *self._job_waiters.values(),
+                    *self._task_waiters.values(),
+                )
+                for fut in waiters
+            ]
+            self._job_waiters.clear()
+            self._task_waiters.clear()
+        for fut in pending:
+            if not fut.done():
+                fut.set_exception(exc)
+
+    @staticmethod
+    def _is_terminal(status: str) -> bool:
+        return status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+        )
+
+    @staticmethod
+    def _wait(fut: Future[Job], what: str, timeout: float | None) -> Job:
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            # Its own class on 3.10, an alias of the builtin from 3.11.
+            # Raise the builtin so the contract is one class everywhere.
+            raise TimeoutError(
+                f"{what} did not finish within {timeout}s"
+            ) from None
+
+    def wait_for_job(self, job_id: str, timeout: float | None = None) -> Job:
+        """Block until a job finishes, and return it finalized.
+
+        The returned :class:`Job` carries ``status``,
+        ``duration_seconds``, and ``error_message``. quiv emits the
+        ``JOB_*`` event for the job before it wakes a waiter. A job that
+        already finished returns at once.
+
+        Args:
+            job_id (str): The job to wait for.
+            timeout (float, Optional=None): Seconds to wait; ``None``
+                waits without limit.
+
+        Returns:
+            Job: The finalized job.
+
+        Raises:
+            JobNotFoundError: If no job with that id exists.
+            TimeoutError: If ``timeout`` passed first. The builtin class,
+                on every supported Python.
+            SchedulerStoppedError: If ``shutdown()`` returned before the
+                job finished, or was called before this method.
+        """
+
+        fut = self._add_waiter(self._job_waiters, job_id)
+        try:
+            # Register first, then read. _run_job writes the terminal
+            # status and then pops the waiters, so a waiter registered
+            # before the pop is resolved by it, and one registered after
+            # the pop sees the terminal status here.
+            job = self.get_job(job_id)
+            if self._is_terminal(job.status):
+                return job
+            return self._wait(fut, f"Job '{job_id}'", timeout)
+        finally:
+            self._remove_waiter(self._job_waiters, job_id, fut)
+
+    async def await_job(
+        self, job_id: str, timeout: float | None = None
+    ) -> Job:
+        """Await a job's completion; the async form of :meth:`wait_for_job`.
+
+        For code on the application's event loop. Same arguments, same
+        result, same exceptions. ``timeout`` raises the builtin
+        ``TimeoutError`` here too.
+        """
+
+        fut = self._add_waiter(self._job_waiters, job_id)
+        try:
+            job = self.get_job(job_id)
+            if self._is_terminal(job.status):
+                return job
+            try:
+                return await asyncio.wait_for(
+                    asyncio.wrap_future(fut), timeout
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Job '{job_id}' did not finish within {timeout}s"
+                ) from None
+        finally:
+            self._remove_waiter(self._job_waiters, job_id, fut)
+
+    def wait_for_task(
+        self, task_id: str, timeout: float | None = None
+    ) -> Job:
+        """Block until the next job of a task finishes, and return it.
+
+        The job returned is the next job of that task to finalize: the
+        one running when this is called if there is one, otherwise the
+        next one dispatched. A run-once task deletes its row when its
+        job finishes; a waiter registered before that still gets the job.
+
+        Args:
+            task_id (str): The task whose next job to wait for.
+            timeout (float, Optional=None): Seconds to wait; ``None``
+                waits without limit.
+
+        Returns:
+            Job: The finalized job.
+
+        Raises:
+            TaskNotFoundError: If no task with that id exists, or if the
+                task is removed while nothing of it is running.
+            TimeoutError: If ``timeout`` passed first.
+            SchedulerStoppedError: If ``shutdown()`` returned before the
+                job finished, or was called before this method.
+        """
+
+        fut = self._add_waiter(self._task_waiters, task_id)
+        try:
+            self.get_task(task_id)  # TaskNotFoundError propagates
+            return self._wait(fut, f"Task '{task_id}'", timeout)
+        finally:
+            self._remove_waiter(self._task_waiters, task_id, fut)
+
+    async def await_task(
+        self, task_id: str, timeout: float | None = None
+    ) -> Job:
+        """Await a task's next job; the async form of :meth:`wait_for_task`.
+
+        For code on the application's event loop. Same arguments, same
+        result, same exceptions.
+        """
+
+        fut = self._add_waiter(self._task_waiters, task_id)
+        try:
+            self.get_task(task_id)
+            try:
+                return await asyncio.wait_for(
+                    asyncio.wrap_future(fut), timeout
+                )
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Task '{task_id}' did not finish within {timeout}s"
+                ) from None
+        finally:
+            self._remove_waiter(self._task_waiters, task_id, fut)
 
     def stop(self, timeout: float | None = None) -> None:  # pragma: no cover
         """Stop scheduler loop, cancel jobs, and release resources.

@@ -34,6 +34,20 @@ class JobNotFoundError(QuivError):
     """Raised when a job record is not found."""
 
 
+class JobCancelledError(QuivError):
+    """Raised inside a handler by a quiv helper when the job's stop event
+    was set while the helper waited.
+
+    ``call_on_main()`` and ``run_subprocess()`` raise it. Let it
+    propagate: quiv finalizes the job as ``CANCELLED``.
+    """
+
+
+class SchedulerStoppedError(QuivError):
+    """Raised by the wait methods when ``shutdown()`` ran before the job
+    finished, or when they are called after ``shutdown()``."""
+
+
 class MainLoopUnavailableError(QuivError, RuntimeError):
     """Raised when ``run_on_main()`` cannot reach a main event loop.
 

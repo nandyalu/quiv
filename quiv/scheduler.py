@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from .base import QuivBase
 from .config import QuivConfig
-from .context import _current_quiv
+from .context import _current_job_id, _current_quiv
 from .exceptions import (
     ConfigurationError,
     HandlerRegistrationError,
@@ -518,10 +518,12 @@ class Quiv(QuivBase):
         task = self.get_task(task_id)
 
         # Cancel any running job for this task before deleting
+        has_running_job = False
         running_jobs = self.persistence.get_all_jobs(status=JobStatus.RUNNING)
         for job in running_jobs:
             if job.task_id != task_id or job.id is None:
                 continue
+            has_running_job = True
             with self._registries_lock:
                 stop_event = self.stop_events.get(job.id)
             if stop_event is not None:
@@ -534,6 +536,17 @@ class Quiv(QuivBase):
         with self._registries_lock:
             self.registry.pop(task_id, None)
             self.progress_callbacks.pop(task_id, None)
+        if not has_running_job:
+            # A running job finalizes on its own and resolves the task's
+            # waiters with that job. With nothing running, no job will
+            # ever come, so the waiters learn the task is gone.
+            self._fail_waiters(
+                self._task_waiters,
+                task_id,
+                TaskNotFoundError(
+                    f"Task '{task_id}' was removed before a job of it ran."
+                ),
+            )
         self._logger.info(f"Task '{task_id}' removed")
         self._emit_event(Event.TASK_REMOVED, task)
         self._wake_loop()
@@ -753,6 +766,7 @@ class Quiv(QuivBase):
         job_error: BaseException | None = None
         duration = timedelta()
         ctx_token = _current_quiv.set(self)
+        job_token = _current_job_id.set(job_id)
         try:
             self.execution.run_callable(func, args, kwargs)
             end_time = self._now_utc()
@@ -773,6 +787,7 @@ class Quiv(QuivBase):
             )
             status = JobStatus.FAILED
         finally:
+            _current_job_id.reset(job_token)
             _current_quiv.reset(ctx_token)
             with self._registries_lock:
                 stop_event = self.stop_events.pop(job_id, None)
@@ -832,3 +847,7 @@ class Quiv(QuivBase):
                 self._emit_event(
                     Event.JOB_RETRYING, task_snapshot, finalized_job
                 )
+            # After the events, so the JOB_* event is emitted before a
+            # waiter wakes; the wait methods promise that order.
+            self._resolve_waiters(self._job_waiters, job_id, finalized_job)
+            self._resolve_waiters(self._task_waiters, task_id, finalized_job)

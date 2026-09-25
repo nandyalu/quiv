@@ -38,8 +38,28 @@ _current_quiv: ContextVar["QuivBase | None"] = ContextVar(
     "quiv_current_instance", default=None
 )
 
+_current_job_id: ContextVar["str | None"] = ContextVar(
+    "quiv_current_job_id", default=None
+)
+
 _active_quiv_lock = threading.Lock()
 _active_quiv: "QuivBase | None" = None
+
+
+def _current_stop_event() -> threading.Event | None:
+    """Return the stop event of the job this code runs inside, or None.
+
+    Reads the context variables only, never the process-level fallback:
+    the fallback is set by ``start()`` and reaches code that no job
+    contains, and such code has no stop event.
+    """
+
+    quiv = _current_quiv.get()
+    job_id = _current_job_id.get()
+    if quiv is None or job_id is None:
+        return None
+    with quiv._registries_lock:
+        return quiv.stop_events.get(job_id)
 
 
 def _register_active(instance: "QuivBase") -> None:
