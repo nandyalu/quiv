@@ -1,3 +1,30 @@
+<a id="v1.2.1"></a>
+## [v1.2.1 - A database error no longer stops the scheduler](https://github.com/nandyalu/quiv/releases/tag/v1.2.1) - 2026-10-04
+
+A patch release. Some single errors put the scheduler in a state that only a process restart cleared. A task stayed `running` and did not run again, a worker slot was lost, or dispatch stopped. Now one error costs one job, and the scheduler continues to run. Nothing in the API changed.
+
+The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from Trailarr, where the hourly tasks stopped after 20 to 40 hours, the API still answered, and a restart fixed it.
+
+### Fixes
+
+- **A run-once task no longer loses a worker slot when the application enforces foreign keys.** This was the cause in Trailarr. `quiv_job.task_id` was a foreign key to `quiv_task.id`. Some applications set `PRAGMA foreign_keys=ON` with a listener on the SQLAlchemy `Engine` class, and that listener applies to the engine of quiv too. When a run-once task finished, quiv deletes its row, and the job row still pointed at it, so the delete failed. The job then did not release its worker slot. Each manual run-once task cost one slot, and after `pool_size` of them the loop dispatched nothing. `remove_task()` failed the same way on a task with job history.
+
+    `task_id` is now a plain column. The job history stays after the task row is deleted, as it always did with the SQLite defaults.
+
+- **An error before the handler starts no longer leaves the task `running`.** Before quiv calls the handler, it marks the job `running` and reads it back. These two steps were outside the error handling of the job. A database error there, for example a locked database or a full `/tmp`, left the task `running` for the life of the process. `run_task_immediately()` raised `TaskNotActiveError`, and the job kept its worker slot. Now the job finalizes as `failed` with the error in `error_message`, `JOB_FAILED` fires, and the task returns to `active`. `max_retries` applies.
+
+- **A failed write after the handler returns no longer loses the worker slot.** quiv writes the end status of the job, and then returns the task to the schedule. Each write now has its own error handling, and quiv logs a failure. quiv always frees the worker slot and wakes the loop. If quiv cannot read the finished job back, `wait_for_job()` and `wait_for_task()` raise the error. Before, they waited until their timeout.
+
+- **A failed history cleanup no longer stops dispatch.** Every 60 seconds the loop deletes old job history, before it looks for due tasks. When the cleanup raised, the loop skipped dispatch and tried the cleanup again 5 seconds later. One permanent error stopped every task, and `add_task()` still returned normally. Now a failed cleanup writes `Job history cleanup failed`, and quiv tries again 60 seconds later. Dispatch continues.
+
+- **A `BaseException` from a handler is no longer recorded as `completed`.** `asyncio.run()` raises `asyncio.CancelledError` when the main task of an async handler is cancelled. That class is not a subclass of `Exception`, and quiv caught only `Exception`. The job finalized as `completed`, with a duration of 0 and no error. Now it finalizes as `failed`, `error_message` names the class (`CancelledError()`), and `JOB_FAILED` fires. quiv still re-raises `KeyboardInterrupt` and `SystemExit` after it records the job.
+
+- **A failed dispatch returns the task to the schedule.** When the loop could not create the job row after it marked the task `running`, the task stayed `running`. Now the loop returns the task to `active` and dispatches it again on a later pass. The report did not include this case, but it has the same cause.
+
+The [Failure Handling](https://nandyalu.github.io/quiv/failure-handling/#when-the-database-fails) page has a new section about what quiv does when its database fails.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.2.0...v1.2.1
+
 <a id="v1.2.0"></a>
 ## [v1.2.0 - Waiting on work (Phase 8)](https://github.com/nandyalu/quiv/releases/tag/v1.2.0) - 2026-09-25
 
