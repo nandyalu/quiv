@@ -1240,7 +1240,7 @@ def test_loop_handles_exceptions_and_retries_sleep(
     wait_timeouts: list[float | None] = []
     real_wait = scheduler._wake_event.wait
 
-    def fake_cleanup_history(*_args, **_kwargs):
+    def fake_get_due_tasks(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     def fake_wait(timeout: float | None = None) -> bool:
@@ -1251,13 +1251,14 @@ def test_loop_handles_exceptions_and_retries_sleep(
 
     try:
         monkeypatch.setattr(
-            scheduler.persistence, "cleanup_history", fake_cleanup_history
+            scheduler.persistence, "get_due_tasks", fake_get_due_tasks
         )
         monkeypatch.setattr(scheduler._wake_event, "wait", fake_wait)
         scheduler._loop()
         assert len(wait_timeouts) >= 3
-        # Every iteration failed in cleanup, so every wait must be the
-        # 5-second error backoff (an interruptible wait, not time.sleep).
+        # Every iteration failed in the due-task query, so every wait must
+        # be the 5-second error backoff (an interruptible wait, not
+        # time.sleep).
         assert set(wait_timeouts) == {5}
     finally:
         monkeypatch.undo()

@@ -34,6 +34,17 @@ class _Unset:
 _UNSET = _Unset()
 
 
+def _error_text(exc: BaseException) -> str:
+    """Describe an exception for a log line or a job's ``error_message``.
+
+    ``str()`` of ``CancelledError`` or ``KeyboardInterrupt`` is empty, so
+    an exception that is not an ``Exception`` gets ``repr()``, which names
+    the class.
+    """
+
+    return str(exc) if isinstance(exc, Exception) else repr(exc)
+
+
 def _validate_task_name(value: str) -> None:
     if not value.strip():
         raise ConfigurationError("task_name must not be empty")
@@ -583,10 +594,16 @@ class Quiv(QuivBase):
         while not self._shutdown:
             try:
                 if time.monotonic() >= next_cleanup:
-                    self.persistence.cleanup_history(self.history_limit)
+                    # Advance the deadline first and catch here: a failing
+                    # cleanup must cost one cleanup, not every dispatch
+                    # until the process restarts.
                     next_cleanup = (
                         time.monotonic() + _CLEANUP_INTERVAL_SECONDS
                     )
+                    try:
+                        self.persistence.cleanup_history(self.history_limit)
+                    except Exception as e:
+                        self._logger.error(f"Job history cleanup failed: {e}")
 
                 self._enforce_timeouts()
 
@@ -680,32 +697,42 @@ class Quiv(QuivBase):
             )
             return
 
+        marked = False
         try:
             self.persistence.mark_task_running(task.id)
+            marked = True
             # Snapshot task for event listeners while it is guaranteed to
             # exist. The task row may be deleted by finalize_task_after_job
             # (run-once) or by remove_task() before _run_job emits its events.
             task_snapshot = self.get_task(task.id)
+            job_id = self.persistence.create_job(
+                task.id, task.task_name, attempt=task.retry_attempt + 1
+            )
         except TaskNotFoundError:
             self._logger.warning(
                 f"Skipping dispatch for task '{task.id}': task row was"
                 " deleted before dispatch."
             )
-            # When remove_task() deleted the row after this dispatch
-            # marked it RUNNING, it left the task's waiters for the job it
-            # expected. No job comes from here, so tell them.
-            self._fail_waiters(
-                self._task_waiters,
-                task.id,
-                TaskNotFoundError(
-                    f"Task '{task.id}' was removed before its job started."
-                ),
-            )
+            self._fail_removed_task_waiters(task.id)
             return
+        except Exception:
+            if marked:
+                # No job exists to finalize the task. Left RUNNING, it
+                # never comes back from get_due_tasks; ACTIVE and still
+                # due, the next pass dispatches it again.
+                try:
+                    self.persistence.update_task(
+                        task.id, status=TaskStatus.ACTIVE
+                    )
+                except TaskNotFoundError:
+                    self._fail_removed_task_waiters(task.id)
+                except Exception as e:
+                    self._logger.error(
+                        f"Task '{task.id}' could not be returned to the"
+                        f" schedule after a failed dispatch: {e}"
+                    )
+            raise
 
-        job_id = self.persistence.create_job(
-            task.id, task.task_name, attempt=task.retry_attempt + 1
-        )
         stop_event = threading.Event()
         with self._registries_lock:
             self.stop_events[job_id] = stop_event
@@ -740,6 +767,22 @@ class Quiv(QuivBase):
             func,
             f_args,
             f_kwargs,
+        )
+
+    def _fail_removed_task_waiters(self, task_id: str) -> None:
+        """Tell a task's waiters that its row went before a job started.
+
+        When ``remove_task()`` deletes the row after a dispatch marked it
+        RUNNING, it leaves the task's waiters for the job it expected. No
+        job comes from that dispatch, so the dispatch tells them.
+        """
+
+        self._fail_waiters(
+            self._task_waiters,
+            task_id,
+            TaskNotFoundError(
+                f"Task '{task_id}' was removed before its job started."
+            ),
         )
 
     def _stop_requested(self, job_id: str) -> bool:
@@ -786,17 +829,23 @@ class Quiv(QuivBase):
             f"'{task_name}' (Job {job_id}) started at"
             f" {self._to_display_timezone(start_time)}"
         )
-        self.persistence.mark_job_running(job_id)
-
-        started_job = self.get_job(job_id)
-        self._emit_event(Event.JOB_STARTED, task_snapshot, started_job)
 
         status = JobStatus.COMPLETED
         job_error: BaseException | None = None
         duration = timedelta()
+        handler_started = False
         ctx_token = _current_quiv.set(self)
         job_token = _current_job_id.set(job_id)
         try:
+            # Inside the try, so that an error here (a locked or full temp
+            # database) finalizes the job as failed and returns the task to
+            # ACTIVE. Outside it, the task stayed RUNNING for the life of
+            # the process and the job kept its pool slot.
+            self.persistence.mark_job_running(job_id)
+            started_job = self.get_job(job_id)
+            self._emit_event(Event.JOB_STARTED, task_snapshot, started_job)
+
+            handler_started = True
             self.execution.run_callable(func, args, kwargs)
             end_time = self._now_utc()
             duration = end_time - start_time
@@ -805,10 +854,19 @@ class Quiv(QuivBase):
                 f" {self._to_display_timezone(end_time)}"
                 f" (Duration: {duration})"
             )
-        except Exception as e:
+        except BaseException as e:
+            # BaseException, not Exception: asyncio.run() raises
+            # CancelledError when the handler's main task is cancelled, and
+            # the finally below then recorded the job as COMPLETED.
             end_time = self._now_utc()
             duration = end_time - start_time
-            if isinstance(e, JobCancelledError) and self._stop_requested(
+            if not handler_started:
+                job_error = e
+                self._logger.exception(
+                    f"'{task_name}' (Job {job_id}) could not start: {e}"
+                )
+                status = JobStatus.FAILED
+            elif isinstance(e, JobCancelledError) and self._stop_requested(
                 job_id
             ):
                 # A quiv helper (call_on_main, run_subprocess) unwound the
@@ -826,9 +884,13 @@ class Quiv(QuivBase):
                 self._logger.exception(
                     f"'{task_name}' (Job {job_id}) raised an exception at"
                     f" {self._to_display_timezone(end_time)}"
-                    f" [runtime: {duration}]: {e}"
+                    f" [runtime: {duration}]: {_error_text(e)}"
                 )
                 status = JobStatus.FAILED
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                # Recorded as failed, and finalized by the finally below,
+                # but not swallowed: these two ask the process to stop.
+                raise
         finally:
             _current_job_id.reset(job_token)
             _current_quiv.reset(ctx_token)
@@ -843,7 +905,9 @@ class Quiv(QuivBase):
             # and was cancelled must not retry.
             job_failed = status == JobStatus.FAILED
 
-            error_message = str(job_error) if job_error is not None else None
+            error_message = (
+                _error_text(job_error) if job_error is not None else None
+            )
             if timed_out and status == JobStatus.CANCELLED:
                 # The timeout message always leads so timed-out jobs stay
                 # distinguishable from manual cancellations and failures,
@@ -857,15 +921,31 @@ class Quiv(QuivBase):
                     if error_message is None
                     else f"{timeout_message} (handler raised: {error_message})"
                 )
-            self.persistence.finalize_job(
-                job_id,
-                status,
-                duration_seconds=duration.total_seconds(),
-                error_message=error_message,
-            )
-            will_retry = self.persistence.finalize_task_after_job(
-                task_id, start_time, job_failed
-            )
+            # Each write has its own guard, so one failing does not skip
+            # the other or the slot release below. An exception from here
+            # would only reach the executor future, which nothing reads.
+            try:
+                self.persistence.finalize_job(
+                    job_id,
+                    status,
+                    duration_seconds=duration.total_seconds(),
+                    error_message=error_message,
+                )
+            except Exception as e:
+                self._logger.exception(
+                    f"'{task_name}' (Job {job_id}) could not record its"
+                    f" end status '{status.value}': {e}"
+                )
+            will_retry = False
+            try:
+                will_retry = self.persistence.finalize_task_after_job(
+                    task_id, start_time, job_failed
+                )
+            except Exception as e:
+                self._logger.exception(
+                    f"'{task_name}' (Job {job_id}) could not return task"
+                    f" '{task_id}' to the schedule: {e}"
+                )
             with self._job_count_lock:
                 self._active_job_count -= 1
             # A freed slot lets deferred-due tasks dispatch, and the task's
@@ -876,21 +956,36 @@ class Quiv(QuivBase):
                     self.registry.pop(task_id, None)
                     self.progress_callbacks.pop(task_id, None)
 
-            finalized_job = self.get_job(job_id)
-            event_map = {
-                JobStatus.COMPLETED: Event.JOB_COMPLETED,
-                JobStatus.FAILED: Event.JOB_FAILED,
-                JobStatus.CANCELLED: Event.JOB_CANCELLED,
-            }
-            if status in event_map:
-                self._emit_event(
-                    event_map[status], task_snapshot, finalized_job
+            try:
+                finalized_job = self.get_job(job_id)
+            except Exception as e:
+                self._logger.exception(
+                    f"'{task_name}' (Job {job_id}) could not be read back"
+                    f" after it finished: {e}"
                 )
-            if will_retry:
-                self._emit_event(
-                    Event.JOB_RETRYING, task_snapshot, finalized_job
+                # No job to hand over, so no JOB_* event; the waiters get
+                # the error instead of waiting for a job that never comes.
+                self._fail_waiters(self._job_waiters, job_id, e)
+                self._fail_waiters(self._task_waiters, task_id, e)
+            else:
+                event_map = {
+                    JobStatus.COMPLETED: Event.JOB_COMPLETED,
+                    JobStatus.FAILED: Event.JOB_FAILED,
+                    JobStatus.CANCELLED: Event.JOB_CANCELLED,
+                }
+                if status in event_map:
+                    self._emit_event(
+                        event_map[status], task_snapshot, finalized_job
+                    )
+                if will_retry:
+                    self._emit_event(
+                        Event.JOB_RETRYING, task_snapshot, finalized_job
+                    )
+                # After the events, so the JOB_* event is emitted before a
+                # waiter wakes; the wait methods promise that order.
+                self._resolve_waiters(
+                    self._job_waiters, job_id, finalized_job
                 )
-            # After the events, so the JOB_* event is emitted before a
-            # waiter wakes; the wait methods promise that order.
-            self._resolve_waiters(self._job_waiters, job_id, finalized_job)
-            self._resolve_waiters(self._task_waiters, task_id, finalized_job)
+                self._resolve_waiters(
+                    self._task_waiters, task_id, finalized_job
+                )

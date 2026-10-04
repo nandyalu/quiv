@@ -346,7 +346,10 @@ class Job(QuivModelBase, table=True):
     Attributes:
         __tablename__ (str): Database table name for jobs.
         id (str, UUID): UUID job identifier string.
-        task_id (str): Foreign key to the source task.
+        task_id (str): Id of the source task. A plain column, not a
+            foreign key: job history outlives the task row, which a
+            run-once task deletes when it finishes and ``remove_task()``
+            deletes at once.
         task_name (str): Name of the task that spawned this job.
         status (str): Job status string.
         started_at (datetime): UTC start timestamp.
@@ -360,7 +363,11 @@ class Job(QuivModelBase, table=True):
     __tablename__: str = "quiv_job"  # type: ignore
 
     id: str = Field(default_factory=id_generator, primary_key=True)
-    task_id: str = Field(foreign_key="quiv_task.id")
+    # No foreign_key here. A host app that runs PRAGMA foreign_keys=ON on
+    # every SQLAlchemy engine (event.listens_for(Engine, "connect")) also
+    # reaches quiv's engine, and the constraint then fails each delete of
+    # a task row that has job history.
+    task_id: str
     task_name: str
     status: str = JobStatus.SCHEDULED
     started_at: datetime = Field(default_factory=get_current_time)

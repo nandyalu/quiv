@@ -517,7 +517,7 @@ Key fields:
 Key fields:
 
 - `id: str` — UUID identifier
-- `task_id: str` — foreign key to source task
+- `task_id: str` — id of the source task. It is not a foreign key, because the job row stays after the task row is deleted
 - `task_name: str` — name of the task that spawned this job
 - `status: str` — lifecycle status
 - `started_at: datetime` — UTC-aware start timestamp

@@ -161,6 +161,8 @@ flowchart TD
 
 `cancelled` wins over `completed` and over `failed`. If a handler raises an exception and the stop event is also set, quiv marks the job `cancelled`, because the cancellation is the more likely cause of the error.
 
+Every exception counts as raised, including one that is not a subclass of `Exception`. An example is the `asyncio.CancelledError` that `asyncio.run()` raises when the main task of an async handler is cancelled. Without a stop event, that job finalizes as `failed`, and `error_message` names the class: `CancelledError()`.
+
 ## Handlers without `stop_event`
 
 If the signature of your handler has no `stop_event` and no `**kwargs`, quiv does not inject the event. It still creates the event and tracks it. Three things follow:

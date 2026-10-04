@@ -30,7 +30,7 @@ The scheduler loop enforces timeouts. It wakes for the deadline that comes soone
 
 ## Retries
 
-quiv retries a job only when the job **fails**, which means an exception left the handler. A cancelled job never retries, because a cancellation is deliberate, and a timeout is a cancellation. A job that raises and is cancelled as well counts as cancelled.
+quiv retries a job only when the job **fails**. A job fails when an exception left the handler, or when a database error stopped the job before the handler started (see [When the database fails](#when-the-database-fails)). A cancelled job never retries, because a cancellation is deliberate, and a timeout is a cancellation. A job that raises and is cancelled as well counts as cancelled.
 
 When a job fails and retries remain, quiv schedules the next run at `now + retry_backoff * 2**(failures_so_far - 1)`. The delay doubles every time: `retry_backoff` seconds before the first retry, twice that before the second, and four times that before the third.
 
@@ -57,3 +57,13 @@ for shard in range(20):
 ```
 
 quiv does not add jitter to the initial `delay`, because the caller sets that value directly. quiv does not add jitter to the retry backoff either, so retries stay predictable.
+
+## When the database fails
+
+quiv keeps its tasks and jobs in a temporary SQLite database. A read or a write on that database can fail, for example when the disk is full or when the database stays locked on slow storage. quiv cannot prevent this. It limits the cost of one error to one job, and the scheduler continues to run:
+
+- **Before the handler starts.** The handler does not run. The job finalizes as `failed`, `error_message` holds the database error, and `JOB_FAILED` fires. The task returns to `active`, so `max_retries` applies and the next run starts on schedule.
+- **While the loop dispatches a task.** The task returns to `active`. The loop logs `Error in scheduler loop`, waits 5 seconds, and dispatches the task again.
+- **After the handler returns.** quiv logs the error and always frees the worker. If quiv cannot write the end status, the job row keeps the status `running`. If quiv cannot return the task to `active`, the task stays `running` and does not run again until the process restarts. The log line names the task.
+- **When quiv cannot read the finished job back.** `JOB_*` events do not fire for that job, and `wait_for_job()` and `wait_for_task()` raise the database error.
+- **During the history cleanup.** quiv logs `Job history cleanup failed`, and tries again 60 seconds later. Dispatch continues.

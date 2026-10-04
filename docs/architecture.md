@@ -134,6 +134,7 @@ An async task handler does not run on the main event loop of your application. E
 - `quiv` uses a private SQLAlchemy `registry`, which keeps its metadata separate from the SQLModel models of your application.
 - quiv converts every datetime to an aware UTC value when it loads a model.
 - The history cleanup deletes finished jobs that are older than the retention window.
+- `quiv_job.task_id` is a plain column, not a foreign key. The job history stays after its task row is deleted: a run-once task deletes its row when it finishes, and `remove_task()` deletes the row at once. Some applications set `PRAGMA foreign_keys=ON` on every SQLAlchemy engine in the process, which includes the engine of quiv. With a foreign key, each of those deletes would fail.
 
 ## Thread safety
 
