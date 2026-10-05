@@ -124,6 +124,24 @@ Everything here lets a caller wait on something and lets cancellation reach it.
 
 **Exit criteria:** the tests in the plan pass on 3.10 through 3.14; `docs/testing.md` opens with a working recipe for testing an application's own handlers against a real instance.
 
+## `v1.2.1` — One error costs one job
+
+**Status: ✅ complete** — implemented 2026-10-04, ships as `v1.2.1`.
+
+Not a roadmap phase. This patch fixes [#86](https://github.com/nandyalu/quiv/issues/86). Several single errors left a task `running` for good, lost a worker slot, or stopped dispatch until the process restarted. The [release notes](release-notes.md) list each fix. Four decisions came out of the work, and they were made on 2026-10-04.
+
+1. **`quiv_job.task_id` is not a foreign key.** The job history stays after its task row is deleted. Some applications set `PRAGMA foreign_keys=ON` on every SQLAlchemy engine in the process, and that setting reaches the engine of quiv. With the key, the delete of a finished run-once task failed. This was the fault behind the report. `ondelete="SET NULL"` was considered and not used: it makes `Job.task_id` optional, which changes a public type, and the job loses the task that it belonged to.
+2. **A run time past year 9999 is clamped, not refused.** Every computed run time goes through one function, which clamps it to 30 December 9999 (UTC). A value that worked before behaves the same. A ceiling on the retry backoff, for example one day, was considered and not adopted. The docs promise that the delay doubles with each failure, so a ceiling is a separate decision.
+3. **`NaN` is refused.** The numeric parameters of `add_task()` and `update_task()` raise `ConfigurationError` for `NaN`. A `NaN` interval had the same result as an overflow: the task stayed `running`.
+4. **One failure is not recovered, and the design of its fix is chosen.** After the handler returns, quiv writes the task back to `active`. If that write fails, the task stays `running` until the process restarts. quiv logs the error and frees the worker. After decisions 2 and 3, the write fails only when the system fails, for example on a full disk or an I/O error. This risk was accepted for `v1.2.1`, and no release is planned for the fix.
+
+    The database alone cannot fix the task. Only `finalize_task_after_job` returns a task to `active`, and a stuck row looks the same as a task whose job still runs. Only the memory of quiv knows which is which. That memory is reliable, because the database is a private file and quiv is its only writer. If recovery is built later, it uses this design:
+
+    - **Chosen: write it again.** `_run_job` keeps the values that it tried to write: the job id, the start time, whether the job failed, the status, and the error. The loop writes them again, with a backoff, until the write succeeds. The next run time and any retry that is due come out exact. The design costs nothing while no write fails, so an idle scheduler still sends no query. Three rules apply. The handler of a run-once task stays registered until the write succeeds; otherwise a retry would find no handler, and the loop would skip it on every pass. A waiter waits for the write, or gets a `Job` made from the values that quiv tried to write; it never gets a job that still says `running`. At shutdown, quiv drops the writes that are still pending.
+    - **Rejected: a periodic check of `running` rows.** The check would compare the `running` rows with a set of tasks in memory that have a job in flight. It races the normal path. If the set and the row change in the wrong order, the check sees a dispatch in progress as stuck and starts a second run of the task. The check must also guess whether the last job failed, so a retry that is due is lost. A drain for `run_on_main` work failed review in the same way, on 2026-09-20.
+
+    Until then, an application can find a stuck task: `stats().tasks_by_status.get("running", 0)` stays higher than `stats().active_jobs`. `remove_task()` followed by `add_task()` clears it.
+
 ## Phase 9 — Operations (`v1.3.0`)
 
 **Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8; ships after Phase 8 and before Phase 7.

@@ -35,5 +35,6 @@ Phases 1–6 built `v1.0.0`. Phases from 7 on are the work after the release: ea
 | 6 | v1.0.0 | [phase-6-release-hardening.md](phase-6-release-hardening.md) | API freeze, docs, benchmarks, soak |
 | — | v1.1.0 | no plan | `run_at` on `update_task()` ([#79](https://github.com/nandyalu/quiv/pull/79)) and `pending_main_loop_work()` ([#80](https://github.com/nandyalu/quiv/pull/80)) — not a phase |
 | 8 | v1.2.0 | [phase-8-waiting-on-work.md](phase-8-waiting-on-work.md) | Waiting on work: `wait_for_job`/`await_job`, `wait_for_task`/`await_task`, `call_on_main()`, `run_subprocess()`, `JobCancelledError` |
+| — | v1.2.1 | no plan | Patch for [#86](https://github.com/nandyalu/quiv/issues/86): one error costs one job. Its decisions, including the chosen design for recovering a failed finish write, are in [docs/roadmap.md](../docs/roadmap.md) § v1.2.1 — not a phase |
 | 9 | v1.3.0 | [phase-9-operations.md](phase-9-operations.md) | Operations: `is_running` and `loop_alive`, `run_task_immediately(after_current=True)`, `get_all_tasks(task_name=)`, the "Running in a container" page |
 | 7 | v1.4.0 | [phase-7-process-jobs.md](phase-7-process-jobs.md) | Process jobs: one spawned process per job, a second pool, one kill rule (its §0, CI on three platforms, landed first) |
