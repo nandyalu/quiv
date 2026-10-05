@@ -1824,14 +1824,24 @@ def test_add_task_validates_execution_params(
             {"max_retries": -1},
             {"retry_backoff": 0},
             {"jitter": -0.1},
+            # NaN compares false with every number, so a bare `<= 0`
+            # check let it through.
+            {"interval": float("nan")},
+            {"delay": float("nan")},
+            {"timeout": float("nan")},
+            {"retry_backoff": float("nan")},
+            {"jitter": float("nan")},
         ):
             with pytest.raises(ConfigurationError):
                 scheduler.add_task(
                     task_name="bad",
                     func=lambda: None,
-                    interval=5,
-                    **bad_kwargs,
+                    **{"interval": 5, **bad_kwargs},
                 )
+        task_id = scheduler.add_task("good", lambda: None, interval=5)
+        for field in ("interval", "timeout", "retry_backoff", "jitter"):
+            with pytest.raises(ConfigurationError):
+                scheduler.update_task(task_id, **{field: float("nan")})
     finally:
         scheduler.shutdown()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta, datetime, timezone, tzinfo
 import logging
+import math
 import pickle
 import threading
 import time
@@ -50,16 +51,21 @@ def _validate_task_name(value: str) -> None:
         raise ConfigurationError("task_name must not be empty")
 
 
+# Each numeric check below tests math.isnan first. NaN compares false with
+# every number, so ``value <= 0`` alone let it through: a NaN interval then
+# raised ValueError in finalize_task_after_job and left the task RUNNING.
+
+
 def _validate_interval(value: float | None) -> None:
     # ``None`` is rejected here rather than by the caller so every entry
     # point reports a ConfigurationError instead of a TypeError from an
     # unguarded comparison.
-    if value is None or value <= 0:
+    if value is None or math.isnan(value) or value <= 0:
         raise ConfigurationError("interval must be greater than 0")
 
 
 def _validate_delay(value: float) -> None:
-    if value < 0:
+    if math.isnan(value) or value < 0:
         raise ConfigurationError("delay must be greater than or equal to 0")
 
 
@@ -79,7 +85,7 @@ def _to_utc(value: datetime) -> datetime:
 
 
 def _validate_timeout(value: float | None) -> None:
-    if value is not None and value <= 0:
+    if value is not None and (math.isnan(value) or value <= 0):
         raise ConfigurationError("timeout must be greater than 0")
 
 
@@ -91,12 +97,12 @@ def _validate_max_retries(value: int) -> None:
 
 
 def _validate_retry_backoff(value: float) -> None:
-    if value <= 0:
+    if math.isnan(value) or value <= 0:
         raise ConfigurationError("retry_backoff must be greater than 0")
 
 
 def _validate_jitter(value: float) -> None:
-    if value < 0:
+    if math.isnan(value) or value < 0:
         raise ConfigurationError("jitter must be greater than or equal to 0")
 
 
