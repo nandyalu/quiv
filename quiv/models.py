@@ -78,6 +78,33 @@ def get_current_time() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# The latest next_run_at that quiv stores. A computed run time past it is
+# clamped to it, because Python cannot represent a datetime after year
+# 9999: the OverflowError escaped finalize_task_after_job and left the task
+# RUNNING for good. One day short of datetime.max, so that a log line can
+# convert it to any display timezone without overflowing again.
+LATEST_RUN_AT = datetime.max.replace(tzinfo=timezone.utc) - timedelta(days=1)
+
+
+def seconds_after(base: datetime, seconds: float) -> datetime:
+    """Return ``base`` plus ``seconds``, clamped to ``LATEST_RUN_AT``.
+
+    Args:
+        base (datetime): UTC-aware start time.
+        seconds (float): Seconds to add. The value can be too large for a
+            ``timedelta`` or a ``datetime``, including infinity.
+
+    Returns:
+        datetime: The sum, or ``LATEST_RUN_AT`` when the sum is later than
+            it or does not fit in a ``datetime``.
+    """
+
+    try:
+        return min(base + timedelta(seconds=seconds), LATEST_RUN_AT)
+    except OverflowError:
+        return LATEST_RUN_AT
+
+
 def id_generator() -> str:
     """Generate a unique task identifier.
 

@@ -17,7 +17,7 @@ from .exceptions import (
     JobCancelledError,
     TaskNotFoundError,
 )
-from .models import Event, JobStatus, Task, TaskDB, TaskStatus
+from .models import Event, JobStatus, Task, TaskDB, TaskStatus, seconds_after
 
 _CLEANUP_INTERVAL_SECONDS = 60.0
 _MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
@@ -309,7 +309,7 @@ class Quiv(QuivBase):
             # the task is worse than running it late.
             next_run = max(_to_utc(run_at), now)
         else:
-            next_run = now + timedelta(seconds=delay or 0)
+            next_run = seconds_after(now, delay or 0)
         task_id = self.persistence.create_task(
             task_name=task_name,
             interval=interval,

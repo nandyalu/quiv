@@ -15,7 +15,7 @@ from .exceptions import (
     TaskNotActiveError,
     TaskNotFoundError,
 )
-from .models import Job, JobStatus, TaskDB, TaskStatus
+from .models import Job, JobStatus, TaskDB, TaskStatus, seconds_after
 
 _JOB_ORDER_COLUMNS = {
     "started_at": Job.started_at,
@@ -278,8 +278,8 @@ class PersistenceLayer:
             for column, value in column_updates.items():
                 setattr(task, column, value)
             if "interval_seconds" in column_updates:
-                task.next_run_at = self._now_utc() + timedelta(
-                    seconds=column_updates["interval_seconds"]
+                task.next_run_at = seconds_after(
+                    self._now_utc(), column_updates["interval_seconds"]
                 )
             session.commit()
 
@@ -380,7 +380,7 @@ class PersistenceLayer:
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.ACTIVE
-            task.next_run_at = self._now_utc() + timedelta(seconds=delay)
+            task.next_run_at = seconds_after(self._now_utc(), delay)
             session.commit()
 
     def cleanup_history(self, history_limit_seconds: int) -> None:
@@ -528,11 +528,16 @@ class PersistenceLayer:
             now = self._now_utc()
             if job_failed and existing.retry_attempt < existing.max_retries:
                 existing.retry_attempt += 1
-                backoff = existing.retry_backoff_seconds * (
-                    2 ** (existing.retry_attempt - 1)
-                )
+                try:
+                    backoff = existing.retry_backoff_seconds * (
+                        2 ** (existing.retry_attempt - 1)
+                    )
+                except OverflowError:
+                    # The power of two passed the float range, after about
+                    # 1,000 retries; seconds_after clamps infinity.
+                    backoff = math.inf
                 existing.status = TaskStatus.ACTIVE
-                existing.next_run_at = now + timedelta(seconds=backoff)
+                existing.next_run_at = seconds_after(now, backoff)
                 session.commit()
                 return True
 
@@ -557,14 +562,15 @@ class PersistenceLayer:
                 # ceil yields next_run_at == now and the task re-dispatches
                 # immediately. The next run must be strictly in the future.
                 periods = math.floor(elapsed / interval) + 1
-                existing.next_run_at = job_started_at + timedelta(
-                    seconds=periods * interval
+                existing.next_run_at = seconds_after(
+                    job_started_at, periods * interval
                 )
             else:
-                existing.next_run_at = now + timedelta(seconds=interval)
+                existing.next_run_at = seconds_after(now, interval)
             if existing.jitter_seconds > 0:
-                existing.next_run_at += timedelta(
-                    seconds=random.uniform(0, existing.jitter_seconds)
+                existing.next_run_at = seconds_after(
+                    existing.next_run_at,
+                    random.uniform(0, existing.jitter_seconds),
                 )
             session.commit()
             return False

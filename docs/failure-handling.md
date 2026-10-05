@@ -36,6 +36,8 @@ When a job fails and retries remain, quiv schedules the next run at `now + retry
 
 The delay grows quickly. A large `max_retries` together with a large `retry_backoff` can move the next run hours into the future.
 
+quiv never schedules a run later than 30 December 9999 (UTC), because Python cannot represent a date after year 9999. A retry backoff, an `interval`, a `jitter`, or a `delay` that goes past that date is clamped to it. The task stays `active`, so `run_task_immediately()` still runs it, and a run that succeeds resets the counter.
+
 ```python
 scheduler.add_task("flaky-sync", sync_upstream, interval=300, max_retries=3, retry_backoff=10)
 ```

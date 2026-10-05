@@ -1,4 +1,4 @@
-"""One error on the temp database costs one job, not the scheduler (#86)."""
+"""One error costs one job, not the scheduler (#86)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from concurrent.futures import Future
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import pytest
@@ -22,6 +22,7 @@ from quiv import (
     TaskNotFoundError,
     TaskStatus,
 )
+from quiv.models import LATEST_RUN_AT, seconds_after
 
 
 def _wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
@@ -480,5 +481,104 @@ def test_run_once_and_remove_task_work_with_foreign_keys_enforced(
         # The task now has job history; deleting it must not fail.
         scheduler.remove_task(recurring)
         assert len(scheduler.get_all_jobs(task_id=recurring)) == 1
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Run times past year 9999
+# ---------------------------------------------------------------------------
+
+
+def test_seconds_after_clamps_what_a_datetime_cannot_hold() -> None:
+    now = datetime.now(timezone.utc)
+
+    assert seconds_after(now, 60) == now + timedelta(seconds=60)
+    # Too far for a datetime, too far for a timedelta, and infinity.
+    for seconds in (1e12, 1e20, float("inf")):
+        assert seconds_after(now, seconds) == LATEST_RUN_AT
+    assert seconds_after(LATEST_RUN_AT, 5) == LATEST_RUN_AT
+    # The day of room keeps a display-timezone conversion in range.
+    assert LATEST_RUN_AT.astimezone(timezone(timedelta(hours=14))).year == 9999
+
+
+@pytest.mark.parametrize("fixed_interval", [True, False])
+@pytest.mark.parametrize("jitter", [0, 5])
+def test_an_interval_past_year_9999_returns_the_task_to_active(
+    running_main_loop: asyncio.AbstractEventLoop,
+    fixed_interval: bool,
+    jitter: float,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            "huge-interval",
+            lambda: None,
+            interval=1e12,
+            fixed_interval=fixed_interval,
+            jitter=jitter,
+            delay=0.2,
+        )
+        scheduler.start()
+
+        job = scheduler.wait_for_task(task_id, timeout=5)
+
+        assert job.status == JobStatus.COMPLETED
+        task = scheduler.get_task(task_id)
+        # Before the fix the OverflowError left the task RUNNING.
+        assert task.status == TaskStatus.ACTIVE
+        assert task.next_run_at == LATEST_RUN_AT
+    finally:
+        scheduler.shutdown()
+
+
+@pytest.mark.parametrize("retry_attempt", [40, 2000])
+def test_a_retry_backoff_past_year_9999_is_clamped(
+    running_main_loop: asyncio.AbstractEventLoop,
+    retry_attempt: int,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            "flaky", lambda: None, interval=3600, max_retries=10_000,
+            retry_backoff=10,
+        )
+        # 40 failures: 10 s * 2**40 is past year 9999. 2000 failures: the
+        # power of two is past the float range as well.
+        scheduler.persistence.update_task(task_id, retry_attempt=retry_attempt)
+
+        will_retry = scheduler.persistence.finalize_task_after_job(
+            task_id, datetime.now(timezone.utc), job_failed=True
+        )
+
+        assert will_retry is True
+        task = scheduler.get_task(task_id)
+        assert task.status == TaskStatus.ACTIVE
+        assert task.next_run_at == LATEST_RUN_AT
+        # A manual run still works, and a success resets the counter.
+        scheduler.run_task_immediately(task_id)
+    finally:
+        scheduler.shutdown()
+
+
+def test_api_delays_and_intervals_past_year_9999_are_clamped(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    # A display timezone at UTC+14, so the add_task log line converts the
+    # clamped time to the latest local date there is.
+    scheduler = Quiv(main_loop=running_main_loop, timezone="Pacific/Kiritimati")
+    try:
+        # These raised OverflowError to the caller before.
+        delayed = scheduler.add_task("later", lambda: None, interval=60, delay=1e12)
+        assert scheduler.get_task(delayed).next_run_at == LATEST_RUN_AT
+
+        updated = scheduler.add_task("updated", lambda: None, interval=60)
+        scheduler.update_task(updated, interval=1e12)
+        assert scheduler.get_task(updated).next_run_at == LATEST_RUN_AT
+
+        resumed = scheduler.add_task("resumed", lambda: None, interval=60)
+        scheduler.pause_task(resumed)
+        scheduler.resume_task(resumed, delay=10**12)
+        assert scheduler.get_task(resumed).next_run_at == LATEST_RUN_AT
     finally:
         scheduler.shutdown()

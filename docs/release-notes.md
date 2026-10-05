@@ -21,6 +21,8 @@ The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from
 
 - **A failed dispatch returns the task to the schedule.** When the loop could not create the job row after it marked the task `running`, the task stayed `running`. Now the loop returns the task to `active` and dispatches it again on a later pass. The report did not include this case, but it has the same cause.
 
+- **A run time past year 9999 no longer leaves the task `running`.** Python cannot represent a date after year 9999. The retry backoff doubles with each failure, and `run_task_immediately()` does not reset the count of failures. A task with a large `max_retries` that keeps failing therefore reached that limit: with `retry_backoff=10`, the 36th failure asked for a retry about 10,900 years later. The `OverflowError` left the task `running`. A very large `interval` or `jitter` did the same. Now quiv clamps every computed run time to 30 December 9999 (UTC). The task stays `active`, and `run_task_immediately()` still runs it. A `delay` or an `interval` that large, given to `add_task()`, `update_task()`, or `resume_task()`, is clamped the same way. Before, it raised `OverflowError`.
+
 The [Failure Handling](https://nandyalu.github.io/quiv/failure-handling/#when-the-database-fails) page has a new section about what quiv does when its database fails.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.2.0...v1.2.1
