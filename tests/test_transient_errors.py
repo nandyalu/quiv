@@ -372,9 +372,7 @@ def test_a_failed_mark_task_running_leaves_the_task_as_it_was(
         scheduler.pause_task(task_id)
         monkeypatch.setattr(scheduler.persistence, "mark_task_running", broken)
         monkeypatch.setattr(
-            scheduler.persistence,
-            "update_task",
-            lambda task_id, **_columns: updates.append(task_id),
+            scheduler.persistence, "unmark_task_running", updates.append
         )
         task = scheduler.persistence.get_task(task_id)
 
@@ -384,6 +382,34 @@ def test_a_failed_mark_task_running_leaves_the_task_as_it_was(
         # This dispatch never marked the row, so it must not write it: a
         # pause that landed in between would be undone.
         assert updates == []
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+    finally:
+        scheduler.shutdown()
+
+
+def test_a_pause_after_the_mark_survives_a_failed_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("recurring", lambda: None, interval=60)
+
+        def create_job_after_pause(*_args: Any, **_kwargs: Any) -> str:
+            # pause_task() lands between mark_task_running and the job
+            # insert, then the insert fails.
+            scheduler.pause_task(task_id)
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(
+            scheduler.persistence, "create_job", create_job_after_pause
+        )
+        task = scheduler.persistence.get_task(task_id)
+
+        with pytest.raises(RuntimeError, match="database is locked"):
+            scheduler._dispatch_due_task(task, datetime.now(timezone.utc))
+
+        # Still due: returned to ACTIVE, the next pass would run it.
         assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
     finally:
         scheduler.shutdown()
@@ -442,7 +468,9 @@ def test_a_failed_return_to_the_schedule_is_logged(
     try:
         task_id = scheduler.add_task("recurring", lambda: None, interval=60)
         monkeypatch.setattr(scheduler.persistence, "create_job", broken)
-        monkeypatch.setattr(scheduler.persistence, "update_task", broken)
+        monkeypatch.setattr(
+            scheduler.persistence, "unmark_task_running", broken
+        )
         task = scheduler.persistence.get_task(task_id)
 
         with caplog.at_level(logging.ERROR, logger="Quiv"):

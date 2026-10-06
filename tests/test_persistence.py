@@ -11,7 +11,7 @@ from quiv.exceptions import (
     JobNotFoundError,
     TaskNotFoundError,
 )
-from quiv.models import Job, JobStatus, TaskDB
+from quiv.models import Job, JobStatus, TaskDB, TaskStatus
 
 
 def test_queue_task_for_immediate_run_raises_for_missing_task(
@@ -237,6 +237,30 @@ def test_finalize_task_after_job_updates_recurring_next_run(
         )
         start_naive = start_time.replace(tzinfo=None)
         assert task_next >= start_naive
+    finally:
+        scheduler.shutdown()
+
+
+def test_unmark_task_running_changes_only_a_running_row(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="unmark", func=lambda: None, interval=60
+        )
+        persistence = scheduler.persistence
+
+        persistence.mark_task_running(task_id)
+        persistence.unmark_task_running(task_id)
+        assert persistence.get_task(task_id).status == TaskStatus.ACTIVE
+
+        persistence.pause_task(task_id)
+        persistence.unmark_task_running(task_id)
+        assert persistence.get_task(task_id).status == TaskStatus.PAUSED
+
+        with pytest.raises(TaskNotFoundError):
+            persistence.unmark_task_running("missing")
     finally:
         scheduler.shutdown()
 

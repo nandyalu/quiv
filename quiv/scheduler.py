@@ -725,11 +725,10 @@ class Quiv(QuivBase):
             if marked:
                 # No job exists to finalize the task. Left RUNNING, it
                 # never comes back from get_due_tasks; ACTIVE and still
-                # due, the next pass dispatches it again.
+                # due, the next pass dispatches it again. Conditional, so
+                # a pause that landed after the mark is not undone.
                 try:
-                    self.persistence.update_task(
-                        task.id, status=TaskStatus.ACTIVE
-                    )
+                    self.persistence.unmark_task_running(task.id)
                 except TaskNotFoundError:
                     self._fail_removed_task_waiters(task.id)
                 except Exception as e:

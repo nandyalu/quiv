@@ -483,6 +483,28 @@ class PersistenceLayer:
             existing.status = TaskStatus.RUNNING
             session.commit()
 
+    def unmark_task_running(self, task_id: str) -> None:
+        """Return a task to active after a dispatch that created no job.
+
+        Only a ``RUNNING`` row changes. A pause or a resume that landed
+        after ``mark_task_running`` has already set the status, and it
+        stays.
+
+        Args:
+            task_id (str): Task identifier.
+
+        Raises:
+            TaskNotFoundError: If task does not exist.
+        """
+
+        with self._write_lock, Session(self._engine) as session:
+            existing = session.get(TaskDB, task_id)
+            if existing is None:
+                raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            if existing.status == TaskStatus.RUNNING:
+                existing.status = TaskStatus.ACTIVE
+                session.commit()
+
     def finalize_task_after_job(
         self, task_id: str, job_started_at: datetime, job_failed: bool
     ) -> bool:
