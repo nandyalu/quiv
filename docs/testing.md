@@ -178,6 +178,7 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - `pause_task()` and `resume_task()` raise `TaskNotFoundError` for missing task
 - `mark_task_running()` and `unmark_task_running()` raise `TaskNotFoundError` for missing task
 - `unmark_task_running()` changes only a `running` task, so a pause that lands during a dispatch stays
+- A task paused while its job runs stays paused after the job ends, also when a retry is due; a paused run-once task is still deleted
 - `mark_job_running()` and `finalize_job()` raise `JobNotFoundError` for missing job
 - History cleanup deletes old finished jobs while keeping recent ones
 - Job status filtering (`completed`, `failed`) returns correct subsets

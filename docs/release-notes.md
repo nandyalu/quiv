@@ -25,6 +25,8 @@ The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from
 
 - **`add_task()` and `update_task()` refuse `NaN`.** They checked `interval`, `delay`, `timeout`, `retry_backoff`, and `jitter` with comparisons such as `value <= 0`. A comparison with `NaN` is always false, so `NaN` passed every check. A `NaN` interval was accepted, and the task stayed `running` after its first job. Now each of these parameters raises `ConfigurationError` for `NaN`.
 
+- **A task paused while its job runs stays paused.** `pause_task()` on a task with a running job set the task to `paused`. When the job ended, quiv set the task back to `active`, and the task ran again on schedule. The pause was lost, and quiv did not log it. Now the task stays `paused` after the job ends, until you call `resume_task()`. quiv still updates the retry count and the next run time. A run-once task had its one run, so quiv still deletes it.
+
 The [Failure Handling](https://nandyalu.github.io/quiv/failure-handling/#when-the-database-fails) page has a new section about what quiv does when its database fails.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.2.0...v1.2.1

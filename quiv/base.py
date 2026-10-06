@@ -1015,6 +1015,9 @@ class QuivBase(ABC):
     def pause_task(self, task_id: str) -> None:
         """Pause a task by id.
 
+        A job that is already running finishes, and the task stays
+        paused after it.
+
         Args:
             task_id (str): Task id.
 

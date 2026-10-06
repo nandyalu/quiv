@@ -350,6 +350,9 @@ class PersistenceLayer:
     def pause_task(self, task_id: str) -> None:
         """Pause a task so it will not be dispatched.
 
+        A job that is already running finishes, and the task stays
+        paused after it.
+
         Args:
             task_id (str): Task identifier.
 
@@ -521,6 +524,10 @@ class PersistenceLayer:
         recurring tasks, sets status back to active and schedules the
         next run.
 
+        Only a ``RUNNING`` row goes back to active. A task that was
+        paused while its job ran stays paused; its retry counter and
+        next run time are still updated.
+
         When ``fixed_interval`` is ``True``, the next run is aligned to
         the next interval boundary after now, measured from
         ``job_started_at``. If the job took longer than one interval,
@@ -548,6 +555,10 @@ class PersistenceLayer:
                 return False
 
             now = self._now_utc()
+            if existing.status == TaskStatus.RUNNING:
+                # A pause that landed while the job ran stays: only
+                # resume_task() makes a paused task active again.
+                existing.status = TaskStatus.ACTIVE
             if job_failed and existing.retry_attempt < existing.max_retries:
                 existing.retry_attempt += 1
                 try:
@@ -558,7 +569,6 @@ class PersistenceLayer:
                     # The power of two passed the float range, after about
                     # 1,000 retries; seconds_after clamps infinity.
                     backoff = math.inf
-                existing.status = TaskStatus.ACTIVE
                 existing.next_run_at = seconds_after(now, backoff)
                 session.commit()
                 return True
@@ -569,7 +579,6 @@ class PersistenceLayer:
                 session.commit()
                 return False
 
-            existing.status = TaskStatus.ACTIVE
             interval = existing.interval_seconds
             if interval is None:  # pragma: no cover - defensive
                 # add_task stores None only for run-once tasks, which

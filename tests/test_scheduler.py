@@ -928,6 +928,47 @@ def test_run_task_immediately_rejects_paused_task(
         scheduler.shutdown()
 
 
+def test_a_task_paused_while_its_job_runs_stays_paused(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    release = threading.Event()
+    job_ids: list[str] = []
+
+    def handler(job_id: str) -> None:
+        job_ids.append(job_id)
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused-mid-run", func=handler, interval=0.1
+        )
+        scheduler.start()
+        deadline = time.monotonic() + 5
+        while not job_ids and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(job_ids) == 1
+
+        scheduler.pause_task(task_id)
+        release.set()
+        job = scheduler.wait_for_job(job_ids[0], timeout=5)
+
+        assert job.status == JobStatus.COMPLETED
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+        # Five intervals: an active task would have run again by now.
+        time.sleep(0.5)
+        assert len(job_ids) == 1
+
+        scheduler.resume_task(task_id)
+        deadline = time.monotonic() + 5
+        while len(job_ids) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(job_ids) >= 2
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
 def test_remove_task_racing_dispatch_does_not_stall_loop(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

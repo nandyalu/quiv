@@ -61,7 +61,7 @@ scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs
 | Method | Notes |
 |---|---|
 | `run_task_immediately(task_id) -> int` | queue a scheduled task now |
-| `pause_task(task_id)` / `resume_task(task_id, delay=0)` | resume with `delay=0` fires immediately |
+| `pause_task(task_id)` / `resume_task(task_id, delay=0)` | a running job finishes and the task stays paused; resume with `delay=0` fires immediately |
 | `remove_task(task_id)` | unregisters handler + callback; signals a running job to stop |
 | `get_task(task_id) -> Task` / `get_all_tasks(include_run_once=False) -> list[Task]` | |
 | `get_job(job_id) -> Job` / `get_all_jobs(status=None) -> list[Job]` | status: `"running"`, `"failed"`, ... |

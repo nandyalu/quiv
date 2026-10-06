@@ -241,6 +241,82 @@ def test_finalize_task_after_job_updates_recurring_next_run(
         scheduler.shutdown()
 
 
+def test_finalize_task_after_job_keeps_a_pause_made_during_the_run(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused-mid-run", func=lambda: None, interval=120
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+        persistence.pause_task(task_id)
+        before = persistence.get_task(task_id).next_run_at
+
+        persistence.finalize_task_after_job(
+            task_id, scheduler._now_utc(), job_failed=False
+        )
+
+        task = persistence.get_task(task_id)
+        assert task.status == TaskStatus.PAUSED
+        # The next run time is still computed; resume_task() replaces it.
+        assert task.next_run_at > before
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_task_after_job_keeps_a_pause_when_a_retry_is_due(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused-retry",
+            func=lambda: None,
+            interval=120,
+            max_retries=2,
+            retry_backoff=5,
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+        persistence.pause_task(task_id)
+
+        will_retry = persistence.finalize_task_after_job(
+            task_id, scheduler._now_utc(), job_failed=True
+        )
+
+        task = persistence.get_task(task_id)
+        assert will_retry is True
+        assert task.status == TaskStatus.PAUSED
+        assert task.retry_attempt == 1
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_task_after_job_removes_a_paused_run_once_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused-once", func=lambda: None, run_once=True
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+        persistence.pause_task(task_id)
+
+        persistence.finalize_task_after_job(
+            task_id, scheduler._now_utc(), job_failed=False
+        )
+
+        # The one run happened, so nothing remains to resume.
+        with pytest.raises(TaskNotFoundError):
+            persistence.get_task(task_id)
+    finally:
+        scheduler.shutdown()
+
+
 def test_unmark_task_running_changes_only_a_running_row(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

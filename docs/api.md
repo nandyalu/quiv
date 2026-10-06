@@ -279,7 +279,7 @@ Returns number of task rows queued.
 
 ### `pause_task(task_id: str) -> None`
 
-Pause blocks future runs of the task.
+Pause blocks future runs of the task. If a job of the task is running, the job continues to its end, and the task stays paused after it. To run the task again, call `resume_task()`.
 
 Raises:
 
