@@ -179,28 +179,49 @@ def test_system_exit_and_keyboard_interrupt_are_recorded_then_reraised(
 # ---------------------------------------------------------------------------
 
 
-def test_a_failed_finalize_job_still_returns_the_task_and_frees_the_slot(
+def test_a_failed_finalize_job_fails_the_waiters_and_returns_the_task(
     monkeypatch: pytest.MonkeyPatch,
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     scheduler = Quiv(main_loop=running_main_loop)
+    ended: list[Job] = []
+
+    def on_end(event: Event, task: Task, job: Job) -> None:
+        ended.append(job)
+
     try:
         monkeypatch.setattr(
             scheduler.persistence,
             "finalize_job",
             _fail_once(scheduler.persistence.finalize_job, "disk I/O error"),
         )
+        for end_event in (
+            Event.JOB_COMPLETED,
+            Event.JOB_FAILED,
+            Event.JOB_CANCELLED,
+        ):
+            scheduler.add_listener(end_event, on_end)
         task_id = scheduler.add_task(
             "recurring", lambda: None, interval=60, delay=0.2
         )
         scheduler.start()
 
-        job = scheduler.wait_for_task(task_id, timeout=5)
+        # The end status was not written, so the row still says RUNNING.
+        # The waiter gets the write error, not a job that has not ended.
+        with pytest.raises(RuntimeError, match="disk I/O error"):
+            scheduler.wait_for_task(task_id, timeout=5)
 
-        # The end status was not written, so the row still says RUNNING;
-        # what matters is that the task and the slot are not lost with it.
+        (job,) = scheduler.get_all_jobs(task_id=task_id)
         assert job.status == JobStatus.RUNNING
+        # Listeners run on the main loop: a JOB_* event emitted before the
+        # waiter failed has run once this round trip returns.
+        asyncio.run_coroutine_threadsafe(
+            asyncio.sleep(0), running_main_loop
+        ).result(timeout=5)
+        assert ended == []
+        assert scheduler._task_waiters == {}
+        # The task and the slot are not lost with the job's end status.
         assert scheduler.get_task(task_id).status == TaskStatus.ACTIVE
         assert scheduler._active_job_count == 0
         assert "could not record its end status 'completed'" in caplog.text

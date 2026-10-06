@@ -242,6 +242,7 @@ Raises:
 - `JobNotFoundError` for an unknown id
 - `TimeoutError`, the builtin, when `timeout` passes first. quiv raises the builtin on every supported Python. On 3.10 the `concurrent.futures` and `asyncio` timeout classes are separate, and quiv converts them.
 - `SchedulerStoppedError` when `shutdown()` returned before the job finished, or when the call comes after `shutdown()`
+- The database error, when quiv cannot write the end status of the job or read the job back. See [When the database fails](failure-handling.md#when-the-database-fails).
 
 ### `wait_for_task(task_id: str, timeout: float | None = None) -> Job` / `await_task(...)`
 
@@ -260,7 +261,7 @@ A run-once task deletes its row when its job finishes. A waiter registered befor
 Raises:
 
 - `TaskNotFoundError` for an unknown id, and when the task is removed while nothing of it is running
-- `TimeoutError` and `SchedulerStoppedError`, as above
+- `TimeoutError`, `SchedulerStoppedError`, and the database error, as above
 
 Both pairs are the way to test your own handlers against a real scheduler. See [Testing your own handlers](testing.md#testing-your-own-handlers).
 
