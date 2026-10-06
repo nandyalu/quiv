@@ -61,7 +61,7 @@ scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs
 | Method | Notes |
 |---|---|
 | `run_task_immediately(task_id) -> int` | queue a scheduled task now |
-| `pause_task(task_id)` / `resume_task(task_id, delay=0)` | a running job finishes and the task stays paused; resume with `delay=0` fires immediately |
+| `pause_task(task_id)` / `resume_task(task_id, delay=0)` | a running job finishes and the task stays paused; resume raises `TaskRunningError` until that job ends; resume with `delay=0` fires immediately |
 | `remove_task(task_id)` | unregisters handler + callback; signals a running job to stop |
 | `get_task(task_id) -> Task` / `get_all_tasks(include_run_once=False) -> list[Task]` | |
 | `get_job(job_id) -> Job` / `get_all_jobs(status=None) -> list[Job]` | status: `"running"`, `"failed"`, ... |
@@ -168,6 +168,6 @@ app = FastAPI(lifespan=lifespan)
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError`, `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError` (subclass `TaskRunningError`), `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
 
-`run_task_immediately()` raises `TaskNotActiveError` for `running` tasks (no concurrent second run) and `paused` tasks (use `resume_task()` instead).
+`run_task_immediately()` raises `TaskRunningError` for `running` tasks (no concurrent second run) and `TaskNotActiveError` for `paused` tasks (use `resume_task()` instead). `resume_task()` raises `TaskRunningError` while a job of the task still runs, also for a task paused during that job — call `wait_for_task()` first. `TaskRunningError` subclasses `TaskNotActiveError`, so catch it first to tell the two apart.

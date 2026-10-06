@@ -7,7 +7,7 @@ Three small code additions and one documentation page, all additive: `is_running
 **Decisions settled on 2026-09-25** (do not reopen):
 
 - Health is a boolean, not a status enum. `Quiv.is_running` and `QuivStats.loop_alive` both mean: `start()` was called, `shutdown()` was not, and the loop thread is alive. The loop catches `Exception` and continues, so a dead loop thread means something outside `Exception` killed it, which is exactly what a health check must catch.
-- `run_task_immediately(task_id, *, after_current=False)`. The default is unchanged and still raises `TaskNotActiveError` for a running task. With `after_current=True`, a running recurring task is flagged and runs again as soon as the current job finalizes, whatever that job's outcome. A running run-once task still raises, because nothing remains to run. A paused task still raises.
+- `run_task_immediately(task_id, *, after_current=False)`. The default is unchanged and still raises `TaskRunningError` for a running task (a `TaskNotActiveError` subclass since 1.2.1). With `after_current=True`, a running recurring task is flagged and runs again as soon as the current job finalizes, whatever that job's outcome. A running run-once task still raises, because nothing remains to run. A paused task still raises.
 - `get_all_tasks(task_name=...)` is an exact-match filter and combines with the existing `status`, `include_run_once`, `limit`, and `offset`. Names may still repeat; that is the 1.0 contract.
 - The container page describes practice, and it can ship as a docs-only commit before the code in this phase. Documentation first, code second.
 - No new config value, no new event, no new exception.
@@ -62,7 +62,7 @@ Docstring: "Whether the scheduler loop thread is running; the same value as ``Qu
 
 - `ACTIVE`: unchanged.
 - `RUNNING` and `after_current` and not `run_once`: set `rerun_requested = True`, commit, return 1.
-- `RUNNING` and `after_current` and `run_once`: raise `TaskNotActiveError("Task '...' is a running run-once task; nothing remains to run again.")`.
+- `RUNNING` and `after_current` and `run_once`: raise `TaskRunningError("Task '...' is a running run-once task; nothing remains to run again.")`.
 - `RUNNING` without `after_current`, and `PAUSED`: unchanged messages.
 
 `finalize_task_after_job`: read `existing.rerun_requested` once at the top. After the retry branch and the interval branch have set `next_run_at`, and before the jitter, apply the flag:

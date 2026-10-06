@@ -30,6 +30,18 @@ class TaskNotActiveError(QuivError):
     """Raised when an operation requires an ACTIVE task."""
 
 
+class TaskRunningError(TaskNotActiveError):
+    """Raised when a job of the task is still running.
+
+    ``run_task_immediately()`` and ``resume_task()`` raise it, because
+    either call would start a second run beside the job.
+
+    It inherits :class:`TaskNotActiveError`. ``run_task_immediately()``
+    raised that class for a running task before 1.2.1, so an existing
+    ``except TaskNotActiveError`` clause keeps working.
+    """
+
+
 class JobNotFoundError(QuivError):
     """Raised when a job record is not found."""
 

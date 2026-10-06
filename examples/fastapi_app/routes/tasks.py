@@ -7,6 +7,7 @@ from quiv.exceptions import (
     ConfigurationError,
     TaskNotActiveError,
     TaskNotFoundError,
+    TaskRunningError,
 )
 
 from examples.fastapi_app.scheduler import scheduler
@@ -81,6 +82,9 @@ def resume_task(task_id: str, delay: int = 0):
         scheduler.resume_task(task_id, delay=delay)
     except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except TaskRunningError as e:
+        # A job of the task still runs. Resume it after the job ends.
+        raise HTTPException(status_code=409, detail=str(e))
     return {"status": "resumed"}
 
 

@@ -273,7 +273,8 @@ Raises:
 
 - `TaskNotFoundError` if no task with that id exists — including a run-once task that already fired and removed itself
 - `HandlerNotRegisteredError` if the task exists but no handler is registered for it
-- `TaskNotActiveError` if the task is `running` (no concurrent second run) or `paused` (use `resume_task()` instead)
+- `TaskRunningError` if the task is `running` (no concurrent second run). It subclasses `TaskNotActiveError`.
+- `TaskNotActiveError` if the task is `paused` (use `resume_task()` instead)
 
 Returns number of task rows queued.
 
@@ -293,6 +294,7 @@ Resume re-activates and sets next run with an optional `delay` (in seconds, defa
 Raises:
 
 - `TaskNotFoundError` if no task with that id exists.
+- `TaskRunningError` if a job of the task is still running. This is also true for a task that you paused during its job. A resume at that time would start a second run while the first one continues. To resume the task when its job ends, call `wait_for_task(task_id)` first, and then `resume_task()`.
 
 !!! info 
     

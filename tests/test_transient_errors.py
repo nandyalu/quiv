@@ -353,6 +353,8 @@ def test_a_failed_create_job_returns_the_task_to_the_schedule(
         assert scheduler.get_task(task_id).status == TaskStatus.ACTIVE
         assert scheduler._active_job_count == 0
         assert scheduler.stop_events == {}
+        # No job started, so resume_task() must not see one.
+        assert scheduler._tasks_in_flight == set()
     finally:
         scheduler.shutdown()
 
@@ -451,6 +453,7 @@ def test_a_failed_create_job_after_remove_task_fails_the_waiters(
         waiter.join(timeout=5)
         assert len(outcome) == 1
         assert isinstance(outcome[0], TaskNotFoundError)
+        assert scheduler._tasks_in_flight == set()
     finally:
         scheduler.shutdown()
 

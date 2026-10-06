@@ -10,6 +10,7 @@ from quiv import Quiv
 from quiv.exceptions import (
     JobNotFoundError,
     TaskNotFoundError,
+    TaskRunningError,
 )
 from quiv.models import Job, JobStatus, TaskDB, TaskStatus
 
@@ -337,6 +338,34 @@ def test_unmark_task_running_changes_only_a_running_row(
 
         with pytest.raises(TaskNotFoundError):
             persistence.unmark_task_running("missing")
+    finally:
+        scheduler.shutdown()
+
+
+def test_resume_task_refuses_a_task_with_a_job_running(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="resume-running", func=lambda: None, interval=60
+        )
+        persistence = scheduler.persistence
+
+        # The row says RUNNING.
+        persistence.mark_task_running(task_id)
+        with pytest.raises(TaskRunningError, match="has a job running"):
+            persistence.resume_task(task_id)
+        assert persistence.get_task(task_id).status == TaskStatus.RUNNING
+
+        # The row says PAUSED; only the scheduler knows the job runs.
+        persistence.pause_task(task_id)
+        with pytest.raises(TaskRunningError, match="has a job running"):
+            persistence.resume_task(task_id, job_running=True)
+        assert persistence.get_task(task_id).status == TaskStatus.PAUSED
+
+        persistence.resume_task(task_id)
+        assert persistence.get_task(task_id).status == TaskStatus.ACTIVE
     finally:
         scheduler.shutdown()
 

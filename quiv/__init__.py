@@ -19,6 +19,7 @@ from .exceptions import (
     SchedulerStoppedError,
     TaskNotActiveError,
     TaskNotFoundError,
+    TaskRunningError,
 )
 from .models import Event, Job, JobStatus, QuivStats, Task, TaskStatus
 from .scheduler import Quiv
@@ -39,6 +40,7 @@ __all__ = [
     "HandlerNotRegisteredError",
     "TaskNotActiveError",
     "TaskNotFoundError",
+    "TaskRunningError",
     "JobNotFoundError",
     "JobCancelledError",
     "SchedulerStoppedError",

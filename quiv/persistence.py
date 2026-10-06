@@ -14,6 +14,7 @@ from .exceptions import (
     JobNotFoundError,
     TaskNotActiveError,
     TaskNotFoundError,
+    TaskRunningError,
 )
 from .models import Job, JobStatus, TaskDB, TaskStatus, seconds_after
 
@@ -321,8 +322,8 @@ class PersistenceLayer:
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
-            TaskNotActiveError: If the task is not in ACTIVE status
-                (e.g. currently running or paused).
+            TaskRunningError: If the task is running.
+            TaskNotActiveError: If the task is paused.
         """
 
         with self._write_lock, Session(self._engine) as session:
@@ -332,15 +333,16 @@ class PersistenceLayer:
                     f"Task '{task_id}' was not found. Add it with"
                     " add_task before running immediately."
                 )
-            if task.status != TaskStatus.ACTIVE:
-                hint = (
-                    " Use resume_task() to resume it first."
-                    if task.status == TaskStatus.PAUSED
-                    else ""
+            if task.status == TaskStatus.RUNNING:
+                raise TaskRunningError(
+                    f"Task '{task_id}' is running; only active tasks can be"
+                    " queued for immediate run."
                 )
+            if task.status != TaskStatus.ACTIVE:
                 raise TaskNotActiveError(
                     f"Task '{task_id}' is {task.status}; only active tasks"
-                    f" can be queued for immediate run.{hint}"
+                    " can be queued for immediate run. Use resume_task() to"
+                    " resume it first."
                 )
             now = self._now_utc()
             task.next_run_at = now
@@ -367,21 +369,34 @@ class PersistenceLayer:
             task.status = TaskStatus.PAUSED
             session.commit()
 
-    def resume_task(self, task_id: str, delay: int = 0) -> None:
+    def resume_task(
+        self, task_id: str, delay: int = 0, job_running: bool = False
+    ) -> None:
         """Resume a paused task and schedule it to run immediately.
 
         Args:
             task_id (str): Task identifier.
             delay (int, Optional=0): Seconds to delay before next run.
+            job_running (bool, Optional=False): Whether the scheduler has
+                a job of this task in flight. The row of a task paused
+                during its run cannot show it.
 
         Raises:
             TaskNotFoundError: If task does not exist.
+            TaskRunningError: If the task is RUNNING or ``job_running``
+                is set. Made ACTIVE, the task would start a second run
+                beside its job.
         """
 
         with self._write_lock, Session(self._engine) as session:
             task = session.get(TaskDB, task_id)
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            if job_running or task.status == TaskStatus.RUNNING:
+                raise TaskRunningError(
+                    f"Task '{task_id}' has a job running; resume it after"
+                    " the job ends."
+                )
             task.status = TaskStatus.ACTIVE
             task.next_run_at = seconds_after(self._now_utc(), delay)
             session.commit()

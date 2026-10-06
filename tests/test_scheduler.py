@@ -17,6 +17,7 @@ from quiv.exceptions import (
     HandlerRegistrationError,
     TaskNotActiveError,
     TaskNotFoundError,
+    TaskRunningError,
 )
 from quiv.models import JobStatus, TaskStatus
 
@@ -477,6 +478,14 @@ def test_deprecated_task_not_scheduled_error_is_removed() -> None:
     assert "TaskNotScheduledError" not in quiv.__all__
 
 
+def test_task_running_error_is_exported_as_a_task_not_active_error() -> None:
+    """Added in 1.2.1 as a subclass, so older except clauses still work."""
+    import quiv
+
+    assert "TaskRunningError" in quiv.__all__
+    assert issubclass(quiv.TaskRunningError, quiv.TaskNotActiveError)
+
+
 def test_add_task_run_at_schedules_an_absolute_time(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:
@@ -899,8 +908,11 @@ def test_run_task_immediately_rejects_running_task(
             task_name="busy", func=lambda: None, interval=60
         )
         scheduler.persistence.mark_task_running(task_id)
-        with pytest.raises(TaskNotActiveError):
+        with pytest.raises(TaskRunningError) as excinfo:
             scheduler.run_task_immediately(task_id)
+        # Raised as TaskNotActiveError before 1.2.1; such a clause still
+        # catches it.
+        assert isinstance(excinfo.value, TaskNotActiveError)
         assert (
             scheduler.persistence.get_task(task_id).status
             == TaskStatus.RUNNING
@@ -918,8 +930,9 @@ def test_run_task_immediately_rejects_paused_task(
             task_name="paused", func=lambda: None, interval=60
         )
         scheduler.pause_task(task_id)
-        with pytest.raises(TaskNotActiveError):
+        with pytest.raises(TaskNotActiveError) as excinfo:
             scheduler.run_task_immediately(task_id)
+        assert not isinstance(excinfo.value, TaskRunningError)
         assert (
             scheduler.persistence.get_task(task_id).status
             == TaskStatus.PAUSED
@@ -950,11 +963,18 @@ def test_a_task_paused_while_its_job_runs_stays_paused(
         assert len(job_ids) == 1
 
         scheduler.pause_task(task_id)
+        # The row says PAUSED, but the job still runs: made ACTIVE, the
+        # task would start a second run beside it.
+        with pytest.raises(TaskRunningError, match="has a job running"):
+            scheduler.resume_task(task_id)
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+
         release.set()
         job = scheduler.wait_for_job(job_ids[0], timeout=5)
 
         assert job.status == JobStatus.COMPLETED
         assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+        assert scheduler._tasks_in_flight == set()
         # Five intervals: an active task would have run again by now.
         time.sleep(0.5)
         assert len(job_ids) == 1
@@ -964,6 +984,39 @@ def test_a_task_paused_while_its_job_runs_stays_paused(
         while len(job_ids) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)
         assert len(job_ids) >= 2
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_resume_task_rejects_a_running_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+    runs: list[int] = []
+
+    def handler() -> None:
+        runs.append(1)
+        started.set()
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task(
+            task_name="running", func=handler, interval=60
+        )
+        scheduler.start()
+        assert started.wait(5)
+
+        with pytest.raises(TaskRunningError, match="has a job running"):
+            scheduler.resume_task(task_id)
+
+        # Before the fix, resume_task() made the task ACTIVE and due, and
+        # the loop started a second run beside the first.
+        time.sleep(0.3)
+        assert runs == [1]
+        assert scheduler.get_task(task_id).status == TaskStatus.RUNNING
     finally:
         release.set()
         scheduler.shutdown()
@@ -1003,6 +1056,7 @@ def test_dispatch_skips_when_task_row_deleted(
         scheduler._dispatch_due_task(row, scheduler._now_utc())
         assert scheduler.get_all_jobs() == []
         assert scheduler._active_job_count == 0
+        assert scheduler._tasks_in_flight == set()
     finally:
         scheduler.shutdown()
 

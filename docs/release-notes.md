@@ -1,7 +1,7 @@
 <a id="v1.2.1"></a>
 ## [v1.2.1 - A database error no longer stops the scheduler](https://github.com/nandyalu/quiv/releases/tag/v1.2.1) - 2026-10-04
 
-A patch release. Some single errors put the scheduler in a state that only a process restart cleared. A task stayed `running` and did not run again, a worker slot was lost, or dispatch stopped. Now one error costs one job, and the scheduler continues to run. Nothing in the API changed.
+A patch release. Some single errors put the scheduler in a state that only a process restart cleared. A task stayed `running` and did not run again, a worker slot was lost, or dispatch stopped. Now one error costs one job, and the scheduler continues to run. The release also fixes two problems with `pause_task()` and `resume_task()` on a task with a running job. The API has one addition, the exception `TaskRunningError`.
 
 The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from Trailarr, where the hourly tasks stopped after 20 to 40 hours, the API still answered, and a restart fixed it.
 
@@ -26,6 +26,12 @@ The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from
 - **`add_task()` and `update_task()` refuse `NaN`.** They checked `interval`, `delay`, `timeout`, `retry_backoff`, and `jitter` with comparisons such as `value <= 0`. A comparison with `NaN` is always false, so `NaN` passed every check. A `NaN` interval was accepted, and the task stayed `running` after its first job. Now each of these parameters raises `ConfigurationError` for `NaN`.
 
 - **A task paused while its job runs stays paused.** `pause_task()` on a task with a running job set the task to `paused`. When the job ended, quiv set the task back to `active`, and the task ran again on schedule. The pause was lost, and quiv did not log it. Now the task stays `paused` after the job ends, until you call `resume_task()`. quiv still updates the retry count and the next run time. A run-once task had its one run, so quiv still deletes it.
+
+- **`resume_task()` no longer starts a second run beside a running job.** `resume_task()` set the task to `active` and made it due at once, also when a job of the task still ran. The loop then started a second run at the same time as the first. This broke the guarantee that one task never overlaps itself. It happened when you resumed a running task, or when you paused a task during its job and resumed it before the job ended. Now `resume_task()` raises `TaskRunningError` until the job ends. To resume the task when the job ends, call `wait_for_task()` first.
+
+### What's new
+
+- **`TaskRunningError`.** quiv raises it when a job of the task is still running. `resume_task()` and `run_task_immediately()` raise it. The class inherits `TaskNotActiveError`. Before, `run_task_immediately()` raised `TaskNotActiveError` for a running task, so an existing `except TaskNotActiveError` clause still catches it. To handle a running task on its own, catch `TaskRunningError` first.
 
 The [Failure Handling](https://nandyalu.github.io/quiv/failure-handling/#when-the-database-fails) page has a new section about what quiv does when its database fails.
 

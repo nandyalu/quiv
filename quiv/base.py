@@ -167,6 +167,10 @@ class QuivBase(ABC):
         self.stop_events: dict[str, threading.Event] = {}
         self._job_deadlines: dict[str, float] = {}  # job_id -> monotonic
         self._timed_out_jobs: set[str] = set()
+        # Task ids with a job between dispatch and finalize. The row of a
+        # task paused during its run says PAUSED, so only this shows that
+        # its job still runs.
+        self._tasks_in_flight: set[str] = set()
         self._registries_lock = threading.Lock()
         self._wake_event = threading.Event()
         self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
@@ -572,9 +576,10 @@ class QuivBase(ABC):
                 run-once task that already fired has removed itself.
             HandlerNotRegisteredError: If the task exists but no handler
                 is registered for it.
-            TaskNotActiveError: If the task is not in ACTIVE status —
-                running tasks cannot be queued again (no-overlap invariant)
-                and paused tasks must be resumed explicitly via
+            TaskRunningError: If a job of the task is running. A second
+                run beside it would break the no-overlap invariant. It
+                subclasses ``TaskNotActiveError``.
+            TaskNotActiveError: If the task is paused. Resume it with
                 ``resume_task()``.
         """
 
@@ -1038,9 +1043,19 @@ class QuivBase(ABC):
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
+            TaskRunningError: If a job of the task is still running,
+                also when the task was paused during that job. Resume
+                it after the job ends.
         """
 
-        self.persistence.resume_task(task_id, delay=delay)
+        # Read before the write, not under it: the dispatch adds the id
+        # before it marks the row RUNNING, so a job that starts after
+        # this read is refused by the row's RUNNING status instead.
+        with self._registries_lock:
+            job_running = task_id in self._tasks_in_flight
+        self.persistence.resume_task(
+            task_id, delay=delay, job_running=job_running
+        )
         task = Task.model_validate(self.persistence.get_task(task_id))
         self._emit_event(Event.TASK_RESUMED, task)
         self._wake_loop()

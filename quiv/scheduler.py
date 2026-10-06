@@ -695,6 +695,11 @@ class Quiv(QuivBase):
 
         with self._registries_lock:
             func = self.registry.get(task.id)
+            if func is not None:
+                # Before the mark, so that resume_task() sees the job for
+                # its whole life. _run_job discards it after the task is
+                # finalized.
+                self._tasks_in_flight.add(task.id)
         if func is None:
             # Task was removed between the due-query and dispatch.
             self._logger.warning(
@@ -715,6 +720,8 @@ class Quiv(QuivBase):
                 task.id, task.task_name, attempt=task.retry_attempt + 1
             )
         except TaskNotFoundError:
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task.id)
             self._logger.warning(
                 f"Skipping dispatch for task '{task.id}': task row was"
                 " deleted before dispatch."
@@ -722,6 +729,8 @@ class Quiv(QuivBase):
             self._fail_removed_task_waiters(task.id)
             return
         except Exception:
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task.id)
             if marked:
                 # No job exists to finalize the task. Left RUNNING, it
                 # never comes back from get_due_tasks; ACTIVE and still
@@ -953,6 +962,10 @@ class Quiv(QuivBase):
                     f"'{task_name}' (Job {job_id}) could not return task"
                     f" '{task_id}' to the schedule: {e}"
                 )
+            # After the task is finalized, so resume_task() never finds a
+            # task with a job in flight to be idle.
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task_id)
             with self._job_count_lock:
                 self._active_job_count -= 1
             # A freed slot lets deferred-due tasks dispatch, and the task's

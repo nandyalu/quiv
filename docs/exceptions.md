@@ -11,6 +11,7 @@ Every exception that quiv raises inherits from `QuivError`.
 	- `HandlerRegistrationError`
 	- `HandlerNotRegisteredError`
 	- `TaskNotActiveError`
+		- `TaskRunningError`
 	- `TaskNotFoundError`
 	- `JobNotFoundError`
 	- `JobCancelledError`
@@ -50,10 +51,19 @@ quiv raises this when an operation needs a registered handler and the task id ha
 
 ### `TaskNotActiveError`
 
-quiv raises this when an operation needs an `active` task. `run_task_immediately()` is the only method that raises it, in two cases:
+quiv raises this when an operation needs an `active` task. `run_task_immediately()` raises it in two cases:
 
-- The task is `running`. A second run at the same time would break the guarantee that one task never overlaps itself.
+- The task is `running`. quiv raises the subclass `TaskRunningError`.
 - The task is `paused`. To continue a paused task, call `resume_task()`.
+
+### `TaskRunningError`
+
+quiv raises this when a job of the task is still running. Two methods raise it:
+
+- `run_task_immediately()`. A second run at the same time would break the guarantee that one task never overlaps itself.
+- `resume_task()`. This is also true for a task that you paused during its job: the status is `paused`, but the job continues. A resume at that time would start a second run while the first one continues. Resume the task after the job ends.
+
+`TaskRunningError` inherits `TaskNotActiveError`. Before 1.2.1, `run_task_immediately()` raised `TaskNotActiveError` for a running task, so an `except TaskNotActiveError` clause still catches this error. To handle a running task on its own, catch `TaskRunningError` first.
 
 ### `TaskNotFoundError`
 
