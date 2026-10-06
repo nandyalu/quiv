@@ -479,7 +479,7 @@ def test_deprecated_task_not_scheduled_error_is_removed() -> None:
 
 
 def test_task_running_error_is_exported_as_a_task_not_active_error() -> None:
-    """Added in 1.2.1 as a subclass, so older except clauses still work."""
+    """Added in 1.3.0 as a subclass, so older except clauses still work."""
     import quiv
 
     assert "TaskRunningError" in quiv.__all__
@@ -910,7 +910,7 @@ def test_run_task_immediately_rejects_running_task(
         scheduler.persistence.mark_task_running(task_id)
         with pytest.raises(TaskRunningError) as excinfo:
             scheduler.run_task_immediately(task_id)
-        # Raised as TaskNotActiveError before 1.2.1; such a clause still
+        # Raised as TaskNotActiveError before 1.3.0; such a clause still
         # catches it.
         assert isinstance(excinfo.value, TaskNotActiveError)
         assert (

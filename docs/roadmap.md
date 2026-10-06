@@ -84,7 +84,7 @@ This is not calendar scheduling. `run_at` names one instant for one run. Recurre
 
 The three caveats in the README were reviewed on 2026-09-17: the temporary database, the single process, and the picklable arguments. Process jobs became Phase 7. The other two stay out of scope, and [Out of scope](#out-of-scope-for-v100) records why.
 
-On 2026-09-25 the two applications that run quiv, trailarr and ten-acre, were reviewed against their running containers. Neither had logged a scheduler fault, and both carried the same workarounds: handlers that hand all their work to the main loop and leave quiv nothing to record, endpoints that add a one-off and cannot report it, a cancel that cannot reach a child process, a `shutdown()` with no timeout inside a ten-second stop grace, no way to ask whether the loop is alive, and tests that stub quiv out. That review produced Phases 8 and 9. They do not build on Phase 7, and they ship before it: Phase 8 as `v1.2.0`, Phase 9 as `v1.3.0`, and Phase 7 as `v1.4.0`. The phase numbers stay; the versions moved.
+On 2026-09-25 the two applications that run quiv, trailarr and ten-acre, were reviewed against their running containers. Neither had logged a scheduler fault, and both carried the same workarounds: handlers that hand all their work to the main loop and leave quiv nothing to record, endpoints that add a one-off and cannot report it, a cancel that cannot reach a child process, a `shutdown()` with no timeout inside a ten-second stop grace, no way to ask whether the loop is alive, and tests that stub quiv out. That review produced Phases 8 and 9. They do not build on Phase 7, and they ship before it: Phase 8 as `v1.2.0`, Phase 9 as `v1.4.0`, and Phase 7 as `v1.5.0`. The phase numbers stay; the versions moved. `v1.3.0` went to the fixes for #86, which is why Phase 9 is not `v1.3.0`.
 
 ## `v1.1.0` — `run_at` on `update_task()` and `pending_main_loop_work()`
 
@@ -94,7 +94,7 @@ Not a roadmap phase. Two additive changes shipped ahead of Phase 7. `update_task
 
 quiv never waits for that work and never cancels it, because the loop belongs to the application. A `shutdown` that drained the work was written and then removed during review. It could hang in three ways, and one case has no fix: a job abandoned by `shutdown(timeout=...)` runs on a thread that cannot be stopped, so it can hand work over after any drain has finished. The count is the feature. `CLAUDE.md` records the decision so that a drain is not proposed again.
 
-## Phase 7 — Process jobs (`v1.4.0`)
+## Phase 7 — Process jobs (`v1.5.0`)
 
 **Status: 📋 planned** — decisions settled 2026-09-17; the plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md).
 
@@ -124,16 +124,16 @@ Everything here lets a caller wait on something and lets cancellation reach it.
 
 **Exit criteria:** the tests in the plan pass on 3.10 through 3.14; `docs/testing.md` opens with a working recipe for testing an application's own handlers against a real instance.
 
-## `v1.2.1` — One error costs one job
+## `v1.3.0` — One error costs one job
 
-**Status: ✅ complete** — implemented 2026-10-04, ships as `v1.2.1`.
+**Status: ✅ complete** — implemented 2026-10-04 to 2026-10-06, ships as `v1.3.0`.
 
-Not a roadmap phase. This patch fixes [#86](https://github.com/nandyalu/quiv/issues/86). Several single errors left a task `running` for good, lost a worker slot, or stopped dispatch until the process restarted. The [release notes](release-notes.md) list each fix. Four decisions came out of the work, and they were made on 2026-10-04.
+Not a roadmap phase. This release fixes [#86](https://github.com/nandyalu/quiv/issues/86). Several single errors left a task `running` for good, lost a worker slot, or stopped dispatch until the process restarted. The [release notes](release-notes.md) list each fix. Nine decisions came out of the work. Decisions 1 to 4 were made on 2026-10-04, after the report. Decisions 5 to 9 were made on 2026-10-06, during the review of the pull request.
 
 1. **`quiv_job.task_id` is not a foreign key.** The job history stays after its task row is deleted. Some applications set `PRAGMA foreign_keys=ON` on every SQLAlchemy engine in the process, and that setting reaches the engine of quiv. With the key, the delete of a finished run-once task failed. This was the fault behind the report. `ondelete="SET NULL"` was considered and not used: it makes `Job.task_id` optional, which changes a public type, and the job loses the task that it belonged to.
 2. **A run time past year 9999 is clamped, not refused.** Every computed run time goes through one function, which clamps it to 30 December 9999 (UTC). A value that worked before behaves the same. A ceiling on the retry backoff, for example one day, was considered and not adopted. The docs promise that the delay doubles with each failure, so a ceiling is a separate decision.
 3. **`NaN` is refused.** The numeric parameters of `add_task()` and `update_task()` raise `ConfigurationError` for `NaN`. A `NaN` interval had the same result as an overflow: the task stayed `running`.
-4. **One failure is not recovered, and the design of its fix is chosen.** After the handler returns, quiv writes the task back to `active`. If that write fails, the task stays `running` until the process restarts. quiv logs the error and frees the worker. After decisions 2 and 3, the write fails only when the system fails, for example on a full disk or an I/O error. This risk was accepted for `v1.2.1`, and no release is planned for the fix.
+4. **One failure is not recovered, and the design of its fix is chosen.** After the handler returns, quiv writes the task back to `active`. If that write fails, the task stays `running` until the process restarts. quiv logs the error and frees the worker. After decisions 2 and 3, the write fails only when the system fails, for example on a full disk or an I/O error. This risk was accepted for `v1.3.0`, and no release is planned for the fix.
 
     The database alone cannot fix the task. Only `finalize_task_after_job` returns a task to `active`, and a stuck row looks the same as a task whose job still runs. Only the memory of quiv knows which is which. That memory is reliable, because the database is a private file and quiv is its only writer. If recovery is built later, it uses this design:
 
@@ -142,7 +142,16 @@ Not a roadmap phase. This patch fixes [#86](https://github.com/nandyalu/quiv/iss
 
     Until then, an application can find a stuck task: `stats().tasks_by_status.get("running", 0)` stays higher than `stats().active_jobs`. `remove_task()` followed by `add_task()` clears it.
 
-## Phase 9 — Operations (`v1.3.0`)
+5. **A pause holds while a job runs.** `pause_task()` on a task with a running job sets the task to `paused`, and the task stays `paused` when the job ends. Before, the end of the job set the task back to `active`. Two more writes that set `active` without a check are now conditional. The return to `active` after a failed dispatch changes only a `running` row, and `mark_task_running` refuses a row that is not `active`. Each of these writes holds the persistence write lock.
+6. **`resume_task()` raises `TaskRunningError` while a job of the task runs.** A resume at that time made the task due, and the loop started a second run beside the job. The row of a task paused during its job says `paused`, so quiv keeps in memory the ids of the tasks that have a job in flight. A dispatch adds the id before it marks the row `running`. The job removes the id after it returns the task to the schedule. The job rows were not used for this check: after a failed `finalize_job`, a row says `running` for good, and its task could never be resumed.
+
+    - **Rejected for now: resume after the job ends, with no error.** To do this safely, the row needs a separate pause flag, and the status stays `running` until the job ends. That adds a column and changes what `get_task()` shows after `pause_task()`. Phase 9 adds `rerun_requested`, a flag of the same kind, so the idea comes back there.
+
+7. **`TaskRunningError` inherits `TaskNotActiveError`.** `run_task_immediately()` raised `TaskNotActiveError` for a running task, and an existing `except` clause must still catch that error. A separate class would break the clause, which a 1.x release must not do.
+8. **After a failed write, quiv hands over the job that it tried to write.** If `finalize_job` fails, or the read-back fails, the `JOB_*` event and the waiters get a `Job` made in memory: the status, the duration, the error, and the attempt. A first version gave the waiters the database error and sent no event. The caller then could not know whether its handler had succeeded, it had to catch a SQLAlchemy exception from a quiv method, and the listeners did not see the end of the job. The new behavior follows the rule for waiters in the design that decision 4 chose.
+9. **The release is `v1.3.0`, not `v1.2.1`.** It adds a public class, and `resume_task()` now raises for a task with a running job. Semantic versioning makes that a minor release. Phase 9 moved to `v1.4.0`, and Phase 7 moved to `v1.5.0`.
+
+## Phase 9 — Operations (`v1.4.0`)
 
 **Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8; ships after Phase 8 and before Phase 7.
 

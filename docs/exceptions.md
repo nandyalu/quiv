@@ -63,7 +63,7 @@ quiv raises this when a job of the task is still running. Two methods raise it:
 - `run_task_immediately()`. A second run at the same time would break the guarantee that one task never overlaps itself.
 - `resume_task()`. This is also true for a task that you paused during its job: the status is `paused`, but the job continues. A resume at that time would start a second run while the first one continues. Resume the task after the job ends.
 
-`TaskRunningError` inherits `TaskNotActiveError`. Before 1.2.1, `run_task_immediately()` raised `TaskNotActiveError` for a running task, so an `except TaskNotActiveError` clause still catches this error. To handle a running task on its own, catch `TaskRunningError` first.
+`TaskRunningError` inherits `TaskNotActiveError`. Before 1.3.0, `run_task_immediately()` raised `TaskNotActiveError` for a running task, so an `except TaskNotActiveError` clause still catches this error. To handle a running task on its own, catch `TaskRunningError` first.
 
 ### `TaskNotFoundError`
 

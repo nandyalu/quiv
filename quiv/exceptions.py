@@ -37,7 +37,7 @@ class TaskRunningError(TaskNotActiveError):
     either call would start a second run beside the job.
 
     It inherits :class:`TaskNotActiveError`. ``run_task_immediately()``
-    raised that class for a running task before 1.2.1, so an existing
+    raised that class for a running task before 1.3.0, so an existing
     ``except TaskNotActiveError`` clause keeps working.
     """
 

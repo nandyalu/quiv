@@ -1,7 +1,7 @@
-<a id="v1.2.1"></a>
-## [v1.2.1 - A database error no longer stops the scheduler](https://github.com/nandyalu/quiv/releases/tag/v1.2.1) - 2026-10-04
+<a id="v1.3.0"></a>
+## [v1.3.0 - A database error no longer stops the scheduler](https://github.com/nandyalu/quiv/releases/tag/v1.3.0) - 2026-10-06
 
-A patch release. Some single errors put the scheduler in a state that only a process restart cleared. A task stayed `running` and did not run again, a worker slot was lost, or dispatch stopped. Now one error costs one job, and the scheduler continues to run. The release also fixes two problems with `pause_task()` and `resume_task()` on a task with a running job. The API has one addition, the exception `TaskRunningError`.
+Some single errors put the scheduler in a state that only a process restart cleared. A task stayed `running` and did not run again, a worker slot was lost, or dispatch stopped. Now one error costs one job, and the scheduler continues to run. The release also fixes two problems with `pause_task()` and `resume_task()` on a task with a running job. It is a minor release, because it adds the exception `TaskRunningError`, and `resume_task()` now raises it for a task with a running job.
 
 The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from Trailarr, where the hourly tasks stopped after 20 to 40 hours, the API still answered, and a restart fixed it.
 
@@ -35,7 +35,7 @@ The report is [#86](https://github.com/nandyalu/quiv/issues/86). It started from
 
 The [Failure Handling](https://nandyalu.github.io/quiv/failure-handling/#when-the-database-fails) page has a new section about what quiv does when its database fails.
 
-**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.2.0...v1.2.1
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.2.0...v1.3.0
 
 <a id="v1.2.0"></a>
 ## [v1.2.0 - Waiting on work (Phase 8)](https://github.com/nandyalu/quiv/releases/tag/v1.2.0) - 2026-09-25
