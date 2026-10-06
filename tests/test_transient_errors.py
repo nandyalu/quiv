@@ -179,7 +179,7 @@ def test_system_exit_and_keyboard_interrupt_are_recorded_then_reraised(
 # ---------------------------------------------------------------------------
 
 
-def test_a_failed_finalize_job_fails_the_waiters_and_returns_the_task(
+def test_a_failed_finalize_job_still_hands_over_the_finished_job(
     monkeypatch: pytest.MonkeyPatch,
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
@@ -207,24 +207,79 @@ def test_a_failed_finalize_job_fails_the_waiters_and_returns_the_task(
         )
         scheduler.start()
 
-        # The end status was not written, so the row still says RUNNING.
-        # The waiter gets the write error, not a job that has not ended.
-        with pytest.raises(RuntimeError, match="disk I/O error"):
-            scheduler.wait_for_task(task_id, timeout=5)
+        job = scheduler.wait_for_task(task_id, timeout=5)
 
-        (job,) = scheduler.get_all_jobs(task_id=task_id)
-        assert job.status == JobStatus.RUNNING
-        # Listeners run on the main loop: a JOB_* event emitted before the
-        # waiter failed has run once this round trip returns.
+        # The end status was not written, but the waiter still gets the
+        # outcome of the handler, not the row that says RUNNING.
+        assert job.status == JobStatus.COMPLETED
+        assert job.ended_at is not None
+        assert job.duration_seconds is not None
+        assert job.error_message is None
+        assert job.attempt == 1
+        assert scheduler.get_job(job.id).status == JobStatus.RUNNING
+        # Listeners run on the main loop: the JOB_* event emitted before
+        # the waiter woke has run once this round trip returns.
         asyncio.run_coroutine_threadsafe(
             asyncio.sleep(0), running_main_loop
         ).result(timeout=5)
-        assert ended == []
-        assert scheduler._task_waiters == {}
+        assert [(j.id, j.status) for j in ended] == [
+            (job.id, JobStatus.COMPLETED)
+        ]
         # The task and the slot are not lost with the job's end status.
         assert scheduler.get_task(task_id).status == TaskStatus.ACTIVE
         assert scheduler._active_job_count == 0
         assert "could not record its end status 'completed'" in caplog.text
+    finally:
+        scheduler.shutdown()
+
+
+def test_a_job_built_after_a_failed_write_keeps_the_error_and_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    real_finalize_job = scheduler.persistence.finalize_job
+    calls = {"n": 0}
+    failed: list[Job] = []
+    retrying: list[Job] = []
+
+    def finalize_job(*args: Any, **kwargs: Any) -> None:
+        # Fail the second write: the one for the retry, attempt 2.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("disk I/O error")
+        real_finalize_job(*args, **kwargs)
+
+    def boom() -> None:
+        raise ValueError("boom")
+
+    def on_failed(event: Event, task: Task, job: Job) -> None:
+        failed.append(job)
+
+    def on_retrying(event: Event, task: Task, job: Job) -> None:
+        retrying.append(job)
+
+    try:
+        monkeypatch.setattr(
+            scheduler.persistence, "finalize_job", finalize_job
+        )
+        scheduler.add_listener(Event.JOB_FAILED, on_failed)
+        scheduler.add_listener(Event.JOB_RETRYING, on_retrying)
+        scheduler.add_task(
+            "failing", boom, interval=60, max_retries=1, retry_backoff=0.1
+        )
+        scheduler.start()
+
+        _wait_until(lambda: len(failed) == 2)
+
+        built = failed[1]
+        assert built.status == JobStatus.FAILED
+        assert built.attempt == 2
+        assert built.error_message is not None
+        assert "boom" in built.error_message
+        assert scheduler.get_job(built.id).status == JobStatus.RUNNING
+        # Only the first failure scheduled a retry; the second used it up.
+        assert [j.attempt for j in retrying] == [1]
     finally:
         scheduler.shutdown()
 
@@ -262,7 +317,7 @@ def test_a_failed_finalize_task_still_frees_the_slot(
         scheduler.shutdown()
 
 
-def test_a_failed_read_back_fails_the_waiters_instead_of_hanging(
+def test_a_failed_read_back_still_hands_over_the_finished_job(
     monkeypatch: pytest.MonkeyPatch,
     running_main_loop: asyncio.AbstractEventLoop,
     caplog: pytest.LogCaptureFixture,
@@ -286,9 +341,12 @@ def test_a_failed_read_back_fails_the_waiters_instead_of_hanging(
         )
         scheduler.start()
 
-        with pytest.raises(RuntimeError, match="database is locked"):
-            scheduler.wait_for_task(task_id, timeout=5)
+        # The row is written but cannot be read; the waiter gets the job
+        # made from the values quiv wrote, instead of the error.
+        job = scheduler.wait_for_task(task_id, timeout=5)
 
+        assert job.status == JobStatus.COMPLETED
+        assert job.duration_seconds is not None
         assert scheduler._active_job_count == 0
         assert scheduler._task_waiters == {}
         assert "could not be read back after it finished" in caplog.text

@@ -19,7 +19,15 @@ from .exceptions import (
     TaskNotActiveError,
     TaskNotFoundError,
 )
-from .models import Event, JobStatus, Task, TaskDB, TaskStatus, seconds_after
+from .models import (
+    Event,
+    Job,
+    JobStatus,
+    Task,
+    TaskDB,
+    TaskStatus,
+    seconds_after,
+)
 
 _CLEANUP_INTERVAL_SECONDS = 60.0
 _MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
@@ -984,16 +992,14 @@ class Quiv(QuivBase):
                     self.registry.pop(task_id, None)
                     self.progress_callbacks.pop(task_id, None)
 
-            # No JOB_* event and no waiter may get a job that has not
-            # ended. When the end status was not written, or the job
-            # cannot be read back, no event fires and the waiters get the
-            # error instead of waiting for a job that never comes.
-            if finalize_error is not None:
-                # The row still says RUNNING; reading it back would hand
-                # that over as the finished job.
-                self._fail_waiters(self._job_waiters, job_id, finalize_error)
-                self._fail_waiters(self._task_waiters, task_id, finalize_error)
-            else:
+            # The JOB_* event and the waiters get the finished job, never
+            # one that has not ended. After a failed end-status write the
+            # row still says RUNNING, so it is not read back. Then, and
+            # when the read itself fails, they get a Job made from the
+            # values quiv tried to write: the outcome of the handler is
+            # known even when the database is not.
+            finalized_job: Job | None = None
+            if finalize_error is None:
                 try:
                     finalized_job = self.get_job(job_id)
                 except Exception as e:
@@ -1001,28 +1007,32 @@ class Quiv(QuivBase):
                         f"'{task_name}' (Job {job_id}) could not be read"
                         f" back after it finished: {e}"
                     )
-                    self._fail_waiters(self._job_waiters, job_id, e)
-                    self._fail_waiters(self._task_waiters, task_id, e)
-                else:
-                    event_map = {
-                        JobStatus.COMPLETED: Event.JOB_COMPLETED,
-                        JobStatus.FAILED: Event.JOB_FAILED,
-                        JobStatus.CANCELLED: Event.JOB_CANCELLED,
-                    }
-                    if status in event_map:
-                        self._emit_event(
-                            event_map[status], task_snapshot, finalized_job
-                        )
-                    if will_retry:
-                        self._emit_event(
-                            Event.JOB_RETRYING, task_snapshot, finalized_job
-                        )
-                    # After the events, so the JOB_* event is emitted
-                    # before a waiter wakes; the wait methods promise that
-                    # order.
-                    self._resolve_waiters(
-                        self._job_waiters, job_id, finalized_job
-                    )
-                    self._resolve_waiters(
-                        self._task_waiters, task_id, finalized_job
-                    )
+            if finalized_job is None:
+                finalized_job = Job(
+                    id=job_id,
+                    task_id=task_id,
+                    task_name=task_name,
+                    status=status,
+                    started_at=start_time,
+                    ended_at=start_time + duration,
+                    duration_seconds=duration.total_seconds(),
+                    error_message=error_message,
+                    attempt=task_snapshot.retry_attempt + 1,
+                )
+            event_map = {
+                JobStatus.COMPLETED: Event.JOB_COMPLETED,
+                JobStatus.FAILED: Event.JOB_FAILED,
+                JobStatus.CANCELLED: Event.JOB_CANCELLED,
+            }
+            if status in event_map:
+                self._emit_event(
+                    event_map[status], task_snapshot, finalized_job
+                )
+            if will_retry:
+                self._emit_event(
+                    Event.JOB_RETRYING, task_snapshot, finalized_job
+                )
+            # After the events, so the JOB_* event is emitted before a
+            # waiter wakes; the wait methods promise that order.
+            self._resolve_waiters(self._job_waiters, job_id, finalized_job)
+            self._resolve_waiters(self._task_waiters, task_id, finalized_job)
