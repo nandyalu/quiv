@@ -305,6 +305,7 @@ A separate router imports the same scheduler instance and publishes the endpoint
 ```python
 # myapp/routes/tasks.py
 from fastapi import APIRouter, HTTPException
+from quiv import TaskNotActiveError, TaskNotFoundError
 
 from myapp.scheduler import scheduler
 
@@ -316,8 +317,11 @@ def run_task_now(task_id: str):
     """Trigger a scheduled task to run immediately."""
     try:
         count = scheduler.run_task_immediately(task_id)
-    except Exception as e:
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except TaskNotActiveError as e:
+        # The task is running or paused: it exists, so 409, not 404.
+        raise HTTPException(status_code=409, detail=str(e))
     return {"queued": count}
 
 
@@ -326,7 +330,7 @@ def pause_task(task_id: str):
     """Pause a task by id."""
     try:
         scheduler.pause_task(task_id)
-    except Exception as e:
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "paused"}
 
@@ -336,8 +340,12 @@ def resume_task(task_id: str, delay: int = 0):
     """Resume a paused task, optionally with a delay."""
     try:
         scheduler.resume_task(task_id, delay=delay)
-    except Exception as e:
+    except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except TaskNotActiveError as e:
+        # TaskRunningError: a job of the task still runs. Try again
+        # after the job ends.
+        raise HTTPException(status_code=409, detail=str(e))
     return {"status": "resumed"}
 
 

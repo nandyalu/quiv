@@ -46,6 +46,7 @@ scheduler.add_task("flaky-sync", sync_upstream, interval=300, max_retries=3, ret
 - When the retries run out, a recurring task returns to its normal interval and the counter resets. quiv deletes a run-once task.
 - Each `Job` records its `attempt` number. `1` is the first try, and `2` is the first retry.
 - `Event.JOB_RETRYING` fires after `JOB_FAILED` when quiv schedules a retry. It carries the usual `(event, task, job)` payload. See [Event Listeners](event-listeners.md).
+- If you pause a task while its job runs, and that job fails, the retry waits for `resume_task()`. `JOB_RETRYING` still fires, and the counter still goes up. The `delay` of `resume_task()` sets the time of the retry, not the backoff.
 
 ## Jitter
 
