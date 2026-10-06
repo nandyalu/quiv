@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from quiv import Quiv
 from quiv.exceptions import (
     JobNotFoundError,
+    TaskNotActiveError,
     TaskNotFoundError,
     TaskRunningError,
 )
@@ -57,6 +58,29 @@ def test_mark_task_running_missing_task_raises(
     try:
         with pytest.raises(TaskNotFoundError):
             scheduler.persistence.mark_task_running("missing")
+    finally:
+        scheduler.shutdown()
+
+
+def test_mark_task_running_refuses_a_task_that_is_not_active(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="not-active", func=lambda: None, interval=60
+        )
+        persistence = scheduler.persistence
+
+        persistence.pause_task(task_id)
+        with pytest.raises(TaskNotActiveError, match="is paused"):
+            persistence.mark_task_running(task_id)
+        assert persistence.get_task(task_id).status == TaskStatus.PAUSED
+
+        persistence.resume_task(task_id)
+        persistence.mark_task_running(task_id)
+        with pytest.raises(TaskNotActiveError, match="is running"):
+            persistence.mark_task_running(task_id)
     finally:
         scheduler.shutdown()
 

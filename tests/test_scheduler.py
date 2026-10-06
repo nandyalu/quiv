@@ -989,6 +989,29 @@ def test_a_task_paused_while_its_job_runs_stays_paused(
         scheduler.shutdown()
 
 
+def test_a_pause_after_the_due_query_wins_over_the_dispatch(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="due", func=lambda: None, interval=60
+        )
+        # The loop read the row as due; then pause_task() landed before
+        # the dispatch marked it RUNNING.
+        row = scheduler.persistence.get_task(task_id)
+        scheduler.pause_task(task_id)
+
+        scheduler._dispatch_due_task(row, scheduler._now_utc())
+
+        assert scheduler.get_all_jobs() == []
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+        assert scheduler._active_job_count == 0
+        assert scheduler._tasks_in_flight == set()
+    finally:
+        scheduler.shutdown()
+
+
 def test_resume_task_rejects_a_running_task(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

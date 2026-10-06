@@ -487,17 +487,28 @@ class PersistenceLayer:
     def mark_task_running(self, task_id: str) -> None:
         """Mark a task as running when dispatched to the executor.
 
+        Only an ``ACTIVE`` row is marked. The loop reads the due tasks
+        before it marks each one, so a pause can land in between; marked
+        anyway, the task would run, and its finalize would undo the
+        pause.
+
         Args:
             task_id (str): Task identifier.
 
         Raises:
             TaskNotFoundError: If task does not exist.
+            TaskNotActiveError: If the task is not ACTIVE.
         """
 
         with self._write_lock, Session(self._engine) as session:
             existing = session.get(TaskDB, task_id)
             if existing is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
+            if existing.status != TaskStatus.ACTIVE:
+                raise TaskNotActiveError(
+                    f"Task '{task_id}' is {existing.status}; only an active"
+                    " task is dispatched."
+                )
             existing.status = TaskStatus.RUNNING
             session.commit()
 

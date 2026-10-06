@@ -16,6 +16,7 @@ from .exceptions import (
     ConfigurationError,
     HandlerRegistrationError,
     JobCancelledError,
+    TaskNotActiveError,
     TaskNotFoundError,
 )
 from .models import Event, JobStatus, Task, TaskDB, TaskStatus, seconds_after
@@ -727,6 +728,13 @@ class Quiv(QuivBase):
                 " deleted before dispatch."
             )
             self._fail_removed_task_waiters(task.id)
+            return
+        except TaskNotActiveError as e:
+            # pause_task() landed after the due query. The pause wins:
+            # nothing was marked, and no job starts.
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task.id)
+            self._logger.info(f"Skipping dispatch for task '{task.id}': {e}")
             return
         except Exception:
             with self._registries_lock:
