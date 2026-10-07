@@ -168,6 +168,9 @@ def test_system_exit_and_keyboard_interrupt_are_recorded_then_reraised(
         assert job.status == JobStatus.FAILED
         assert job.error_message == expected_message
         assert scheduler._active_job_count == 0
+        # The job can finish and wake the waiter before real_submit
+        # returns on the loop thread, so the future is not in the list yet.
+        _wait_until(lambda: len(futures) == 1)
         # Recorded, but not swallowed: the exception reaches the future.
         assert futures[0].exception(timeout=5) is raised
     finally:
