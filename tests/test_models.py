@@ -52,7 +52,13 @@ def test_task_model_validator_normalizes_naive_next_run() -> None:
 
 
 def test_job_datetimes_normalized_to_utc_on_db_load() -> None:
-    """Job datetimes loaded from SQLite are normalized to UTC-aware via @reconstructor."""
+    """Job datetimes loaded from SQLite are UTC-aware.
+
+    SQLite stores a datetime as text with no offset. From sqlmodel 0.0.45
+    the column type reads it back as UTC; before 0.0.45 the reconstructor
+    does. sqlmodel 0.0.45 and later refuse a naive datetime as a
+    parameter, so the job is written with aware UTC values, as quiv does.
+    """
     from sqlmodel import Session, create_engine
 
     from quiv.models import QuivModelBase
@@ -60,33 +66,37 @@ def test_job_datetimes_normalized_to_utc_on_db_load() -> None:
     engine = create_engine("sqlite:///:memory:")
     QuivModelBase.metadata.create_all(engine)
 
-    # Insert a job with naive datetimes (as SQLite stores them)
+    started = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    ended = datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc)
     job = Job(
         task_id="task-1",
         task_name="test-task",
-        started_at=datetime(2026, 1, 1, 0, 0, 0),
-        ended_at=datetime(2026, 1, 1, 0, 0, 2),
+        started_at=started,
+        ended_at=ended,
     )
     with Session(engine) as session:
         session.add(job)
         session.commit()
         job_id = job.id
 
-    # Load from DB — @reconstructor should normalize datetimes
     with Session(engine) as session:
         loaded = session.get(Job, job_id)
         assert loaded is not None
-        assert loaded.started_at.tzinfo is not None
         assert loaded.started_at.utcoffset() == timedelta(0)
+        assert loaded.started_at == started
         assert loaded.ended_at is not None
-        assert loaded.ended_at.tzinfo is not None
         assert loaded.ended_at.utcoffset() == timedelta(0)
+        assert loaded.ended_at == ended
 
     engine.dispose()
 
 
 def test_taskdb_datetimes_normalized_to_utc_on_db_load() -> None:
-    """TaskDB datetimes loaded from SQLite are normalized to UTC-aware via @reconstructor."""
+    """TaskDB datetimes loaded from SQLite are UTC-aware.
+
+    See ``test_job_datetimes_normalized_to_utc_on_db_load`` for why the
+    task is written with an aware UTC value.
+    """
     from sqlmodel import Session, create_engine
 
     from quiv.models import QuivModelBase
@@ -94,10 +104,11 @@ def test_taskdb_datetimes_normalized_to_utc_on_db_load() -> None:
     engine = create_engine("sqlite:///:memory:")
     QuivModelBase.metadata.create_all(engine)
 
+    next_run = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     task = TaskDB(
         task_name="tz-check",
         interval_seconds=60,
-        next_run_at=datetime(2026, 1, 1, 0, 0, 0),  # naive
+        next_run_at=next_run,
     )
     with Session(engine) as session:
         session.add(task)
@@ -107,10 +118,32 @@ def test_taskdb_datetimes_normalized_to_utc_on_db_load() -> None:
     with Session(engine) as session:
         loaded = session.get(TaskDB, task_id)
         assert loaded is not None
-        assert loaded.next_run_at.tzinfo is not None
         assert loaded.next_run_at.utcoffset() == timedelta(0)
+        assert loaded.next_run_at == next_run
 
     engine.dispose()
+
+
+def test_reconstructor_reads_naive_datetimes_as_utc() -> None:
+    """The reconstructor reads a naive datetime as UTC.
+
+    Only sqlmodel before 0.0.45 gives it naive values from SQLite. The
+    test calls it directly, so the path stays tested on later versions.
+    """
+    job = Job(
+        task_id="task-1",
+        task_name="test-task",
+        started_at=datetime(2026, 1, 1, 0, 0, 0),
+        ended_at=datetime(2026, 1, 1, 0, 0, 2),
+    )
+
+    job._normalize_datetimes_on_load()
+
+    assert job.started_at.utcoffset() == timedelta(0)
+    assert job.started_at == datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert job.ended_at is not None
+    assert job.ended_at.utcoffset() == timedelta(0)
+    assert job.ended_at == datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc)
 
 
 def test_task_serializes_args_kwargs_as_unpickled_values() -> None:

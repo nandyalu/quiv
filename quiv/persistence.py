@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import random
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from sqlalchemy import func
@@ -16,7 +16,14 @@ from .exceptions import (
     TaskNotFoundError,
     TaskRunningError,
 )
-from .models import Job, JobStatus, TaskDB, TaskStatus, seconds_after
+from .models import (
+    Job,
+    JobStatus,
+    QuivModelBase,
+    TaskDB,
+    TaskStatus,
+    seconds_after,
+)
 
 _JOB_ORDER_COLUMNS = {
     "started_at": Job.started_at,
@@ -452,11 +459,10 @@ class PersistenceLayer:
                 .limit(1)
             )
             value = session.exec(statement).first()
-            # Selecting a bare column bypasses the model reconstructor, so
-            # SQLite returns a naive datetime; normalize like model loads do.
-            if value is not None and value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-            return value
+            # Selecting a bare column bypasses the model reconstructor. On
+            # sqlmodel before 0.0.45, SQLite returns a naive datetime here;
+            # normalize it like model loads do.
+            return QuivModelBase.set_timezone_to_utc(value)
 
     def create_job(
         self, task_id: str, task_name: str, attempt: int = 1

@@ -47,6 +47,10 @@ class QuivModelBase(SQLModel, registry=quiv_registry):
         assignment, bypassing Pydantic validators. This reconstructor
         runs after attribute population and normalizes any datetime field
         to timezone-aware UTC.
+
+        It matters on sqlmodel before 0.0.45, which maps ``datetime`` to a
+        naive ``DateTime``, so SQLite returns values with no offset. From
+        0.0.45, the column type returns aware UTC values itself.
         """
         for name, field_info in self.__class__.model_fields.items():
             if field_info.annotation is datetime or (
