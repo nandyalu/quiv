@@ -1,3 +1,47 @@
+<a id="v1.4.0"></a>
+## [v1.4.0 - Operations (Phase 9)](https://github.com/nandyalu/quiv/releases/tag/v1.4.0) - 2026-10-08
+
+Phase 9. This release is what running quiv in two containers taught. It adds a health check, a way to run a task again after its current job, a filter that finds a task by name, and a page about running in a container. Everything is additive; nothing in the 1.0 API changed. It also fixes a time filter that sqlmodel 0.0.45 turned into an error.
+
+### What's new
+
+- **`is_running`, for a health check.** The property is `True` while the scheduler loop runs: `start()` was called, `shutdown()` was not, and the loop thread is alive. The loop catches every `Exception` and continues, so a dead loop thread means that something outside `Exception` stopped it. `is_running` reads no database, so a probe can call it every few seconds. `stats()` gains `loop_alive` with the same value, but `stats()` reads the database.
+
+    ```python
+    @app.get("/health")
+    def health() -> JSONResponse:
+        if not scheduler.is_running:
+            return JSONResponse({"scheduler": "stopped"}, status_code=503)
+        return JSONResponse({"scheduler": "running"})
+    ```
+
+- **`run_task_immediately(task_id, after_current=True)`.** Before, a "run now" button failed while the task ran: the call raised `TaskRunningError`, and the request was lost. With `after_current=True`, a running recurring task runs again as soon as its current job ends, whatever the outcome of that job. The run wins over the retry backoff and the interval, and gets no jitter. A failure still counts toward `max_retries`. `Task.rerun_requested` shows the waiting run, and `pause_task()` cancels it. A running run-once task still raises `TaskRunningError`, because nothing remains to run. The default is unchanged.
+
+- **`get_all_tasks(task_name=...)`.** An exact-match filter, which combines with `status`, `include_run_once`, `limit`, and `offset`. To ask whether a one-off with a name already exists, call `get_all_tasks(task_name=name, include_run_once=True)`. Names can still repeat.
+
+- **A [Running in a Container](https://nandyalu.github.io/quiv/containers/) page.** It follows the problems in the order an operator meets them:
+    - stopping inside the stop grace period of Docker or Kubernetes, with `shutdown(timeout=...)`;
+    - the temporary database, `TMPDIR`, and a read-only root filesystem;
+    - logging;
+    - the restart practice that both applications arrived at;
+    - a task that runs daily at a set time, also in local time;
+    - health checks, including a Docker `HEALTHCHECK`;
+    - work handed to the main loop;
+    - one scheduler per process.
+
+### Fixes
+
+- **`get_all_jobs()` reads a naive `since` or `until` as UTC.** With sqlmodel 0.0.45 or later, a naive value raised a SQLAlchemy `StatementError`. With an earlier sqlmodel, an aware value that was not in UTC lost its offset, so the filter compared the wrong time: a `since` of 17:30 at +05:30 compared as 17:30 UTC. Now quiv reads a naive value as UTC and converts an aware value to UTC, as it does for `run_at`.
+
+### Housekeeping
+
+- **quiv works with sqlmodel 0.0.45 and later.** sqlmodel 0.0.45 changed how it stores `datetime` fields: it refuses a naive datetime as a parameter, and it returns aware UTC values. quiv already wrote aware UTC values, so the fix above was the only change that it needed. The minimum stays at sqlmodel 0.0.23. Your application shares the sqlmodel install with quiv, and a higher minimum would force the new datetime rules onto your own models. The test suite passes on sqlmodel 0.0.23, 0.0.42, and 0.0.47.
+- The soak script reads `is_running` instead of the loop thread.
+- A test added in v1.3.0 failed now and then on a slow macOS runner. It now waits for the future that it reads.
+- `llms-full.txt` now also includes the Failure Handling and Observability pages.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.3.0...v1.4.0
+
 <a id="v1.3.0"></a>
 ## [v1.3.0 - A database error no longer stops the scheduler](https://github.com/nandyalu/quiv/releases/tag/v1.3.0) - 2026-10-06
 
