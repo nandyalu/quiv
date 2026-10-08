@@ -28,8 +28,8 @@ stats.job_history_count  # job rows currently retained
 scheduler.get_all_jobs(
     status=JobStatus.FAILED,   # optional status filter
     task_id=task_id,           # only this task's jobs
-    since=window_start,        # started_at >= since (aware UTC)
-    until=window_end,          # started_at <= until (aware UTC)
+    since=window_start,        # started_at >= since (UTC)
+    until=window_end,          # started_at <= until (UTC)
     order_by="started_at",     # "started_at" | "ended_at"
     descending=True,           # newest first by default
     limit=20,
@@ -37,7 +37,7 @@ scheduler.get_all_jobs(
 )
 ```
 
-`order_by` accepts `"started_at"` and `"ended_at"`. Any other value raises `ConfigurationError`. The two datetime filters follow the rule that holds everywhere in quiv: pass an aware UTC value.
+`order_by` accepts `"started_at"` and `"ended_at"`. Any other value raises `ConfigurationError`. The two datetime filters follow the rule for `run_at`: quiv reads a naive value as UTC, and converts an aware value to UTC.
 
 ## Task queries
 

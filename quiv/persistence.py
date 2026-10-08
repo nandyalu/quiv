@@ -222,9 +222,9 @@ class PersistenceLayer:
             status (str, Optional=None): Optional job status filter.
             task_id (str, Optional=None): Only jobs of this task.
             since (datetime, Optional=None): Only jobs with
-                ``started_at >= since`` (aware UTC).
+                ``started_at >= since``. A naive value is read as UTC.
             until (datetime, Optional=None): Only jobs with
-                ``started_at <= until`` (aware UTC).
+                ``started_at <= until``. A naive value is read as UTC.
             order_by (str, Optional="started_at"): Sort column —
                 ``"started_at"`` or ``"ended_at"``.
             descending (bool, Optional=True): Sort direction.
@@ -244,6 +244,12 @@ class PersistenceLayer:
                 f"order_by must be one of: {valid} (got '{order_by}')"
             )
         order_column = col(_JOB_ORDER_COLUMNS[order_by])
+        # Convert to aware UTC before the query, as add_task does for
+        # run_at. sqlmodel 0.0.45 and later refuse a naive value, and
+        # earlier versions drop the offset of an aware one, so a non-UTC
+        # value compared the wrong instant.
+        since = QuivModelBase.set_timezone_to_utc(since)
+        until = QuivModelBase.set_timezone_to_utc(until)
         with Session(self._engine) as session:
             statement = select(Job)
             if status:

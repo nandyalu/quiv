@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from sqlmodel import Session, select
@@ -814,3 +815,63 @@ def test_fixed_interval_next_run_is_strictly_future_at_boundaries(
         assert task.next_run_at == frozen + timedelta(seconds=200)
     finally:
         scheduler.shutdown()
+
+# ---------------------------------------------------------------------------
+# get_all_jobs: since and until are read as UTC
+# ---------------------------------------------------------------------------
+
+
+def _frozen_persistence(scheduler: Quiv) -> tuple[Any, Any]:
+    """A PersistenceLayer on the scheduler's engine with a frozen clock."""
+
+    from datetime import datetime, timezone
+
+    from quiv.persistence import PersistenceLayer
+
+    frozen = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    return PersistenceLayer(scheduler._engine, lambda: frozen), frozen
+
+
+def test_get_all_jobs_reads_a_naive_since_and_until_as_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        job_id = persistence.create_job("task-1", "task")
+        persistence.mark_job_running(job_id)
+        naive = frozen.replace(tzinfo=None)
+
+        # sqlmodel 0.0.45 and later raised StatementError for a naive
+        # value here.
+        found = persistence.get_all_jobs(
+            since=naive - timedelta(seconds=1),
+            until=naive + timedelta(seconds=1),
+        )
+        assert [job.id for job in found] == [job_id]
+        assert persistence.get_all_jobs(since=naive + timedelta(seconds=1)) == []
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_jobs_converts_an_aware_since_to_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from datetime import timezone
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        job_id = persistence.create_job("task-1", "task")
+        persistence.mark_job_running(job_id)
+        # 12:00 UTC is 17:30 at +05:30. Before the fix, sqlmodel before
+        # 0.0.45 compared the wall time 17:29 against 12:00 UTC.
+        india = timezone(timedelta(hours=5, minutes=30))
+        local = frozen.astimezone(india)
+
+        found = persistence.get_all_jobs(since=local - timedelta(minutes=1))
+        assert [job.id for job in found] == [job_id]
+        assert persistence.get_all_jobs(since=local + timedelta(minutes=1)) == []
+    finally:
+        scheduler.shutdown()
+

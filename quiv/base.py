@@ -1154,9 +1154,10 @@ class QuivBase(ABC):
             status (str, Optional=None): Optional status filter.
             task_id (str, Optional=None): Only jobs of this task.
             since (datetime, Optional=None): Only jobs with
-                ``started_at >= since`` (aware UTC).
+                ``started_at >= since``. A naive value is read as UTC,
+                as for ``run_at``.
             until (datetime, Optional=None): Only jobs with
-                ``started_at <= until`` (aware UTC).
+                ``started_at <= until``. A naive value is read as UTC.
             order_by (str, Optional="started_at"): Sort column —
                 ``"started_at"`` or ``"ended_at"``.
             descending (bool, Optional=True): Sort direction.

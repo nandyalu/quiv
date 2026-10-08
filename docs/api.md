@@ -334,7 +334,7 @@ Returns persisted task rows as [`Task`](#task) objects, ordered by `next_run_at`
 
 ### `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0) -> list[Job]`
 
-Returns persisted jobs with optional filters and pagination — see [Observability](observability.md) for details. `status` filters by status string (e.g. `"failed"`, `"running"`); `task_id` restricts to one task; `since`/`until` bound `started_at` (pass aware UTC datetimes); `order_by` accepts `"started_at"` or `"ended_at"` (anything else raises `ConfigurationError`).
+Returns persisted jobs with optional filters and pagination — see [Observability](observability.md) for details. `status` filters by status string (e.g. `"failed"`, `"running"`); `task_id` restricts to one task; `since`/`until` bound `started_at` (a naive value is read as UTC, an aware one is converted to UTC); `order_by` accepts `"started_at"` or `"ended_at"` (anything else raises `ConfigurationError`).
 
 ### `stats() -> QuivStats`
 
