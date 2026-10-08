@@ -153,7 +153,7 @@ Not a roadmap phase. This release fixes [#86](https://github.com/nandyalu/quiv/i
 
 ## Phase 9 — Operations (`v1.4.0`)
 
-**Status: 📋 planned** — decisions settled 2026-09-25; the plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). Does not depend on Phase 7 or Phase 8; ships after Phase 8 and before Phase 7.
+**Status: ✅ complete** — implemented 2026-10-08, ships as `v1.4.0`. The plan is [`plans/phase-9-operations.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-9-operations.md). It does not depend on Phase 7 or Phase 8, and it ships after Phase 8 and before Phase 7.
 
 1. **Health** — `is_running` and `QuivStats.loop_alive`: `start()` was called, `shutdown()` was not, and the loop thread is alive. Cheap enough for a probe.
 2. **`run_task_immediately(after_current=True)`** — a running recurring task runs again as soon as its current job finalizes, instead of the call raising.
@@ -161,6 +161,8 @@ Not a roadmap phase. This release fixes [#86](https://github.com/nandyalu/quiv/i
 4. **A "Running in a container" page** — the shutdown timeout under the stop grace, the temporary database and `TMPDIR`, logging, the restart practice both applications arrived at, the daily-at-a-time recipe, and health checks. It can ship as a docs-only commit ahead of the code.
 
 **Exit criteria:** the tests in the plan pass; the container page is in the nav; the soak script reads `is_running`.
+
+The release also carries one fix outside the plan. `get_all_jobs()` reads a naive `since` or `until` as UTC. sqlmodel 0.0.45 had turned a naive value there into an error, and an earlier sqlmodel dropped the offset of an aware value. quiv keeps its minimum of sqlmodel 0.0.23, because the application shares the sqlmodel install.
 
 ## Out of scope for v1.0.0
 

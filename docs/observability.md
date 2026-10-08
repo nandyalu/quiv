@@ -16,9 +16,27 @@ stats.pool_utilization   # active_jobs / pool_size, 0.0-1.0
 stats.tasks_by_status    # e.g. {"active": 3, "paused": 1}
 stats.next_run_at        # earliest upcoming run (UTC), or None
 stats.job_history_count  # job rows currently retained
+stats.loop_alive         # same value as scheduler.is_running
 ```
 
 `QuivStats` is a plain dataclass. Call `dataclasses.asdict()` on it to build a JSON response.
+
+## Health
+
+`is_running` answers one question: does the scheduler loop run? It is `True` when `start()` was called, `shutdown()` was not, and the loop thread is alive.
+
+```python
+from fastapi.responses import JSONResponse
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    if not scheduler.is_running:
+        return JSONResponse({"scheduler": "stopped"}, status_code=503)
+    return JSONResponse({"scheduler": "running"})
+```
+
+`stats().loop_alive` holds the same value. `stats()` reads the database and `is_running` does not, so use `is_running` in a health probe. [Running in a Container](containers.md#health) shows a Docker `HEALTHCHECK` for this endpoint.
 
 ## Job queries
 
@@ -28,8 +46,8 @@ stats.job_history_count  # job rows currently retained
 scheduler.get_all_jobs(
     status=JobStatus.FAILED,   # optional status filter
     task_id=task_id,           # only this task's jobs
-    since=window_start,        # started_at >= since (aware UTC)
-    until=window_end,          # started_at <= until (aware UTC)
+    since=window_start,        # started_at >= since (UTC)
+    until=window_end,          # started_at <= until (UTC)
     order_by="started_at",     # "started_at" | "ended_at"
     descending=True,           # newest first by default
     limit=20,
@@ -37,16 +55,19 @@ scheduler.get_all_jobs(
 )
 ```
 
-`order_by` accepts `"started_at"` and `"ended_at"`. Any other value raises `ConfigurationError`. The two datetime filters follow the rule that holds everywhere in quiv: pass an aware UTC value.
+`order_by` accepts `"started_at"` and `"ended_at"`. Any other value raises `ConfigurationError`. The two datetime filters follow the rule for `run_at`: quiv reads a naive value as UTC, and converts an aware value to UTC.
 
 ## Task queries
 
-`get_all_tasks()` accepts `status`, `limit`, and `offset`, next to `include_run_once`. It orders the results by `next_run_at`, earliest first.
+`get_all_tasks()` accepts `status`, `task_name`, `limit`, and `offset`, next to `include_run_once`. It orders the results by `next_run_at`, earliest first.
 
 ```python
 scheduler.get_all_tasks(status=TaskStatus.PAUSED)
 scheduler.get_all_tasks(limit=50, offset=100)
+scheduler.get_all_tasks(task_name="nightly-sync", include_run_once=True)
 ```
+
+`task_name` is an exact match. Names can repeat, so the list can hold more than one task. Pass `include_run_once=True` to find a one-off by its name.
 
 ## Outstanding main-loop work
 

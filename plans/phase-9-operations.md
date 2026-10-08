@@ -159,11 +159,11 @@ All prose follows the global `orwell-writing` skill, one paragraph per line.
 
 ## Exit checklist
 
-- [ ] `uv run pytest` green; coverage at or above the gate.
-- [ ] `uv run mypy quiv` zero errors.
-- [ ] Every test in §6 present and passing.
-- [ ] `docs/containers.md` in the nav; `docs/index.md`, `docs/getting-started.md`, `docs/observability.md`, `docs/api.md` updated; `uv run zensical build --clean` clean.
-- [ ] `scripts/soak.py` reads `scheduler.is_running` instead of `scheduler.thread.is_alive()`.
-- [ ] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
-- [ ] `CLAUDE.md` updated.
-- [ ] `docs/release-notes.md` entry; version bumped; `docs/roadmap.md` Phase 9 marked complete with the date.
+- [x] `uv run pytest` green; coverage at or above the gate.
+- [x] `uv run mypy quiv` zero errors.
+- [x] Every test in §6 present and passing.
+- [x] `docs/containers.md` in the nav; `docs/index.md`, `docs/getting-started.md`, `docs/observability.md`, `docs/api.md` updated; `uv run zensical build --clean` clean.
+- [x] `scripts/soak.py` reads `scheduler.is_running` instead of `scheduler.thread.is_alive()`.
+- [x] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
+- [x] `CLAUDE.md` updated.
+- [x] `docs/release-notes.md` entry; version bumped; `docs/roadmap.md` Phase 9 marked complete with the date.

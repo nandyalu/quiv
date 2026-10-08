@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from sqlmodel import Session, select
@@ -812,5 +813,299 @@ def test_fixed_interval_next_run_is_strictly_future_at_boundaries(
         )
         task = scheduler.get_task(task_id)
         assert task.next_run_at == frozen + timedelta(seconds=200)
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# get_all_jobs: since and until are read as UTC
+# ---------------------------------------------------------------------------
+
+
+def _frozen_persistence(scheduler: Quiv) -> tuple[Any, Any]:
+    """A PersistenceLayer on the scheduler's engine with a frozen clock."""
+
+    from datetime import datetime, timezone
+
+    from quiv.persistence import PersistenceLayer
+
+    frozen = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    return PersistenceLayer(scheduler._engine, lambda: frozen), frozen
+
+
+def test_get_all_jobs_reads_a_naive_since_and_until_as_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        job_id = persistence.create_job("task-1", "task")
+        persistence.mark_job_running(job_id)
+        naive = frozen.replace(tzinfo=None)
+
+        # sqlmodel 0.0.45 and later raised StatementError for a naive
+        # value here.
+        found = persistence.get_all_jobs(
+            since=naive - timedelta(seconds=1),
+            until=naive + timedelta(seconds=1),
+        )
+        assert [job.id for job in found] == [job_id]
+        assert persistence.get_all_jobs(since=naive + timedelta(seconds=1)) == []
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_jobs_converts_an_aware_since_to_utc(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from datetime import timezone
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        job_id = persistence.create_job("task-1", "task")
+        persistence.mark_job_running(job_id)
+        # 12:00 UTC is 17:30 at +05:30. Before the fix, sqlmodel before
+        # 0.0.45 compared the wall time 17:29 against 12:00 UTC.
+        india = timezone(timedelta(hours=5, minutes=30))
+        local = frozen.astimezone(india)
+
+        found = persistence.get_all_jobs(since=local - timedelta(minutes=1))
+        assert [job.id for job in found] == [job_id]
+        assert persistence.get_all_jobs(since=local + timedelta(minutes=1)) == []
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: run_task_immediately(after_current=True)
+# ---------------------------------------------------------------------------
+
+
+def test_queue_for_immediate_run_on_an_active_task_makes_it_due_now(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        task_id = scheduler.add_task(
+            task_name="active", func=lambda: None, interval=60, delay=500
+        )
+
+        deferred = persistence.queue_task_for_immediate_run(
+            task_id, after_current=True
+        )
+
+        task = persistence.get_task(task_id)
+        assert deferred is False
+        assert task.next_run_at == frozen
+        assert task.rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_queue_for_immediate_run_after_current_flags_a_running_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="running", func=lambda: None, interval=60, delay=500
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+        before = persistence.get_task(task_id).next_run_at
+
+        deferred = persistence.queue_task_for_immediate_run(
+            task_id, after_current=True
+        )
+
+        task = persistence.get_task(task_id)
+        assert deferred is True
+        assert task.rerun_requested is True
+        assert task.status == TaskStatus.RUNNING
+        # The run waits for the job: the next run time is not touched.
+        assert task.next_run_at == before
+    finally:
+        scheduler.shutdown()
+
+
+def test_queue_for_immediate_run_after_current_refuses_a_running_run_once_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="one-off", func=lambda: None, run_once=True, delay=500
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+
+        with pytest.raises(TaskRunningError, match="nothing remains to run"):
+            persistence.queue_task_for_immediate_run(
+                task_id, after_current=True
+            )
+        assert persistence.get_task(task_id).rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_queue_for_immediate_run_without_after_current_refuses_a_running_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="running", func=lambda: None, interval=60, delay=500
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+
+        with pytest.raises(TaskRunningError):
+            persistence.queue_task_for_immediate_run(task_id)
+        assert persistence.get_task(task_id).rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_queue_for_immediate_run_after_current_refuses_a_paused_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="paused", func=lambda: None, interval=60, delay=500
+        )
+        persistence = scheduler.persistence
+        persistence.pause_task(task_id)
+
+        with pytest.raises(TaskNotActiveError) as excinfo:
+            persistence.queue_task_for_immediate_run(
+                task_id, after_current=True
+            )
+        assert not isinstance(excinfo.value, TaskRunningError)
+        assert persistence.get_task(task_id).rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_runs_a_requested_rerun_now_without_jitter(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        task_id = scheduler.add_task(
+            task_name="rerun", func=lambda: None, interval=100, jitter=50
+        )
+        persistence.mark_task_running(task_id)
+        persistence.queue_task_for_immediate_run(task_id, after_current=True)
+
+        will_retry = persistence.finalize_task_after_job(
+            task_id, frozen - timedelta(seconds=5), job_failed=False
+        )
+
+        task = persistence.get_task(task_id)
+        assert will_retry is False
+        assert task.status == TaskStatus.ACTIVE
+        assert task.next_run_at == frozen
+        assert task.rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_runs_a_requested_rerun_before_the_retry_backoff(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        task_id = scheduler.add_task(
+            task_name="rerun-retry",
+            func=lambda: None,
+            interval=100,
+            max_retries=2,
+            retry_backoff=30,
+        )
+        persistence.mark_task_running(task_id)
+        persistence.queue_task_for_immediate_run(task_id, after_current=True)
+
+        will_retry = persistence.finalize_task_after_job(
+            task_id, frozen, job_failed=True
+        )
+
+        task = persistence.get_task(task_id)
+        assert will_retry is True
+        assert task.next_run_at == frozen
+        # The failure still counts, so max_retries keeps its meaning.
+        assert task.retry_attempt == 1
+        assert task.rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+def test_finalize_without_a_rerun_request_keeps_the_interval(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        persistence, frozen = _frozen_persistence(scheduler)
+        task_id = scheduler.add_task(
+            task_name="no-rerun", func=lambda: None, interval=100
+        )
+        persistence.mark_task_running(task_id)
+
+        persistence.finalize_task_after_job(task_id, frozen, job_failed=False)
+
+        task = persistence.get_task(task_id)
+        assert task.next_run_at == frozen + timedelta(seconds=100)
+    finally:
+        scheduler.shutdown()
+
+
+def test_pause_task_clears_a_rerun_request(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task(
+            task_name="pause-clears", func=lambda: None, interval=60
+        )
+        persistence = scheduler.persistence
+        persistence.mark_task_running(task_id)
+        persistence.queue_task_for_immediate_run(task_id, after_current=True)
+
+        persistence.pause_task(task_id)
+
+        task = persistence.get_task(task_id)
+        assert task.status == TaskStatus.PAUSED
+        assert task.rerun_requested is False
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: get_all_tasks(task_name=...)
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_tasks_task_name_is_an_exact_match(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        wanted = [
+            scheduler.add_task(
+                task_name="refresh", func=lambda: None, interval=60, delay=d
+            )
+            for d in (100, 200)
+        ]
+        for name in ("refresh-all", "Refresh", "refres"):
+            scheduler.add_task(task_name=name, func=lambda: None, interval=60)
+
+        tasks = scheduler.persistence.get_all_tasks(task_name="refresh")
+
+        assert [task.id for task in tasks] == wanted
+        assert scheduler.persistence.get_all_tasks(task_name="missing") == []
     finally:
         scheduler.shutdown()

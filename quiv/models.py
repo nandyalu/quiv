@@ -208,6 +208,9 @@ class TaskDB(QuivModelBase, table=True):
         retry_attempt (int): Consecutive-failure counter (internal).
         jitter_seconds (float): Upper bound of random offset added to each
             recurring next-run time.
+        rerun_requested (bool): Set by ``run_task_immediately(
+            after_current=True)`` on a running task. The task runs again
+            as soon as its current job ends.
     """
 
     __tablename__: str = "quiv_task"  # type: ignore
@@ -226,6 +229,7 @@ class TaskDB(QuivModelBase, table=True):
     retry_backoff_seconds: float = 30.0
     retry_attempt: int = 0
     jitter_seconds: float = 0.0
+    rerun_requested: bool = False
 
     @field_serializer("args", "kwargs")
     @classmethod
@@ -272,6 +276,9 @@ class Task(BaseModel):
             success or when retries are exhausted.
         jitter_seconds (float): Upper bound of random offset added to each
             recurring next-run time.
+        rerun_requested (bool): ``True`` while a run requested with
+            ``run_task_immediately(after_current=True)`` waits for the
+            current job to end.
     """
 
     model_config = {"from_attributes": True}
@@ -290,6 +297,7 @@ class Task(BaseModel):
     retry_backoff_seconds: float = 30.0
     retry_attempt: int = 0
     jitter_seconds: float = 0.0
+    rerun_requested: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -343,6 +351,7 @@ class Task(BaseModel):
                 "retry_backoff_seconds": data.retry_backoff_seconds,
                 "retry_attempt": data.retry_attempt,
                 "jitter_seconds": data.jitter_seconds,
+                "rerun_requested": data.rerun_requested,
             }
 
         return data
@@ -361,6 +370,8 @@ class QuivStats:
         next_run_at (datetime | None): Earliest upcoming run (UTC), or
             ``None`` when no active task exists.
         job_history_count (int): Job rows currently retained.
+        loop_alive (bool): Whether the scheduler loop thread is running;
+            the same value as ``Quiv.is_running``.
     """
 
     active_jobs: int
@@ -369,6 +380,7 @@ class QuivStats:
     tasks_by_status: dict[str, int]
     next_run_at: datetime | None
     job_history_count: int
+    loop_alive: bool = False
 
 
 class Job(QuivModelBase, table=True):

@@ -51,6 +51,7 @@ nav = [
   { "Home" = "index.md" },
   { "Getting Started" = "getting-started.md" },
   { "Bigger Applications" = "bigger-applications.md" },
+  { "Running in a Container" = "containers.md" },
   { "API" = "api.md" },
   { "Architecture" = "architecture.md" },
   { "Progress Callbacks" = "progress-callbacks.md" },

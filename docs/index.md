@@ -215,6 +215,7 @@ Read the full documentation here:
 
 - [Getting Started](getting-started.md) — install, scheduler setup, and your first task
 - [API](api.md) — the full reference for `Quiv`, `add_task`, and every other method
+- [Running in a Container](containers.md) — stopping inside the grace period, the temporary database, restarts, daily runs, and health checks
 - [Architecture](architecture.md) — how the scheduler, persistence, and execution layers fit together
 - [Running on the main event loop](run-on-main.md) — dispatch work to the main loop from anywhere in a task's call stack
 - [Event Listeners](event-listeners.md) — react to what happens to a task and to a job
