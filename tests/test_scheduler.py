@@ -2569,7 +2569,12 @@ def _wait_until(predicate: Any, timeout: float = 5.0) -> None:
 
 
 def _finished_jobs(scheduler: Quiv, task_id: str) -> list[Any]:
-    """Jobs of the task in a terminal status, oldest first."""
+    """Jobs of the task in a terminal status, oldest first.
+
+    A job row is final before the task row: _run_job writes the job, then
+    returns the task to the schedule. To read the task after a job, wait
+    for ``_all_jobs_done`` instead.
+    """
 
     jobs = scheduler.get_all_jobs(task_id=task_id, descending=False)
     return [
@@ -2578,6 +2583,16 @@ def _finished_jobs(scheduler: Quiv, task_id: str) -> list[Any]:
         if job.status
         in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
     ]
+
+
+def _all_jobs_done(scheduler: Quiv) -> bool:
+    """No job holds a slot: each finished job has also updated its task.
+
+    _run_job frees the slot after it finalizes the task row and drops the
+    task from the in-flight set, so resume_task() no longer refuses it.
+    """
+
+    return scheduler.stats().active_jobs == 0
 
 
 def test_run_task_immediately_after_current_runs_again_when_the_job_finishes(
@@ -2606,7 +2621,9 @@ def test_run_task_immediately_after_current_runs_again_when_the_job_finishes(
         release.set()
         assert started.wait(1), "the requested run did not start"
         assert starts[1] - released_at < 1
-        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 2)
+        # The second job holds a slot from its dispatch, so this waits for
+        # it to end.
+        _wait_until(lambda: _all_jobs_done(scheduler))
 
         task = scheduler.get_task(task_id)
         assert task.rerun_requested is False
@@ -2720,11 +2737,11 @@ def test_pause_task_clears_a_pending_rerun(
         scheduler.pause_task(task_id)
         assert scheduler.get_task(task_id).rerun_requested is False
         release.set()
-        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 1)
+        _wait_until(lambda: _all_jobs_done(scheduler))
         assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
 
         scheduler.resume_task(task_id, delay=0)
-        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 2)
+        _wait_until(lambda: len(calls) == 2 and _all_jobs_done(scheduler))
         # A kept flag would start a third run as soon as the second ended.
         time.sleep(0.3)
         assert len(calls) == 2
