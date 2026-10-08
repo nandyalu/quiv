@@ -60,12 +60,13 @@ scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs
 
 | Method | Notes |
 |---|---|
-| `run_task_immediately(task_id) -> int` | queue a scheduled task now |
+| `run_task_immediately(task_id, *, after_current=False) -> int` | queue a scheduled task now; with `after_current=True`, a running recurring task runs again as soon as its job ends (wins over backoff and interval, no jitter; `pause_task` cancels it) |
 | `pause_task(task_id)` / `resume_task(task_id, delay=0)` | a running job finishes and the task stays paused; resume raises `TaskRunningError` until that job ends; resume with `delay=0` fires immediately |
 | `remove_task(task_id)` | unregisters handler + callback; signals a running job to stop |
-| `get_task(task_id) -> Task` / `get_all_tasks(include_run_once=False) -> list[Task]` | |
+| `get_task(task_id) -> Task` / `get_all_tasks(include_run_once=False, task_name=None) -> list[Task]` | `task_name` is an exact match; add `include_run_once=True` to find a one-off by name |
 | `get_job(job_id) -> Job` / `get_all_jobs(status=None) -> list[Job]` | status: `"running"`, `"failed"`, ... |
 | `cancel_job(job_id) -> bool` | cooperative — sets the job's stop event |
+| `is_running -> bool` | property: `start()` was called, `shutdown()` was not, and the loop thread is alive; no DB read, use it for health checks |
 | `add_listener(event, cb)` / `remove_listener(event, cb)` | lifecycle events, see below |
 
 `Task` and `Job` are SQLModel objects safe to return directly from FastAPI endpoints (datetimes are UTC-aware). Task statuses: `active`, `running`, `paused`. Job statuses: `scheduled`, `running`, `completed`, `cancelled`, `failed`. `Job` carries `duration_seconds` and `error_message`.
@@ -130,8 +131,8 @@ Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `TASK_UPDAT
 ## Management & observability
 
 - `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=..., run_at=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. `run_at` names the next run's absolute time instead — naive is UTC, a past time runs at once, and it is mutually exclusive with `interval`. It moves the next scheduled run of any task, run before or not: a recurring task keeps its interval and just runs next at that time. Use it to move a pending one-off rather than `remove_task` + `add_task`, which changes the `task_id` and leaves a gap with nothing scheduled. **It does not survive a task that is already `running`**: finalization deletes a run-once row and recomputes `next_run_at` for a recurring one, so the new time is discarded when the job ends (quiv logs a warning, best-effort). Move a recurring task after its job finishes, or change `interval`, which finalization honours. Not updatable: `run_once`, `delay`, `func`.
-- `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0)` — filters + pagination; `order_by` is `"started_at"` or `"ended_at"` only. `get_all_tasks(include_run_once=False, status=None, limit=None, offset=0)` orders by `next_run_at`.
-- `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`. Serialize with `dataclasses.asdict()`.
+- `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0)` — filters + pagination; `order_by` is `"started_at"` or `"ended_at"` only; a naive `since`/`until` is UTC. `get_all_tasks(include_run_once=False, status=None, limit=None, offset=0, task_name=None)` orders by `next_run_at`; `task_name` is an exact match.
+- `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, `loop_alive` (same as `is_running`). Serialize with `dataclasses.asdict()`. `stats()` reads the DB; a health probe should use `is_running`.
 
 ## Canonical FastAPI wiring
 
@@ -152,6 +153,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
+## Running in a container
+
+- **Stop inside the grace period.** Docker waits 10 s by default after `SIGTERM`, Kubernetes 30 s, then `SIGKILL`. `shutdown()` with no timeout waits for every job, so a long job outlasts the grace and nothing after `shutdown()` runs. Use `shutdown(timeout=5)` (well under the grace) and do your own flushes before it.
+- **Health:** return 503 when `scheduler.is_running` is false. It reads no DB; `stats()` does.
+- **Restarts start empty:** re-add every task at startup from your own config, stagger the `delay`s, and restore a stored one-off time with `run_at` (a past time runs at once). Never store a `task_id` across restarts.
+- **Daily at a set time:** `add_task(name, fn, interval=86400, run_at=next_utc_time(21, 30))`, where `next_utc_time(h, m)` returns the next h:m UTC (today if still ahead, else tomorrow). Keep weekday rules inside the handler. This is not cron, and quiv will not add cron.
+- **One scheduler per process:** `uvicorn --workers 4` or several replicas run every task once per process.
+- **Temp DB:** in `tempfile.gettempdir()` (`TMPDIR`); a read-only root filesystem needs a writable `/tmp`, for example a `tmpfs`.
+
 ## Pitfalls agents commonly hit
 
 1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite file. In tests, call it in a `finally:` block.
@@ -170,4 +180,4 @@ app = FastAPI(lifespan=lifespan)
 
 All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError` (subclass `TaskRunningError`), `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
 
-`run_task_immediately()` raises `TaskRunningError` for `running` tasks (no concurrent second run) and `TaskNotActiveError` for `paused` tasks (use `resume_task()` instead). `resume_task()` raises `TaskRunningError` while a job of the task still runs, also for a task paused during that job — call `wait_for_task()` first. `TaskRunningError` subclasses `TaskNotActiveError`, so catch it first to tell the two apart.
+`run_task_immediately()` raises `TaskRunningError` for `running` tasks (no concurrent second run; pass `after_current=True` to run a recurring task again when its job ends) and `TaskNotActiveError` for `paused` tasks (use `resume_task()` instead). `resume_task()` raises `TaskRunningError` while a job of the task still runs, also for a task paused during that job — call `wait_for_task()` first. `TaskRunningError` subclasses `TaskNotActiveError`, so catch it first to tell the two apart.

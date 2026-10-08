@@ -20,6 +20,8 @@ PAGES = [
     "run-on-main.md",
     "event-listeners.md",
     "cancellation.md",
+    "failure-handling.md",
+    "observability.md",
     "exceptions.md",
     "testing.md",
 ]

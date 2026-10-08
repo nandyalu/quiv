@@ -181,6 +181,10 @@ Starts the background thread that runs the scheduler loop. You can call it more 
 !!! success "`startup()` is an alias for `start()`"
     `start()` is the canonical name, and this documentation uses it everywhere. `startup()` calls the same code and keeps working.
 
+### `is_running -> bool`
+
+A property. It is `True` while the scheduler loop runs: `start()` was called, `shutdown()` was not, and the loop thread is alive. It reads no database, so a health probe can call it every few seconds. `stats().loop_alive` holds the same value. See [Health](observability.md#health).
+
 ### `shutdown(timeout: float | None = None) -> None` / `stop(...) -> None`
 
 `shutdown()` does four things:
@@ -264,15 +268,31 @@ Raises:
 
 Both pairs are the way to test your own handlers against a real scheduler. See [Testing your own handlers](testing.md#testing-your-own-handlers).
 
-### `run_task_immediately(task_id: str) -> int`
+### `run_task_immediately(task_id: str, *, after_current: bool = False) -> int`
 
 Queues an already-scheduled task to run now.
+
+With `after_current=True`, a recurring task whose job is running runs again as soon as that job ends, and the call does not raise. Use it for a "run now" button that must also work while the task runs.
+
+| Status of the task | `after_current=False` (default) | `after_current=True` |
+|---|---|---|
+| `active` | Runs now. | Runs now. |
+| `running`, recurring | Raises `TaskRunningError`. | Runs again as soon as the current job ends. |
+| `running`, run-once | Raises `TaskRunningError`. | Raises `TaskRunningError`, because nothing remains to run. |
+| `paused` | Raises `TaskNotActiveError`. | Raises `TaskNotActiveError`. |
+
+A run that waits for the current job:
+
+- **Starts whatever the outcome of that job.**
+- **Wins over the retry backoff and the interval, and gets no jitter.** A failure still counts toward `max_retries`, so after a failure the run is the next retry.
+- **Shows in `Task.rerun_requested`** until the job ends.
+- **Is cancelled by `pause_task()`.** Otherwise `resume_task()` and the waiting run would run the task twice.
 
 Raises:
 
 - `TaskNotFoundError` if no task with that id exists — including a run-once task that already fired and removed itself
 - `HandlerNotRegisteredError` if the task exists but no handler is registered for it
-- `TaskRunningError` if the task is `running` (no concurrent second run). It subclasses `TaskNotActiveError`.
+- `TaskRunningError` if the task is `running` and `after_current` is not set, or the task is run-once (no concurrent second run). It subclasses `TaskNotActiveError`.
 - `TaskNotActiveError` if the task is `paused` (use `resume_task()` instead)
 
 Returns number of task rows queued.
@@ -324,13 +344,14 @@ Raises:
 
 - `JobNotFoundError` if no job with that ID exists.
 
-### `get_all_tasks(include_run_once: bool = False, status: str | None = None, limit: int | None = None, offset: int = 0) -> list[Task]`
+### `get_all_tasks(include_run_once: bool = False, status: str | None = None, limit: int | None = None, offset: int = 0, task_name: str | None = None) -> list[Task]`
 
 Returns persisted task rows as [`Task`](#task) objects, ordered by `next_run_at` ascending.
 
 - when `include_run_once=False`, run-once tasks are excluded
 - when `include_run_once=True`, all persisted tasks are returned
 - `status` filters by task status (e.g. `"paused"`); `limit`/`offset` paginate
+- `task_name` keeps only the tasks with exactly this name. Names can repeat, so the list can hold more than one task. To ask whether a one-off with a name already exists, call `get_all_tasks(task_name=name, include_run_once=True)`.
 
 ### `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0) -> list[Job]`
 
@@ -338,7 +359,7 @@ Returns persisted jobs with optional filters and pagination — see [Observabili
 
 ### `stats() -> QuivStats`
 
-Returns a snapshot of the scheduler at one moment: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, and `job_history_count`. `QuivStats` is a frozen dataclass, exported from `quiv` — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
+Returns a snapshot of the scheduler at one moment: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, and `loop_alive` (the same value as [`is_running`](#is_running-bool)). `QuivStats` is a frozen dataclass, exported from `quiv` — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
 
 ### `remove_task(task_id: str) -> None`
 
@@ -504,6 +525,7 @@ Key fields:
 - `retry_backoff_seconds: float` — base delay for exponential retry backoff
 - `retry_attempt: int` — consecutive-failure counter (0 unless mid-retry)
 - `jitter_seconds: float` — random offset bound added to recurring next-run times
+- `rerun_requested: bool` — `True` while a run requested with `run_task_immediately(after_current=True)` waits for the current job
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`next_run_at`) are always returned as a UTC-aware datetime.
@@ -608,7 +630,8 @@ When the pool is full, quiv defers due tasks rather than queuing them unboundedl
 - `add_task(...)` — schedule a task, returns `task_id`
 - `start()` / `startup()` — start the scheduler loop
 - `shutdown(timeout=None)` / `stop(timeout=None)` — stop scheduler and clean up resources
-- `run_task_immediately(task_id)` — trigger a scheduled task now
+- `is_running` — property: `True` while the scheduler loop runs
+- `run_task_immediately(task_id, *, after_current=False)` — trigger a scheduled task now, or after its current job
 - `pause_task(task_id)` — pause a task
 - `resume_task(task_id)` — resume a paused task
 - `cancel_job(job_id)` — signal cancellation for a running job
