@@ -59,12 +59,15 @@ scheduler.get_all_jobs(
 
 ## Task queries
 
-`get_all_tasks()` accepts `status`, `limit`, and `offset`, next to `include_run_once`. It orders the results by `next_run_at`, earliest first.
+`get_all_tasks()` accepts `status`, `task_name`, `limit`, and `offset`, next to `include_run_once`. It orders the results by `next_run_at`, earliest first.
 
 ```python
 scheduler.get_all_tasks(status=TaskStatus.PAUSED)
 scheduler.get_all_tasks(limit=50, offset=100)
+scheduler.get_all_tasks(task_name="nightly-sync", include_run_once=True)
 ```
+
+`task_name` is an exact match. Names can repeat, so the list can hold more than one task. Pass `include_run_once=True` to find a one-off by its name.
 
 ## Outstanding main-loop work
 

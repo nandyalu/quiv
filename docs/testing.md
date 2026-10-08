@@ -59,6 +59,7 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - Mixing `config=QuivConfig(...)` with explicit kwargs raises `ConfigurationError`
 - `pool_size <= 0` and `history_retention_seconds < 0` are rejected
 - `start()` is idempotent (safe to call multiple times)
+- `is_running` is false before `start()`, true after it, false after `shutdown()`, and false when the loop thread died; `stats().loop_alive` matches it
 - `shutdown()` continues and logs the problem when it cannot delete the database files
 - Database initialization failure raises `DatabaseInitializationError`
 - The internal tables of quiv (`quiv_task`, `quiv_job`) stay out of the SQLModel metadata of the application
@@ -184,6 +185,8 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - History cleanup deletes old finished jobs while keeping recent ones
 - Job status filtering (`completed`, `failed`) returns correct subsets
 - `get_all_tasks(include_run_once=False)` excludes run-once tasks
+- `get_all_tasks(task_name=...)` is an exact match and combines with the other filters
+- `get_all_jobs()` reads a naive `since` or `until` as UTC, and converts an aware one to UTC
 - Paused tasks are excluded from due-task queries
 - Resumed tasks appear in due-task queries
 
@@ -192,6 +195,8 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - `run_task_immediately()` raises `HandlerNotRegisteredError` for unregistered handler
 - `run_task_immediately()` raises `TaskNotFoundError` when task row is missing
 - `run_task_immediately()` successfully queues a registered task
+- `run_task_immediately(after_current=True)` runs a running recurring task again as soon as its job ends, before the retry backoff, and with no jitter; it still raises for a running run-once task and for a paused task
+- `pause_task()` cancels a run that waits for the current job
 
 ### Configuration
 
