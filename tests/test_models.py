@@ -233,3 +233,40 @@ def test_taskdb_field_serializer_with_valid_pickle() -> None:
     dumped = task_db.model_dump()
     assert dumped["args"] == ("a", "b", 3)
     assert dumped["kwargs"] == {"x": 1}
+
+
+def test_rerun_requested_defaults_to_false_and_reaches_the_public_task() -> None:
+    task_db = TaskDB(task_name="rerun", interval_seconds=60)
+    assert task_db.rerun_requested is False
+    assert Task.model_validate(task_db).rerun_requested is False
+
+    task_db.rerun_requested = True
+    assert Task.model_validate(task_db).rerun_requested is True
+
+
+def test_rerun_requested_round_trips_through_sqlite() -> None:
+    from sqlmodel import Session, create_engine
+
+    engine = create_engine("sqlite:///:memory:")
+    QuivModelBase.metadata.create_all(engine)
+    task = TaskDB(task_name="rerun", interval_seconds=60, rerun_requested=True)
+    with Session(engine) as session:
+        session.add(task)
+        session.commit()
+        task_id = task.id
+
+    with Session(engine) as session:
+        loaded = session.get(TaskDB, task_id)
+        assert loaded is not None
+        assert loaded.rerun_requested is True
+
+    engine.dispose()
+
+
+def test_quiv_stats_loop_alive_defaults_to_false() -> None:
+    from quiv.models import QuivStats
+
+    # Positional construction without the new field still works.
+    stats = QuivStats(0, 10, 0.0, {}, None, 0)
+    assert stats.loop_alive is False
+    assert QuivStats(0, 10, 0.0, {}, None, 0, loop_alive=True).loop_alive

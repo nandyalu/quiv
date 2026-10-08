@@ -178,6 +178,30 @@ scheduler.add_listener(Event.JOB_COMPLETED, keep_local_hour)
 
 This is not cron, and quiv will not become cron. The [roadmap](roadmap.md#out-of-scope-for-v100) records that decision.
 
+## Health
+
+`scheduler.is_running` is `True` while the scheduler loop runs: `start()` was called, `shutdown()` was not, and the loop thread is alive. The loop catches every `Exception` and continues. So if the loop thread is dead, something outside `Exception` stopped it, and a health check must catch exactly that.
+
+`is_running` does not read the database, so a probe can call it every few seconds on every replica. `stats().loop_alive` holds the same value, but `stats()` reads the database. Use `is_running` in the probe.
+
+```python
+from fastapi.responses import JSONResponse
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    if not scheduler.is_running:
+        return JSONResponse({"scheduler": "stopped"}, status_code=503)
+    return JSONResponse({"scheduler": "running"})
+```
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+```
+
+`urlopen` raises an error on a 503 response, so the check fails without `curl` in the image. Plain Docker only marks the container `unhealthy`; it does not restart it. Kubernetes restarts a container when its liveness probe fails.
+
 ## Work handed to the main loop
 
 `shutdown()` does not wait for work that a handler handed to the main loop with `run_on_main`. That work is not a job. If the loop closes right after `shutdown()`, the loop cancels it. To let it finish, wait for it in the lifespan, with a limit that fits the grace period:

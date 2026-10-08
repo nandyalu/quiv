@@ -325,4 +325,5 @@ A second logger, `"quiv.models"`, writes DEBUG messages about datetime conversio
 - **No log output**: configure Python logging (see [Logging](#logging) above).
 - **The container kills the app before it stops**: pass a `timeout` to `shutdown()` that is well inside the stop grace period. See [Stopping](containers.md#stopping).
 - **The tasks are gone after a restart**: quiv starts empty, by design. Add the tasks again at startup. See [Restarts](containers.md#restarts).
+- **A health check for the scheduler**: return 503 when `scheduler.is_running` is false. See [Health](containers.md#health).
 - **An error about `args` or `kwargs`**: quiv serializes both with pickle, which accepts most Python objects. If you see an error, check that every object is picklable. A lambda and an inner function are not.
