@@ -2553,3 +2553,269 @@ def test_task_updated_event_emitted(
     finally:
         scheduler.shutdown()
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: run_task_immediately(after_current=True)
+# ---------------------------------------------------------------------------
+
+
+def _wait_until(predicate: Any, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError("condition not met in time")
+        time.sleep(0.02)
+
+
+def _finished_jobs(scheduler: Quiv, task_id: str) -> list[Any]:
+    """Jobs of the task in a terminal status, oldest first."""
+
+    jobs = scheduler.get_all_jobs(task_id=task_id, descending=False)
+    return [
+        job
+        for job in jobs
+        if job.status
+        in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
+    ]
+
+
+def test_run_task_immediately_after_current_runs_again_when_the_job_finishes(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+    starts: list[float] = []
+
+    def handler() -> None:
+        starts.append(time.monotonic())
+        started.set()
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task("rerun", handler, interval=60)
+        scheduler.start()
+        assert started.wait(3)
+        started.clear()
+
+        assert scheduler.run_task_immediately(task_id, after_current=True) == 1
+        assert scheduler.get_task(task_id).rerun_requested is True
+
+        released_at = time.monotonic()
+        release.set()
+        assert started.wait(1), "the requested run did not start"
+        assert starts[1] - released_at < 1
+        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 2)
+
+        task = scheduler.get_task(task_id)
+        assert task.rerun_requested is False
+        # One requested run only: the task is back on its interval.
+        assert task.next_run_at > scheduler._now_utc() + timedelta(seconds=50)
+        assert len(starts) == 2
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_after_current_on_a_run_once_task_raises(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+
+    def handler() -> None:
+        started.set()
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task("one-off", handler, run_once=True)
+        scheduler.start()
+        assert started.wait(3)
+
+        with pytest.raises(TaskRunningError, match="nothing remains to run"):
+            scheduler.run_task_immediately(task_id, after_current=True)
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_after_current_on_a_paused_task_raises(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("paused", lambda: None, interval=60)
+        scheduler.pause_task(task_id)
+
+        with pytest.raises(TaskNotActiveError) as excinfo:
+            scheduler.run_task_immediately(task_id, after_current=True)
+        assert not isinstance(excinfo.value, TaskRunningError)
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+    finally:
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_after_current_wins_over_retry_backoff(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+    second_started = threading.Event()
+    calls: list[float] = []
+
+    def handler() -> None:
+        calls.append(time.monotonic())
+        if len(calls) == 1:
+            started.set()
+            release.wait(5)
+            raise RuntimeError("the first run fails")
+        second_started.set()
+
+    try:
+        task_id = scheduler.add_task(
+            "rerun-retry", handler, interval=60, max_retries=1, retry_backoff=30
+        )
+        scheduler.start()
+        assert started.wait(3)
+        scheduler.run_task_immediately(task_id, after_current=True)
+
+        release.set()
+        # Not 30 s later: the requested run wins over the backoff.
+        assert second_started.wait(1), "the requested run did not start"
+        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 2)
+
+        first, second = _finished_jobs(scheduler, task_id)
+        assert first.status == JobStatus.FAILED
+        assert first.attempt == 1
+        # The failure still counted: the requested run is the first retry.
+        assert second.attempt == 2
+        assert second.status == JobStatus.COMPLETED
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_pause_task_clears_a_pending_rerun(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[float] = []
+
+    def handler() -> None:
+        calls.append(time.monotonic())
+        started.set()
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task("pause-rerun", handler, interval=60)
+        scheduler.start()
+        assert started.wait(3)
+        scheduler.run_task_immediately(task_id, after_current=True)
+
+        scheduler.pause_task(task_id)
+        assert scheduler.get_task(task_id).rerun_requested is False
+        release.set()
+        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 1)
+        assert scheduler.get_task(task_id).status == TaskStatus.PAUSED
+
+        scheduler.resume_task(task_id, delay=0)
+        _wait_until(lambda: len(_finished_jobs(scheduler, task_id)) == 2)
+        # A kept flag would start a third run as soon as the second ended.
+        time.sleep(0.3)
+        assert len(calls) == 2
+        assert len(scheduler.get_all_jobs(task_id=task_id)) == 2
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_default_still_raises_on_a_running_task(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    started = threading.Event()
+    release = threading.Event()
+
+    def handler() -> None:
+        started.set()
+        release.wait(5)
+
+    try:
+        task_id = scheduler.add_task("busy", handler, interval=60)
+        scheduler.start()
+        assert started.wait(3)
+
+        with pytest.raises(TaskRunningError):
+            scheduler.run_task_immediately(task_id)
+        assert scheduler.get_task(task_id).rerun_requested is False
+    finally:
+        release.set()
+        scheduler.shutdown()
+
+
+def test_run_task_immediately_logs_a_deferred_run(
+    running_main_loop: asyncio.AbstractEventLoop,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = scheduler.add_task("logged", lambda: None, interval=60)
+        scheduler.persistence.mark_task_running(task_id)
+
+        with caplog.at_level(logging.INFO, logger="Quiv"):
+            scheduler.run_task_immediately(task_id, after_current=True)
+
+        assert any(
+            "queued to run again after the current job" in record.message
+            for record in caplog.records
+        ), [record.message for record in caplog.records]
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: get_all_tasks(task_name=...)
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_tasks_filters_by_task_name(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        first = scheduler.add_task("sync", lambda: None, interval=60, delay=100)
+        second = scheduler.add_task("sync", lambda: None, interval=60, delay=200)
+        scheduler.add_task("cleanup", lambda: None, interval=60)
+
+        tasks = scheduler.get_all_tasks(task_name="sync")
+        assert [task.id for task in tasks] == [first, second]
+
+        # It combines with the other filters.
+        scheduler.pause_task(second)
+        paused = scheduler.get_all_tasks(task_name="sync", status="paused")
+        assert [task.id for task in paused] == [second]
+        assert scheduler.get_all_tasks(task_name="sync", limit=1)[0].id == first
+    finally:
+        scheduler.shutdown()
+
+
+def test_get_all_tasks_filters_by_task_name_with_include_run_once(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        alarm = scheduler.add_task(
+            "alarm", lambda: None, run_once=True, delay=500
+        )
+
+        # Run-once tasks stay out unless asked for, as without the filter.
+        assert scheduler.get_all_tasks(task_name="alarm") == []
+        tasks = scheduler.get_all_tasks(task_name="alarm", include_run_once=True)
+        assert [task.id for task in tasks] == [alarm]
+    finally:
+        scheduler.shutdown()

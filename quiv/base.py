@@ -62,6 +62,7 @@ class QuivBase(ABC):
         _event_listeners (dict[Event, list[Callable[..., Any]]]):
             Mapping of event types to registered listener callables.
         _shutdown (bool): Loop shutdown flag.
+        _started (bool): Whether ``start()`` was called.
         thread (threading.Thread): Background scheduler thread.
         _initialized (bool): Initialization completion flag.
     """
@@ -196,6 +197,7 @@ class QuivBase(ABC):
         )
 
         self._shutdown = False
+        self._started = False
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self._initialized = True
 
@@ -561,11 +563,18 @@ class QuivBase(ABC):
 
         loop.call_soon_threadsafe(partial(_call_sync_callback))
 
-    def run_task_immediately(self, task_id: str) -> int:
+    def run_task_immediately(
+        self, task_id: str, *, after_current: bool = False
+    ) -> int:
         """Queue an existing scheduled task for immediate run.
 
         Args:
             task_id (str): Task id to enqueue.
+            after_current (bool, Optional=False): Keyword-only. If a job
+                of a recurring task is running, run the task again as soon
+                as that job ends, whatever its outcome, instead of raising.
+                The request wins over the retry backoff and the interval,
+                and gets no jitter. ``pause_task()`` cancels it.
 
         Returns:
             int: Number of queued task rows.
@@ -576,9 +585,11 @@ class QuivBase(ABC):
                 run-once task that already fired has removed itself.
             HandlerNotRegisteredError: If the task exists but no handler
                 is registered for it.
-            TaskRunningError: If a job of the task is running. A second
-                run beside it would break the no-overlap invariant. It
-                subclasses ``TaskNotActiveError``.
+            TaskRunningError: If a job of the task is running and
+                ``after_current`` is not set. A second run beside it would
+                break the no-overlap invariant. With ``after_current``, a
+                running run-once task still raises it, because nothing
+                remains to run. It subclasses ``TaskNotActiveError``.
             TaskNotActiveError: If the task is paused. Resume it with
                 ``resume_task()``.
         """
@@ -594,12 +605,21 @@ class QuivBase(ABC):
             )
         # Raises TaskNotFoundError when the row went away after the check
         # above, so a task that vanishes mid-call still reports its absence.
-        count = self.persistence.queue_task_for_immediate_run(task_id)
+        deferred = self.persistence.queue_task_for_immediate_run(
+            task_id, after_current=after_current
+        )
+        if deferred:
+            # The loop has nothing to do yet: _run_job wakes it after the
+            # current job finalizes.
+            self._logger.info(
+                f"Task '{task_id}' queued to run again after the current job."
+            )
+            return 1
         self._logger.info(
             f"Task '{task_id}' queued for immediate run via scheduler loop."
         )
         self._wake_loop()
-        return count
+        return 1
 
     def start(self) -> None:
         """Start the scheduler background thread."""
@@ -608,9 +628,21 @@ class QuivBase(ABC):
         from .context import _register_active
 
         _register_active(self)
+        self._started = True
         if not self.thread.is_alive():
             self.thread.start()
         return None
+
+    @property
+    def is_running(self) -> bool:
+        """True while the scheduler loop runs.
+
+        ``start()`` was called, ``shutdown()`` was not, and the loop
+        thread is alive. Cheap: no database access, so a health probe can
+        call it every few seconds.
+        """
+
+        return self._started and not self._shutdown and self.thread.is_alive()
 
     def startup(self) -> None:  # pragma: no cover
         """Start the scheduler background thread.
@@ -1115,6 +1147,7 @@ class QuivBase(ABC):
         status: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        task_name: str | None = None,
     ) -> list[Task]:
         """Retrieve persisted task records, ordered by ``next_run_at``.
 
@@ -1124,6 +1157,10 @@ class QuivBase(ABC):
             status (str, Optional=None): Optional task status filter.
             limit (int, Optional=None): Maximum rows to return.
             offset (int, Optional=0): Rows to skip.
+            task_name (str, Optional=None): Only tasks with exactly this
+                name. Names can repeat, so the list can hold more than one
+                task. To ask whether a one-off with a name exists, pass
+                ``include_run_once=True`` too.
 
         Returns:
             list[Task]: List of tasks with unpickled args/kwargs.
@@ -1134,6 +1171,7 @@ class QuivBase(ABC):
             status=status,
             limit=limit,
             offset=offset,
+            task_name=task_name,
         )
         return [Task.model_validate(t) for t in tasks]
 
@@ -1185,9 +1223,13 @@ class QuivBase(ABC):
     def stats(self) -> QuivStats:
         """Return a point-in-time scheduler statistics snapshot.
 
+        Reads the database. For a health probe, use :attr:`is_running`,
+        which does not.
+
         Returns:
             QuivStats: Active-job count, pool utilization, task counts
-                by status, earliest upcoming run, and retained job rows.
+                by status, earliest upcoming run, retained job rows, and
+                whether the loop is alive.
         """
 
         with self._job_count_lock:
@@ -1199,4 +1241,5 @@ class QuivBase(ABC):
             tasks_by_status=self.persistence.count_tasks_by_status(),
             next_run_at=self.persistence.get_next_due_time(),
             job_history_count=self.persistence.count_jobs(),
+            loop_alive=self.is_running,
         )

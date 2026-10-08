@@ -139,6 +139,7 @@ class PersistenceLayer:
         status: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        task_name: str | None = None,
     ) -> list[TaskDB]:
         """Fetch persisted tasks, ordered by ``next_run_at`` ascending.
 
@@ -148,6 +149,8 @@ class PersistenceLayer:
             status (str, Optional=None): Optional task status filter.
             limit (int, Optional=None): Maximum rows to return.
             offset (int, Optional=0): Rows to skip.
+            task_name (str, Optional=None): Only tasks with exactly this
+                name.
 
         Returns:
             list[TaskDB]: A list of task records.
@@ -158,6 +161,8 @@ class PersistenceLayer:
             statement = statement.where(col(TaskDB.run_once).is_(False))
         if status:
             statement = statement.where(TaskDB.status == status)
+        if task_name is not None:
+            statement = statement.where(TaskDB.task_name == task_name)
         statement = statement.order_by(col(TaskDB.next_run_at).asc())
         if limit is not None:
             statement = statement.limit(limit)
@@ -324,18 +329,26 @@ class PersistenceLayer:
             statement = select(func.count()).select_from(Job)
             return int(session.exec(statement).one())
 
-    def queue_task_for_immediate_run(self, task_id: str) -> int:
+    def queue_task_for_immediate_run(
+        self, task_id: str, after_current: bool = False
+    ) -> bool:
         """Mark a scheduled task for immediate execution.
 
         Args:
             task_id (str): Task id to enqueue.
+            after_current (bool, Optional=False): For a running recurring
+                task, set ``rerun_requested`` instead of raising, so that
+                the task runs again when its current job ends.
 
         Returns:
-            int: Number of task rows updated.
+            bool: ``True`` when the run waits for the current job
+                (``rerun_requested`` was set), ``False`` when the task is
+                due now.
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
-            TaskRunningError: If the task is running.
+            TaskRunningError: If the task is running, and either
+                ``after_current`` is not set or the task is run-once.
             TaskNotActiveError: If the task is paused.
         """
 
@@ -346,6 +359,15 @@ class PersistenceLayer:
                     f"Task '{task_id}' was not found. Add it with"
                     " add_task before running immediately."
                 )
+            if task.status == TaskStatus.RUNNING and after_current:
+                if task.run_once:
+                    raise TaskRunningError(
+                        f"Task '{task_id}' is a running run-once task;"
+                        " nothing remains to run again."
+                    )
+                task.rerun_requested = True
+                session.commit()
+                return True
             if task.status == TaskStatus.RUNNING:
                 raise TaskRunningError(
                     f"Task '{task_id}' is running; only active tasks can be"
@@ -360,13 +382,13 @@ class PersistenceLayer:
             now = self._now_utc()
             task.next_run_at = now
             session.commit()
-            return 1
+            return False
 
     def pause_task(self, task_id: str) -> None:
         """Pause a task so it will not be dispatched.
 
         A job that is already running finishes, and the task stays
-        paused after it.
+        paused after it. A pending ``rerun_requested`` is cleared.
 
         Args:
             task_id (str): Task identifier.
@@ -380,6 +402,9 @@ class PersistenceLayer:
             if task is None:
                 raise TaskNotFoundError(f"Task '{task_id}' was not found")
             task.status = TaskStatus.PAUSED
+            # resume_task() schedules a run itself. A flag kept here would
+            # make the task run a second time when that job ends.
+            task.rerun_requested = False
             session.commit()
 
     def resume_task(
@@ -577,6 +602,11 @@ class PersistenceLayer:
         When ``jitter_seconds > 0``, adds ``uniform(0, jitter_seconds)``
         to the recurring next-run time (not to retry backoff).
 
+        When ``rerun_requested`` is set, the next run is ``now``. It
+        wins over the retry backoff and the interval, gets no jitter,
+        and the flag is cleared. The retry counter still counts a
+        failure, so ``max_retries`` keeps its meaning.
+
         Args:
             task_id (str): Task identifier.
             job_started_at (datetime): UTC time when the job started.
@@ -597,6 +627,11 @@ class PersistenceLayer:
                 # A pause that landed while the job ran stays: only
                 # resume_task() makes a paused task active again.
                 existing.status = TaskStatus.ACTIVE
+            # Read before the branches: the retry branch returns early.
+            # The caller of run_task_immediately(after_current=True) asked
+            # for a run now, so it wins over the backoff and the interval.
+            rerun_requested = existing.rerun_requested
+            existing.rerun_requested = False
             if job_failed and existing.retry_attempt < existing.max_retries:
                 existing.retry_attempt += 1
                 try:
@@ -608,6 +643,8 @@ class PersistenceLayer:
                     # 1,000 retries; seconds_after clamps infinity.
                     backoff = math.inf
                 existing.next_run_at = seconds_after(now, backoff)
+                if rerun_requested:
+                    existing.next_run_at = now
                 session.commit()
                 return True
 
@@ -636,7 +673,10 @@ class PersistenceLayer:
                 )
             else:
                 existing.next_run_at = seconds_after(now, interval)
-            if existing.jitter_seconds > 0:
+            if rerun_requested:
+                # No jitter: the caller asked for now.
+                existing.next_run_at = now
+            elif existing.jitter_seconds > 0:
                 existing.next_run_at = seconds_after(
                     existing.next_run_at,
                     random.uniform(0, existing.jitter_seconds),

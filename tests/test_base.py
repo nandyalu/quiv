@@ -696,3 +696,65 @@ def test_stats_next_run_at_matches_earliest_task(
         assert stats.next_run_at == early.next_run_at
     finally:
         scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9: is_running and QuivStats.loop_alive
+# ---------------------------------------------------------------------------
+
+
+def test_is_running_is_false_before_start_true_after_and_false_after_shutdown(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        assert scheduler.is_running is False
+        scheduler.start()
+        assert scheduler.is_running is True
+    finally:
+        scheduler.shutdown()
+    assert scheduler.is_running is False
+
+
+def test_stats_loop_alive_matches_is_running(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        assert scheduler.stats().loop_alive is False
+        scheduler.start()
+        stats = scheduler.stats()
+        assert stats.loop_alive is True
+        assert stats.loop_alive == scheduler.is_running
+    finally:
+        scheduler.shutdown()
+
+
+@pytest.mark.filterwarnings(
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning"
+)
+def test_is_running_is_false_when_the_loop_thread_died(
+    monkeypatch: pytest.MonkeyPatch,
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    """A loop thread that something outside ``Exception`` killed is not running.
+
+    The loop catches ``Exception`` and continues, so only an exception
+    such as ``SystemExit`` ends the thread. ``Quiv()`` gives the thread its
+    target, so the class method is patched before the instance exists.
+    """
+
+    def dying_loop(self: Quiv) -> None:
+        raise SystemExit(1)
+
+    monkeypatch.setattr(Quiv, "_loop", dying_loop)
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        scheduler.start()
+        scheduler.thread.join(timeout=5)
+
+        assert not scheduler.thread.is_alive()
+        assert scheduler.is_running is False
+        assert scheduler.stats().loop_alive is False
+    finally:
+        scheduler.shutdown()

@@ -235,7 +235,9 @@ def main() -> int:
                 rss = read_rss_kb()
                 if rss:
                     observed["max_rss_kb"] = max(observed["max_rss_kb"], rss)
-                if not scheduler.thread.is_alive():
+                # The main thread sets stop before shutdown(), which makes
+                # is_running false at once; that is not a dead loop.
+                if not scheduler.is_running and not stop.is_set():
                     observed["scheduler_died"] = True
                     stop.set()
             except Exception as exc:  # noqa: BLE001 - recorded, not raised

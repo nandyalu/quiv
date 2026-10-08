@@ -16,9 +16,27 @@ stats.pool_utilization   # active_jobs / pool_size, 0.0-1.0
 stats.tasks_by_status    # e.g. {"active": 3, "paused": 1}
 stats.next_run_at        # earliest upcoming run (UTC), or None
 stats.job_history_count  # job rows currently retained
+stats.loop_alive         # same value as scheduler.is_running
 ```
 
 `QuivStats` is a plain dataclass. Call `dataclasses.asdict()` on it to build a JSON response.
+
+## Health
+
+`is_running` answers one question: does the scheduler loop run? It is `True` when `start()` was called, `shutdown()` was not, and the loop thread is alive.
+
+```python
+from fastapi.responses import JSONResponse
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    if not scheduler.is_running:
+        return JSONResponse({"scheduler": "stopped"}, status_code=503)
+    return JSONResponse({"scheduler": "running"})
+```
+
+`stats().loop_alive` holds the same value. `stats()` reads the database and `is_running` does not, so use `is_running` in a health probe. [Running in a Container](containers.md#health) shows a Docker `HEALTHCHECK` for this endpoint.
 
 ## Job queries
 
