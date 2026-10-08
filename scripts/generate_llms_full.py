@@ -13,6 +13,7 @@ PAGES = [
     "index.md",
     "getting-started.md",
     "bigger-applications.md",
+    "containers.md",
     "api.md",
     "architecture.md",
     "progress-callbacks.md",
