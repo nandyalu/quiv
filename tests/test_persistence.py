@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import pickle
 from datetime import timedelta
 from typing import Any
 
@@ -1107,5 +1108,63 @@ def test_get_all_tasks_task_name_is_an_exact_match(
 
         assert [task.id for task in tasks] == wanted
         assert scheduler.persistence.get_all_tasks(task_name="missing") == []
+    finally:
+        scheduler.shutdown()
+
+
+def test_executor_round_trips_through_create_task_and_queries(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    from quiv.models import Executor
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        now = scheduler._now_utc()
+        default_id = scheduler.persistence.create_task(
+            task_name="default", interval=60, run_once=False,
+            fixed_interval=True, next_run_at=now + timedelta(seconds=60),
+            args_pickled=pickle.dumps(()), kwargs_pickled=pickle.dumps({}),
+        )
+        process_id = scheduler.persistence.create_task(
+            task_name="process", interval=60, run_once=False,
+            fixed_interval=True, next_run_at=now + timedelta(seconds=5),
+            args_pickled=pickle.dumps(()), kwargs_pickled=pickle.dumps({}),
+            executor="process",
+        )
+        assert scheduler.persistence.get_task(default_id).executor == "thread"
+        assert scheduler.get_task(process_id).executor == Executor.PROCESS
+        by_id = {t.id: t.executor for t in scheduler.get_all_tasks()}
+        assert by_id == {default_id: "thread", process_id: "process"}
+
+        # The per-pool next-due query.
+        process_row = scheduler.persistence.get_task(process_id)
+        default_row = scheduler.persistence.get_task(default_id)
+        assert scheduler.persistence.get_next_due_time() == process_row.next_run_at
+        assert (
+            scheduler.persistence.get_next_due_time(executor="process")
+            == process_row.next_run_at
+        )
+        assert (
+            scheduler.persistence.get_next_due_time(executor="thread")
+            == default_row.next_run_at
+        )
+    finally:
+        scheduler.shutdown()
+
+
+def test_set_job_pid(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(main_loop=running_main_loop)
+    try:
+        job_id = scheduler.persistence.create_job(
+            "task", "name", executor="process"
+        )
+        assert scheduler.get_job(job_id).pid is None
+        assert scheduler.get_job(job_id).executor == "process"
+        scheduler.persistence.set_job_pid(job_id, 777)
+        assert scheduler.get_job(job_id).pid == 777
+        with pytest.raises(JobNotFoundError):
+            scheduler.persistence.set_job_pid("missing", 1)
     finally:
         scheduler.shutdown()

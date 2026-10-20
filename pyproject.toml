@@ -57,6 +57,13 @@ exclude = ["^docs/"]
 
 [tool.coverage.run]
 source = ["quiv"]
+# A process job runs quiv/_worker.py in a spawned interpreter. The
+# multiprocessing concurrency setting makes coverage measure that child
+# and pytest-cov combine its data file; without it the child's lines count
+# as unexecuted. sigterm makes a child that quiv terminates write its data
+# first, on POSIX.
+concurrency = ["thread", "multiprocessing"]
+sigterm = true
 
 [tool.coverage.report]
 fail_under = 95

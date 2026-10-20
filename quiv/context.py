@@ -27,6 +27,7 @@ from collections.abc import Coroutine
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, cast
 
+from . import _worker
 from .exceptions import JobCancelledError, MainLoopUnavailableError
 
 if TYPE_CHECKING:
@@ -50,14 +51,21 @@ _active_quiv_lock = threading.Lock()
 _active_quiv: "QuivBase | None" = None
 
 
-def _current_stop_event() -> threading.Event | None:
+def _current_stop_event() -> Any:
     """Return the stop event of the job this code runs inside, or None.
 
     Reads the context variables only, never the process-level fallback:
     the fallback is set by ``start()`` and reaches code that no job
     contains, and such code has no stop event.
+
+    Inside a worker process there is no job context; the stop event the
+    parent passed to the process is the job's, and it reaches every
+    thread of that process.
     """
 
+    worker_event = _worker.stop_event()
+    if worker_event is not None:
+        return worker_event
     quiv = _current_quiv.get()
     job_id = _current_job_id.get()
     if quiv is None or job_id is None:
@@ -143,6 +151,15 @@ def run_on_main(
     **not** reach a ``threading.Thread`` that you start yourself inside a
     handler.
 
+    **From a process job** (``executor="process"``), the call crosses the
+    pipe to the parent, which runs ``func`` on the main loop the ordinary
+    way. ``func`` and its arguments must be picklable, so ``func`` must be
+    importable by name, like a process handler; a lambda raises
+    ``QuivError`` in the handler. A missing main loop cannot raise here,
+    because the message has already been sent: the parent logs the error
+    instead. Inside a worker process the pipe is shared by every thread of
+    that process, so this reach is wider there than in a thread job.
+
     Args:
         func (Callable[..., Any]): Sync function or coroutine function
             to invoke on the main loop. Bare coroutine objects are not
@@ -154,7 +171,16 @@ def run_on_main(
         MainLoopUnavailableError: If no active Quiv instance is
             registered, or if the active Quiv has no resolvable main
             loop. It subclasses both ``QuivError`` and ``RuntimeError``.
+        QuivError: From a process job, if ``func`` or an argument cannot
+            be pickled.
     """
+
+    if _worker.channel() is not None:
+        _worker.send(
+            ("run_on_main", func, args, kwargs),
+            "run_on_main() function and arguments",
+        )
+        return
 
     quiv = _get_active_quiv()
     if quiv is None:

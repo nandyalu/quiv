@@ -30,6 +30,26 @@ def test_quiv_base_validates_pool_size_and_history(
         Quiv(history_retention_seconds=-1, main_loop=running_main_loop)
 
 
+def test_quiv_base_validates_process_pool_settings(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    with pytest.raises(ConfigurationError, match="cannot both be 0"):
+        Quiv(pool_size=0, process_pool_size=0, main_loop=running_main_loop)
+    with pytest.raises(ConfigurationError, match="pool_size must be"):
+        Quiv(pool_size=-1, main_loop=running_main_loop)
+    with pytest.raises(ConfigurationError, match="process_pool_size must be"):
+        Quiv(process_pool_size=-1, main_loop=running_main_loop)
+    with pytest.raises(ConfigurationError, match="process_kill_grace"):
+        Quiv(process_kill_grace=-1, main_loop=running_main_loop)
+    # A grace of 0 is allowed: terminate on the next tick.
+    scheduler = Quiv(process_kill_grace=0, main_loop=running_main_loop)
+    try:
+        assert scheduler._process_kill_grace == 0
+        assert scheduler._default_executor == "thread"
+    finally:
+        scheduler.shutdown()
+
+
 def test_register_handler_validation(
     running_main_loop: asyncio.AbstractEventLoop,
 ) -> None:

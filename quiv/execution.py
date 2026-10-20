@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import pickle
 import weakref
@@ -17,6 +18,30 @@ _INJECTABLE_KWARGS = frozenset({"job_id", "stop_event", "progress_hook"})
 _LEGACY_INJECTABLE_KWARGS = frozenset(
     {"_job_id", "_stop_event", "_progress_hook"}
 )
+
+
+def run_in_fresh_loop(
+    task: Callable[..., Awaitable[Any]],
+    args: tuple[Any, ...] | None = None,
+    kwargs: dict[str, Any] | None = None,
+) -> None:
+    """Run an async callable in a fresh event loop for this invocation.
+
+    Each invocation gets its own event loop (isolation requirement);
+    ``asyncio.run`` cancels pending tasks and finalizes async generators
+    and the default executor before closing the loop. The parent's thread
+    pool and a worker process share this one implementation.
+
+    Args:
+        task (Callable[..., Awaitable[Any]]): Coroutine function to execute.
+        args (tuple, Optional=None): Positional arguments for the callable.
+        kwargs (dict, Optional=None): Keyword arguments for the callable.
+    """
+
+    async def invoke() -> Any:
+        return await task(*(args or ()), **(kwargs or {}))
+
+    asyncio.run(invoke())
 
 
 class ExecutionLayer:

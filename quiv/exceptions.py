@@ -71,3 +71,11 @@ class MainLoopUnavailableError(QuivError, RuntimeError):
     ``except RuntimeError`` clause keeps working, and ``except QuivError``
     now catches it too.
     """
+
+
+class WorkerProcessError(QuivError):
+    """Raised when scheduler methods are called inside a quiv worker process.
+
+    A process job runs in a process that quiv spawned for that job. A
+    ``Quiv`` created there is inert; the scheduler lives in the parent.
+    """

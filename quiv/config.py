@@ -16,11 +16,17 @@ class QuivConfig:
             How long finished job history is retained.
         timezone (str, tzinfo):
             Timezone used for display-facing datetime formatting.
+        process_pool_size (int): Maximum process jobs at once; 0 means
+            no process pool.
+        process_kill_grace (float): Seconds a process job may ignore its
+            stop event before quiv terminates the process.
     """
 
     pool_size: int = 10
     history_retention_seconds: int = 86400
     timezone: str | tzinfo = "UTC"
+    process_pool_size: int = 0
+    process_kill_grace: float = 5.0
 
 
 def resolve_timezone(value: str | tzinfo) -> tzinfo:

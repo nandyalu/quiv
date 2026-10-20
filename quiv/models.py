@@ -180,6 +180,18 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class Executor(str, Enum):
+    """Where a task's jobs run.
+
+    Attributes:
+        THREAD (str): On the thread pool, inside the scheduler's process.
+        PROCESS (str): In a new process that quiv spawns for each job.
+    """
+
+    THREAD = "thread"
+    PROCESS = "process"
+
+
 class TaskDB(QuivModelBase, table=True):
     """Internal database model for scheduled tasks.
 
@@ -211,6 +223,8 @@ class TaskDB(QuivModelBase, table=True):
         rerun_requested (bool): Set by ``run_task_immediately(
             after_current=True)`` on a running task. The task runs again
             as soon as its current job ends.
+        executor (str): Where the task's jobs run: ``"thread"`` or
+            ``"process"``.
     """
 
     __tablename__: str = "quiv_task"  # type: ignore
@@ -230,6 +244,7 @@ class TaskDB(QuivModelBase, table=True):
     retry_attempt: int = 0
     jitter_seconds: float = 0.0
     rerun_requested: bool = False
+    executor: str = Executor.THREAD
 
     @field_serializer("args", "kwargs")
     @classmethod
@@ -279,6 +294,8 @@ class Task(BaseModel):
         rerun_requested (bool): ``True`` while a run requested with
             ``run_task_immediately(after_current=True)`` waits for the
             current job to end.
+        executor (str): Where the task's jobs run: ``"thread"`` or
+            ``"process"``.
     """
 
     model_config = {"from_attributes": True}
@@ -298,6 +315,7 @@ class Task(BaseModel):
     retry_attempt: int = 0
     jitter_seconds: float = 0.0
     rerun_requested: bool = False
+    executor: str = Executor.THREAD
 
     @model_validator(mode="before")
     @classmethod
@@ -352,6 +370,7 @@ class Task(BaseModel):
                 "retry_attempt": data.retry_attempt,
                 "jitter_seconds": data.jitter_seconds,
                 "rerun_requested": data.rerun_requested,
+                "executor": data.executor,
             }
 
         return data
@@ -372,6 +391,12 @@ class QuivStats:
         job_history_count (int): Job rows currently retained.
         loop_alive (bool): Whether the scheduler loop thread is running;
             the same value as ``Quiv.is_running``.
+        process_pool_size (int): Process-pool size; 0 when there is no
+            process pool.
+        active_process_jobs (int): Process jobs currently executing.
+        process_pool_utilization (float):
+            ``active_process_jobs / process_pool_size``, 0.0-1.0; 0.0
+            when there is no process pool.
     """
 
     active_jobs: int
@@ -381,6 +406,9 @@ class QuivStats:
     next_run_at: datetime | None
     job_history_count: int
     loop_alive: bool = False
+    process_pool_size: int = 0
+    active_process_jobs: int = 0
+    process_pool_utilization: float = 0.0
 
 
 class Job(QuivModelBase, table=True):
@@ -401,6 +429,11 @@ class Job(QuivModelBase, table=True):
         error_message (str, Optional=None): Error message if job failed.
         attempt (int): Attempt number for the task's current run cycle;
             1 = first try, 2 = first retry, and so on.
+        executor (str): Where the job ran: ``"thread"`` or ``"process"``.
+        pid (int, Optional=None): Process id of the spawned process, for
+            a process job. ``None`` for a thread job, and until the
+            process has started: ``JOB_STARTED`` carries ``None``, and
+            every later read carries the number.
     """
 
     __tablename__: str = "quiv_job"  # type: ignore
@@ -418,3 +451,5 @@ class Job(QuivModelBase, table=True):
     duration_seconds: float | None = None
     error_message: str | None = None
     attempt: int = 1
+    executor: str = Executor.THREAD
+    pid: int | None = None
