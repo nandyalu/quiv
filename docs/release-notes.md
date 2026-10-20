@@ -46,7 +46,7 @@ A process job costs about 220 ms more than a thread job on that machine. Windows
 ### Housekeeping
 
 - A 10-minute soak with two process jobs, one of which ignores its stop event and is terminated on every run, finished 2,324 jobs with no child process left behind, two children at the peak, the thread count flat at 10, and no unexpected error. `scripts/soak.py` gains `--process-pool-size`, default 2, and fails when more children are alive than the pool allows or when one is alive after shutdown.
-- Coverage now measures the spawned process: `concurrency = ["thread", "multiprocessing"]` and `sigterm = true` in `pyproject.toml`. The suite has 376 tests, and coverage sits at 100%.
+- Coverage now measures the spawned process: `concurrency = ["thread", "multiprocessing"]` and `sigterm = true` in `pyproject.toml`. The suite has 377 tests, and coverage sits at 100%.
 - The test suite runs on Linux, macOS, and Windows since v1.2.0, and the process-job tests run on all three.
 
 **Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.4.0...v1.5.0
