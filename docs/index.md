@@ -29,7 +29,7 @@ If you have used APScheduler inside a FastAPI app, you have probably met one of 
 - You want a job id on every log line of one run, and you pass that id through every call by hand.
 - You have a complete async pipeline to run in the background, and you wrap it in `asyncio.run` to give it to a scheduler that accepts sync code only.
 
-`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr), a FastAPI app that left APScheduler for these reasons. It is a scheduler for one process, backed by a thread pool. It has three things built in: cooperative cancellation through `stop_event`, progress callbacks that run on the main loop through `progress_hook`, and a job id for tracing through `job_id`.
+`quiv` was built inside [Trailarr](https://github.com/nandyalu/trailarr), a FastAPI app that left APScheduler for these reasons. It is a scheduler for one process, backed by a thread pool, with an optional pool of processes for the work that needs a CPU of its own or a way to be ended by force. It has three things built in: cooperative cancellation through `stop_event`, progress callbacks that run on the main loop through `progress_hook`, and a job id for tracing through `job_id`.
 
 `quiv` does not replace Celery. If you need workers in several processes, a queue that survives a restart, or work spread over machines, use Celery or arq. Use `quiv` when the work belongs inside your own process, where those tools would be far more than you need.
 
@@ -196,16 +196,17 @@ The table describes the default behavior of each tool. All four can be stretched
 | Retries with backoff | yes | no | no | yes |
 | Per-task timeout | yes, cooperative | no | no | yes, soft and hard limits |
 | State survives a restart | no | no | optional, through a job store | yes, through the broker and the result backend |
-| Spreads work over processes or machines | no | no | no | yes |
+| Spreads work over processes on this machine | yes, through `executor="process"` | no | no | yes |
+| Spreads work over other machines | no | no | no | yes |
 
-Read the last three rows first. quiv keeps no state across a restart, runs no cron expression, and spreads no work beyond one process. If you need any of those, use APScheduler or Celery. quiv is for the case where a job must run in your process, report progress to your event loop, and stop when a user asks it to.
+Read the last three rows first. quiv keeps no state across a restart, runs no cron expression, and spreads no work beyond one machine. If you need any of those, use APScheduler or Celery. quiv is for the case where a job must run in your process, or in a process next to it, report progress to your event loop, and stop when a user asks it to.
 
 Before the `1.0.0` release quiv ran for 24 hours under a mixed workload — recurring, async, failing, cancelled, timing out, and sub-second tasks at once. It finished 294,400 jobs with the thread count unchanged, the retained job history flat after the first hour, and memory steady at 53 MB. The log is in the repository at [`benchmarks/results/soak-24h-2026-09-17.log`](https://github.com/nandyalu/quiv/blob/main/benchmarks/results/soak-24h-2026-09-17.log).
 
 ## Important caveats
 
 - **A temporary database**: each `Quiv` instance creates a temporary SQLite file, and `shutdown()` deletes it. The state of your tasks and jobs does not survive a restart.
-- **One process**: the scheduler runs inside your process. It is not built to spread work over several processes or machines.
+- **One machine**: the scheduler runs inside your process. A task with `executor="process"` runs each job in a process that quiv spawns next to it, on the same machine. quiv is not built to spread work over several machines.
 - **Picklable arguments**: quiv serializes the `args` and `kwargs` of `add_task()` with pickle, to store them. Pickle accepts most Python objects, but it cannot accept a lambda or an inner function. The temporary SQLite database holds trusted internal state: only your application writes to it, and `shutdown()` deletes it. Never let untrusted input reach that database file.
 
 
@@ -218,6 +219,7 @@ Read the full documentation here:
 - [Running in a Container](containers.md) — stopping inside the grace period, the temporary database, restarts, daily runs, and health checks
 - [Architecture](architecture.md) — how the scheduler, persistence, and execution layers fit together
 - [Running on the main event loop](run-on-main.md) — dispatch work to the main loop from anywhere in a task's call stack
+- [Process Jobs](process-jobs.md) — a process per job for CPU work and for work that must be stopped by force
 - [Event Listeners](event-listeners.md) — react to what happens to a task and to a job
 - [Exceptions](exceptions.md) — the `QuivError` hierarchy and when each is raised
 - [Testing](testing.md) — patterns for testing handlers and the scheduler in your suite

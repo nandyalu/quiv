@@ -900,13 +900,33 @@ All prose follows the global `orwell-writing` skill, one paragraph per line.
 
 ## Exit checklist
 
-- [ ] §0 landed first as its own commit: `tests.yml` runs the existing suite green on `ubuntu-latest`, `macos-latest`, and `windows-latest` across Python 3.10–3.14; `typecheck.yml` runs mypy for `win32` as well.
-- [ ] `uv run pytest` green on all three platforms, including every test in §12; coverage at or above the gate with the multiprocessing concurrency setting in place.
-- [ ] `uv run mypy quiv` — zero errors, on both platforms.
-- [ ] `Task` round-trip test proves `executor` survives `get_task()` and `get_all_tasks()`; `Job` carries `executor` and `pid`.
-- [ ] A 10-minute soak with `--process-pool-size 2` passes: no child alive after shutdown, peak children within the bound, no thread growth.
-- [ ] `benchmarks/bench_process_overhead.py` committed; its numbers are in the release notes.
-- [ ] `docs/process-jobs.md` in the nav; every page in §14 updated; `uv run zensical build --clean` clean; README and `docs/index.md` diffed against each other.
-- [ ] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
-- [ ] `CLAUDE.md` updated per §14.
-- [ ] Version `1.5.0`; `docs/roadmap.md` Phase 7 marked complete with the date.
+- [x] §0 landed first as its own commit: `tests.yml` runs the existing suite green on `ubuntu-latest`, `macos-latest`, and `windows-latest` across Python 3.10–3.14; `typecheck.yml` runs mypy for `win32` as well.
+- [x] `uv run pytest` green on all three platforms, including every test in §12; coverage at or above the gate with the multiprocessing concurrency setting in place. Linux verified locally at 100%; macOS and Windows run in CI on the release PR.
+- [x] `uv run mypy quiv` — zero errors, on both platforms.
+- [x] `Task` round-trip test proves `executor` survives `get_task()` and `get_all_tasks()`; `Job` carries `executor` and `pid`.
+- [x] A 10-minute soak with `--process-pool-size 2` passes: no child alive after shutdown, peak children within the bound, no thread growth.
+- [x] `benchmarks/bench_process_overhead.py` committed; its numbers are in the release notes.
+- [x] `docs/process-jobs.md` in the nav; every page in §14 updated; `uv run zensical build --clean` clean; README and `docs/index.md` diffed against each other.
+- [x] `quiv/AGENTS.md`, `skills/quiv/SKILL.md`, `docs/llms.txt` updated; `claude plugin validate .` passes.
+- [x] `CLAUDE.md` updated per §14.
+- [x] Version `1.5.0`; `docs/roadmap.md` Phase 7 marked complete with the date.
+
+---
+
+## Implementation notes (2026-10-19)
+
+The phase landed as planned. The code differs from the text above in these places, each found while implementing against the scheduler that Phases 8 and 9 and v1.3.0 had changed since the plan was written:
+
+- **The child's error message has a fourth item, `cancelled`**: whether the handler raised `JobCancelledError`. `_ChildFailure.cancelled` together with `_stop_requested()` gives a process job the clean stop that v1.2.0 gave a thread job whose `run_subprocess()` or `call_on_main()` was stopped: one info line, no traceback, `error_message` `None`. Without it, a cooperative stop inside a process job logged an error with a traceback.
+- **The child keeps its stop event reachable.** `_worker.stop_event()` returns it, and `context._current_stop_event()` returns that inside a worker before it looks at the job context, which a worker does not have. `run_subprocess()` therefore finds the stop event in a process job. Without this, a cancel reached a process job that ran a subprocess only through the kill, and the grandchild was orphaned. `call_on_main()` stays unsupported in a process job: there is no main loop to wait on, and it raises `MainLoopUnavailableError`.
+- **The waiter loop reads the pipe first and `continue`s, and the sentinel is a fallback** marked `pragma: no cover`. A child that returns or dies closes its pipe end, so the pipe reads EOF and ends the loop on every platform. The drain-after-sentinel branch in §5 ran only when `wait()` reported both at once, which made its coverage depend on timing.
+- **`_handle_child_message` catches `Exception` around `run_on_main`**, not only `MainLoopUnavailableError`. A loop closed between resolve and dispatch raises `RuntimeError`, and that must not end the child.
+- **`_run_in_child` terminates the child when the parent side raises**, for example on a progress payload the parent cannot unpickle, and closes both pipe ends when `Process.start()` raises. Tests cover both.
+- **The crash message reads `process ended with exit code N before reporting a result`**, so the substring `exit code N` from §12 holds.
+- **`_ensure_live()` also guards the wait methods and `pending_main_loop_work()`**, and `is_running` is `False` on an inert instance. Each of those reads an attribute the inert branch does not create.
+- **`pool_utilization` guards a `pool_size` of 0**, as §10 asked, and `shutdown(timeout=...)` counts process jobs in the drain and warns separately when a terminated job has not finished recording after `_PROCESS_FINALIZE_SECONDS`.
+- **A daemon child cannot start `multiprocessing` children of its own.** Documented on the Process Jobs page, next to `run_subprocess()` as the way to run a child program.
+
+Benchmark, `benchmarks/bench_process_overhead.py` with 50 jobs on the Intel Core i5-11600, Python 3.10.12, Linux: thread no-op p50 1.1 ms; process no-op p50 220.8 ms, p95 231.6 ms.
+
+Soak, `scripts/soak.py --minutes 10`: see the summary in the release notes.

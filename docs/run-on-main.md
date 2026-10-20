@@ -110,6 +110,12 @@ If neither holds an instance, `run_on_main` raises `MainLoopUnavailableError`.
 !!! warning "A thread that you start yourself does not inherit the context"
     Python copies a `ContextVar` into `asyncio.create_task`, but **not** into a `threading.Thread` that you create. If your handler runs `threading.Thread(target=fn).start()` and `fn` calls `run_on_main`, quiv uses the process-level instance instead. That instance is usually the right one, but it is ambiguous when you run several Quiv instances. Start no raw threads inside a handler. The thread pool already runs your work in parallel.
 
+## From a process job
+
+A [process job](process-jobs.md) runs in a process of its own, with no main loop in it. `run_on_main` still works there: the function and its arguments cross the pipe to the parent, which runs the function on the main loop the ordinary way. Two things follow from the pipe. The function must be picklable, so it must be importable by name, like a process handler; a lambda raises `QuivError` in the handler. And a missing main loop cannot raise in the handler, because the message has already been sent: the parent logs the error instead. Inside the new process the pipe is shared by every thread, so `run_on_main` reaches a `threading.Thread` the handler starts, which it does not in a thread job.
+
+`call_on_main` does not work from a process job. It waits for a result, there is no main loop in the new process to wait on, and the call raises `MainLoopUnavailableError`.
+
 ## Exception handling
 
 If `func` raises, `run_on_main` writes the error to the logger of the active Quiv and continues. The code of the caller is not affected. `progress_hook` and the event listeners behave the same way, so one broken callback on the main loop cannot stop the task that called it.

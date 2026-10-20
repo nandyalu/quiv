@@ -1,6 +1,6 @@
 # Testing
 
-quiv has **more than 200 tests**. They cover the whole life of a task and of a job, the event listeners, the progress callbacks, the configuration, the models, and the rare cases. CI runs them on every commit, against Python 3.10 through 3.14.
+quiv has **more than 370 tests**. They cover the whole life of a task and of a job, the event listeners, the progress callbacks, the process jobs, the configuration, the models, and the rare cases. CI runs them on every commit, on Linux, macOS, and Windows, against Python 3.10 through 3.14.
 
 ```bash
 # Run all tests
@@ -52,12 +52,14 @@ Both raise the builtin `TimeoutError` when the deadline passes, and `SchedulerSt
 
 Most tests need a running asyncio event loop, because quiv dispatches callbacks onto it. The `running_main_loop` fixture in `conftest.py` starts an event loop in a background thread and yields it to the test. Every test calls `scheduler.shutdown()` in a `finally` block, which releases the threads and deletes the temporary database files.
 
+The process-job tests spawn real processes. Their handlers live in `tests/quiv_process_handlers.py`, a module-level file, because a spawned child imports a handler by module name; pytest puts `tests/` on `sys.path`, and the child inherits that path. Coverage measures the child too: `concurrency = ["thread", "multiprocessing"]` in `pyproject.toml` makes coverage start in the spawned interpreter and pytest-cov combine its data, and the gate of 95% includes the child's lines.
+
 ## What is tested
 
 ### Scheduler lifecycle and configuration
 
 - Mixing `config=QuivConfig(...)` with explicit kwargs raises `ConfigurationError`
-- `pool_size <= 0` and `history_retention_seconds < 0` are rejected
+- `pool_size < 0`, `process_pool_size < 0`, both pools at 0, `process_kill_grace < 0`, and `history_retention_seconds < 0` are rejected
 - `start()` is idempotent (safe to call multiple times)
 - `is_running` is false before `start()`, true after it, false after `shutdown()`, and false when the loop thread died; `stats().loop_alive` matches it
 - `shutdown()` continues and logs the problem when it cannot delete the database files
@@ -112,6 +114,25 @@ Most tests need a running asyncio event loop, because quiv dispatches callbacks 
 - Handler that sets `stop_event` results in `cancelled` status
 - `remove_task()` on a running task cancels its active job
 - `shutdown()` cancels all tracked running jobs
+
+### Process jobs
+
+- A process job completes in a process of its own, records its `pid`, and the handler sees that pid
+- A handler that raises gives a `failed` job with the exception's message, and the child's traceback in the log
+- A process job retries with `max_retries`, with the attempt numbers of a thread job
+- A process that dies on its own, by `os._exit()` or by a signal, gives a `failed` job that names the exit code or the signal
+- A handler that honors its stop event is `cancelled` and nothing is terminated; one that ignores it is terminated after `process_kill_grace`, by a timeout, by `cancel_job()`, by `remove_task()`, and by `shutdown()`, with and without a timeout; a grace of 0 terminates on the next tick
+- `progress_hook` payloads cross the pipe in order; a payload the child cannot pickle fails the job; a payload the parent cannot unpickle fails the job and terminates the child
+- `run_on_main` from a process job runs its function in the parent; a lambda fails the job; without a main loop the parent logs the error
+- `run_subprocess` inside a process job stops with the job
+- An async handler runs in a process job
+- Backpressure is per pool: a long thread job delays no process task, and a long process job delays no thread task
+- A late start names the process pool
+- A spawn that fails is a `failed` job
+- `stats()` reports the process pool
+- A `Quiv()` built at import time in the handler's module is inert in the child, and raises `WorkerProcessError` for every lifecycle call
+- The child entry point reports `done` and `error` through its pipe
+- `executor="process"` rejects a lambda, an inner function, a bound method, a classmethod, a `functools.partial` object, a callable instance, and a function whose module or name cannot be imported; it accepts a staticmethod; `executor` must name a pool with a size; the default is `process` when `pool_size` is 0; `update_task(executor=)` runs the same checks
 
 ### Progress callbacks
 
@@ -228,14 +249,18 @@ uv run python scripts/soak.py --minutes 10    # while you work
 uv run python scripts/soak.py --hours 24      # before a release
 ```
 
-The workload covers every execution path at once: a sync task, an async task, a task that fails and retries, a task that another thread cancels, a task that passes its timeout, and a task on a sub-second interval. A separate thread calls `stats()` and `get_all_jobs()` every second, the way an admin page would.
+The workload covers every execution path at once: a sync task, an async task, a task that fails and retries, a task that another thread cancels, a task that passes its timeout, a task on a sub-second interval, a process job that does CPU work, and a process job that ignores its stop event, so that quiv terminates it every time. A separate thread calls `stats()` and `get_all_jobs()` every second, the way an admin page would, and counts the live child processes.
 
-The script exits non-zero on any of four conditions:
+The script exits non-zero on any of six conditions:
 
 - The number of live threads grows past its settled baseline.
 - The retained job history grows past what the retention window allows.
 - The `"Quiv"` logger records an ERROR that the failing task does not explain.
 - The scheduler thread dies.
+- More child processes are alive at once than `process_pool_size` allows.
+- A child process is still alive after `shutdown()`.
+
+`--process-pool-size 0` runs the soak without process jobs.
 
 ### Result for v1.0.0
 

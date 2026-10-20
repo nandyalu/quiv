@@ -221,5 +221,5 @@ If the job must include the work, use `call_on_main` instead. The job then waits
 
 ## One process, one pool
 
-- **`pool_size` is a number of threads in one process.** I/O-bound work scales with it. CPU-bound work does not, because the standard CPython build runs one thread of Python code at a time. Process jobs are planned for a later release; see [Phase 7](roadmap.md#phase-7-process-jobs-v150) of the roadmap.
+- **`pool_size` is a number of threads in one process.** I/O-bound work scales with it. CPU-bound work does not, because the standard CPython build runs one thread of Python code at a time. Give CPU-bound work `executor="process"` and a `process_pool_size`; each of those jobs runs in a process that quiv spawns for it. Count those processes in the container's CPU and memory limits. See [Process Jobs](process-jobs.md).
 - **Each process runs its own scheduler.** If you start several worker processes, for example `uvicorn --workers 4`, each worker creates a `Quiv` and runs every task. Several replicas of a container do the same. Start the scheduler in one process only.

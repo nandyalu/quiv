@@ -11,17 +11,19 @@ Quiv(
     history_retention_seconds: int = 86400,
     timezone: str | tzinfo = "UTC",
     *,
+    process_pool_size: int = 0,
+    process_kill_grace: float = 5.0,
     logger: logging.Logger | logging.LoggerAdapter | None = None,
     main_loop: asyncio.AbstractEventLoop | None = None,
 )
 ```
 
-If you pass `config`, do not also pass `pool_size`, `history_retention_seconds`, or `timezone`.
+If you pass `config`, do not also pass `pool_size`, `history_retention_seconds`, `timezone`, `process_pool_size`, or `process_kill_grace`.
 
 Parameters:
 
 - `config`: grouped configuration object (see [`QuivConfig`](#quivconfig))
-- `pool_size`: the largest number of tasks that can run at the same time. The default is 10. See [Choosing a pool size](#choosing-a-pool-size) below
+- `pool_size`: the largest number of thread jobs that can run at the same time. The default is 10. It may be 0 when `process_pool_size` is above 0; the two cannot both be 0. See [Choosing a pool size](#choosing-a-pool-size) below
 - `history_retention_seconds`: how long quiv keeps the record of a finished job. The default is 86400 seconds, which is 24 hours
 - `timezone`: [IANA timezone string](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) or `tzinfo` for display formatting (default `"UTC"`)
 
@@ -29,6 +31,8 @@ Parameters:
 
         quiv uses `timezone` only to format the datetime values that it writes to the log. Everything inside quiv uses UTC, whatever you set here. That covers the schedule, the stored rows, and the life of each job.
 
+- `process_pool_size`: keyword-only. The largest number of process jobs that can run at the same time. The default is 0, which means no process pool. See [Process Jobs](process-jobs.md)
+- `process_kill_grace`: keyword-only. The seconds a process job may ignore its stop event before quiv terminates its process. The default is 5.0; 0 terminates on the next tick after the signal. See [The kill rule](process-jobs.md#the-kill-rule)
 - `logger`: optional custom logger or `LoggerAdapter` instance; if not provided, a logger named `"Quiv"` is used. The library does not set a log level — configure it in your application (see [Logging](getting-started.md#logging))
 
     !!! note "Logger scope"
@@ -62,10 +66,11 @@ add_task(
     max_retries: int = 0,
     retry_backoff: float = 30.0,
     jitter: float = 0.0,
+    executor: Executor | str | None = None,
 ) -> str
 ```
 
-The older parameters keep the positions that they had in earlier releases. The four failure-handling options are keyword-only: `timeout`, `max_retries`, `retry_backoff`, and `jitter`.
+The older parameters keep the positions that they had in earlier releases. The four failure-handling options and `executor` are keyword-only.
 
 Adds a scheduled task and returns its task id, a UUID string[^1].
 
@@ -90,6 +95,7 @@ Validation:
 - `max_retries >= 0`
 - `retry_backoff > 0`
 - `jitter >= 0`
+- `executor` is `"thread"`, `"process"`, or `None`; it names a pool with a size above 0; and with `"process"`, `func` is a function that a new process can import by name
 
 Failure handling: `timeout` asks a job that runs too long to stop, `max_retries` with `retry_backoff` runs a failed job again after a delay that doubles each time, and `jitter` moves apart the tasks that share an interval. Read [Failure Handling](failure-handling.md) for the rules.
 
@@ -108,6 +114,7 @@ Behavior:
 
 - With `run_once=True`, the task runs one time, and quiv then deletes it
 - If you pass a `progress_callback`, it runs on the main loop when one is available, and on the worker thread when none is
+- `executor` picks the pool. `None`, the default, picks thread when `pool_size` is above 0, else process. A process job runs in a process that quiv spawns for that job alone and can terminate after `process_kill_grace` seconds; its handler must be a module-level function or a staticmethod, and its arguments are unpickled in that process. See [Process Jobs](process-jobs.md)
 
     !!! info "`fixed_interval` scheduling modes"
 
@@ -132,10 +139,13 @@ update_task(
     jitter: float = ...,
     progress_callback: Callable[..., Any] | None = ...,
     run_at: datetime = ...,
+    executor: Executor | str = ...,
 ) -> Task
 ```
 
 Changes a scheduled task in place and keeps its `task_id`. Only the parameters that you pass change, and quiv leaves every other value as it is. If you change `interval`, quiv moves the next run to `now + interval`. You can update a `running` task: the changes take effect from its next run. `update_task()` emits `Event.TASK_UPDATED`, carrying the `Task` as it is after the change.
+
+`executor` moves the task to the other pool from its next dispatch on; a running job finishes where it started. `"process"` runs the same check as `add_task()`: the pool must have a size, and the registered handler must be importable by name in a new process. A task with a lambda handler therefore cannot move to the process pool, and the call raises `ConfigurationError`.
 
 `None` carries meaning here: `timeout=None` turns the timeout off, and `progress_callback=None` removes the callback. quiv therefore marks an argument that you did not pass with an internal sentinel. To leave a value alone, omit it.
 
@@ -196,7 +206,9 @@ A property. It is `True` while the scheduler loop runs: `start()` was called, `s
 
 Always call it when your application stops.
 
-With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application.
+With `timeout=None`, the default, `shutdown()` waits for every running job to finish, however long that takes. Pass a `timeout` in seconds to limit the wait. quiv leaves a thread job that does not exit before the deadline on its worker thread, and writes a warning. Use a timeout at the end of a FastAPI lifespan, where one stuck handler must not hold up the whole application.
+
+A process job follows [the kill rule](process-jobs.md#the-kill-rule). With `timeout=None`, a process job that ignores its stop event is terminated after `process_kill_grace` seconds, so the wait is bounded for process jobs. With a `timeout`, quiv terminates every process job still running at the deadline, and gives the waiter threads one second to record the outcome before the database goes away. A terminated job finalizes as `cancelled` with `process terminated: shutdown timeout` in `error_message`.
 
 !!! warning "`shutdown()` does not wait for `run_on_main` work"
     It waits for the scheduler loop and for running jobs. Work that a handler handed to the main loop with [`run_on_main`](run-on-main.md) is not a running job: the handler returned the moment it handed the work over. So `shutdown()` can return while that work is still queued, and in a FastAPI application the loop closes soon afterwards and cancels it. It writes a warning naming how many callables it left behind.
@@ -359,7 +371,7 @@ Returns persisted jobs with optional filters and pagination — see [Observabili
 
 ### `stats() -> QuivStats`
 
-Returns a snapshot of the scheduler at one moment: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, and `loop_alive` (the same value as [`is_running`](#is_running-bool)). `QuivStats` is a frozen dataclass, exported from `quiv` — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
+Returns a snapshot of the scheduler at one moment: `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, `loop_alive` (the same value as [`is_running`](#is_running-bool)), and the process pool's `process_pool_size`, `active_process_jobs`, and `process_pool_utilization`. A utilization is 0.0 for a pool of size 0. `QuivStats` is a frozen dataclass, exported from `quiv` — serialize with `dataclasses.asdict()`. See [Observability](observability.md).
 
 ### `remove_task(task_id: str) -> None`
 
@@ -526,6 +538,7 @@ Key fields:
 - `retry_attempt: int` — consecutive-failure counter (0 unless mid-retry)
 - `jitter_seconds: float` — random offset bound added to recurring next-run times
 - `rerun_requested: bool` — `True` while a run requested with `run_task_immediately(after_current=True)` waits for the current job
+- `executor: str` — `"thread"` or `"process"`: the pool the task's jobs run on
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`next_run_at`) are always returned as a UTC-aware datetime.
@@ -549,6 +562,8 @@ Key fields:
 - `duration_seconds: float | None` — job duration in seconds (set on completion)
 - `error_message: str | None` — error description if job failed
 - `attempt: int` — attempt number; `1` = first try, `2` = first retry, and so on
+- `executor: str` — `"thread"` or `"process"`: the pool the job ran on
+- `pid: int | None` — the process id of a process job's spawned process. `None` for a thread job, and in the `JOB_STARTED` event, because the process starts after that event; set in every later read
 
 !!! abstract "datetime objects are in UTC"
     The datetime values (`started_at`, `ended_at`) are always returned as UTC-aware datetimes. 
@@ -589,6 +604,13 @@ See [Event Listeners](event-listeners.md) for the data each event carries.
 - `cancelled` — job stopped via cancellation signal
 - `failed` — job ended with an exception
 
+### `Executor`
+
+A `str` enum, exported from `quiv`, for the `executor` parameter of `add_task()` and `update_task()`. Plain strings work too.
+
+- `thread` — on the thread pool, inside the scheduler's process
+- `process` — in a new process that quiv spawns for each job; see [Process Jobs](process-jobs.md)
+
 ## `QuivConfig`
 
 ```python
@@ -596,19 +618,21 @@ QuivConfig(
     pool_size: int = 10,
     history_retention_seconds: int = 86400,
     timezone: str | tzinfo = "UTC",
+    process_pool_size: int = 0,
+    process_kill_grace: float = 5.0,
 )
 ```
 
-Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display timezone parameter.
+Frozen dataclass. Both `QuivConfig` and `Quiv` use `timezone` for the display timezone parameter. `process_pool_size` and `process_kill_grace` mean what they mean on the constructor.
 
 ## Choosing a pool size
 
-`pool_size` controls the maximum number of tasks that can run concurrently. It is **not** tied to CPU cores — quiv uses threads, not processes, so the deciding factor is your workload, not hardware.
+`pool_size` controls the maximum number of thread jobs that can run concurrently. It is **not** tied to CPU cores — a thread job runs a thread, not a process, so the deciding factor is your workload, not hardware. `process_pool_size` is the one that should look at the cores: each process job can use one.
 
 **What to consider:**
 
 - **How many tasks might overlap?** If you have 5 recurring tasks and at most 3 could run at the same time, `pool_size=4` is sufficient.
-- **Are tasks I/O-bound or CPU-bound?** I/O-bound tasks (API calls, database queries, file downloads) spend most of their time waiting, so many threads work fine. CPU-bound tasks contend for Python's GIL — more threads won't help and can hurt. For CPU-heavy work, offload to a process pool from within the handler rather than increasing `pool_size`.
+- **Are tasks I/O-bound or CPU-bound?** I/O-bound tasks (API calls, database queries, file downloads) spend most of their time waiting, so many threads work fine. CPU-bound tasks contend for Python's GIL — more threads won't help and can hurt. For CPU-heavy work, give the task `executor="process"` and set `process_pool_size` to the number of such jobs you want at once, up to the cores you can spare. See [Process Jobs](process-jobs.md).
 - **Do tasks hold external resources?** Database connections, API rate limits, and file handles create practical caps regardless of thread count.
 
 **Rules of thumb:**

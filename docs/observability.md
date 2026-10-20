@@ -17,7 +17,12 @@ stats.tasks_by_status    # e.g. {"active": 3, "paused": 1}
 stats.next_run_at        # earliest upcoming run (UTC), or None
 stats.job_history_count  # job rows currently retained
 stats.loop_alive         # same value as scheduler.is_running
+stats.process_pool_size          # process-pool size; 0 without a process pool
+stats.active_process_jobs        # process jobs currently executing
+stats.process_pool_utilization   # active_process_jobs / process_pool_size, 0.0-1.0
 ```
+
+The thread figures count thread jobs only, and the process figures count process jobs only. A utilization is 0.0 for a pool of size 0.
 
 `QuivStats` is a plain dataclass. Call `dataclasses.asdict()` on it to build a JSON response.
 

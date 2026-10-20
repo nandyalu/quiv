@@ -31,6 +31,7 @@ sequenceDiagram
 ### Key points
 
 - Cancellation is **cooperative**. The handler must check `stop_event` to stop. quiv never kills a thread.
+- A [process job](process-jobs.md) gets the same signal, and one more thing: a handler that ignores it for `process_kill_grace` seconds has its process terminated. That is the one place quiv ends work by force.
 - The handler decides **when** to check, and **how** to release its resources.
 - quiv sets the job status to `cancelled` if the stop event was set when the handler returned. This happens even when the handler does not declare `stop_event`.
 
@@ -128,9 +129,13 @@ for job in jobs:
 
 `cancel_job()` returns `True` when it finds the stop event and sets it. It returns `False` when it finds no job, which means the job already finished or the id is wrong.
 
+## Cancelling a process job
+
+A process job's `stop_event` is a `multiprocessing` event with the same `is_set()` and `wait()`, so a handler written for a thread stops a process job the same way. The difference is what happens when the handler does not stop. For a thread job, nothing: quiv waits. For a process job, quiv terminates the process after `process_kill_grace` seconds. The job finalizes as `cancelled` with `process terminated: ignored its stop event for 5.0s` in `error_message`. `remove_task()`, a `timeout`, and `shutdown()` follow the same rule; the [kill rule](process-jobs.md#the-kill-rule) table lists them.
+
 ## Cancellation during shutdown
 
-`shutdown()` cancels every running job that quiv tracks, by setting the stop event of each one. A handler that checks `stop_event` returns early. A handler that does not check it runs to the end, and the process waits.
+`shutdown()` cancels every running job that quiv tracks, by setting the stop event of each one. A handler that checks `stop_event` returns early. A thread handler that does not check it runs to the end, and the process waits. A process job that does not check it is terminated after `process_kill_grace` seconds, or at the `timeout` of `shutdown()`, whichever comes first.
 
 ```mermaid
 flowchart TD
@@ -144,7 +149,7 @@ flowchart TD
 
 ## How quiv decides the status
 
-When a job finishes, quiv reads the stop event and sets the final status. It does this in the `finally` block of `_run_job`, so the result is the same however the handler exited.
+When a job finishes, quiv reads the stop event and sets the final status. It does this in the `finally` block of `_execute_job`, so the result is the same however the handler exited, and the same for a thread job and a process job.
 
 ```mermaid
 flowchart TD
@@ -186,7 +191,7 @@ def convert(path: str) -> None:
 
 It is a drop-in for `subprocess.run`. While the child runs, quiv watches the job's stop event. When the event is set, the child gets `terminate()`, then `kill()` after `kill_grace` seconds if it is still alive, and the helper raises `JobCancelledError`. The default grace is 5 seconds. A `timeout` stops the child the same way and raises `subprocess.TimeoutExpired`, as the stdlib does.
 
-The stop event is found through the job context, so the call above needs no `stop_event` parameter, at any depth in the handler's call stack. Pass `stop_event=` yourself when the call runs on a thread you started, which the context does not reach.
+The stop event is found through the job context, so the call above needs no `stop_event` parameter, at any depth in the handler's call stack. Pass `stop_event=` yourself when the call runs on a thread you started, which the context does not reach. Inside a [process job](process-jobs.md) the stop event reaches every thread of that process, so no parameter is needed there.
 
 The helper stops the direct child only. A child that starts children of its own can leave them running; pass `start_new_session=True` to give it a process group of its own. On Windows `terminate()` and `kill()` are the same call.
 
