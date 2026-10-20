@@ -20,8 +20,17 @@ from .exceptions import (
     TaskNotActiveError,
     TaskNotFoundError,
     TaskRunningError,
+    WorkerProcessError,
 )
-from .models import Event, Job, JobStatus, QuivStats, Task, TaskStatus
+from .models import (
+    Event,
+    Executor,
+    Job,
+    JobStatus,
+    QuivStats,
+    Task,
+    TaskStatus,
+)
 from .scheduler import Quiv
 from .subprocesses import run_subprocess
 
@@ -45,7 +54,9 @@ __all__ = [
     "JobCancelledError",
     "SchedulerStoppedError",
     "MainLoopUnavailableError",
+    "WorkerProcessError",
     "Event",
+    "Executor",
     "Task",
     "TaskStatus",
     "Job",

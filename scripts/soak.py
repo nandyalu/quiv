@@ -10,9 +10,11 @@ Run the real one once, before tagging a release::
 
 The workload mixes every execution path that quiv has: a sync task, an
 async task, a task that fails and retries, a task that another thread
-cancels, a task that passes its timeout, and a task that runs more than
-once a second. A separate thread calls ``stats()`` and ``get_all_jobs()``
-every second, the way an admin page would.
+cancels, a task that passes its timeout, a task that runs more than once
+a second, a process job that does CPU work, and a process job that
+ignores its stop event, so that quiv terminates it every time. A separate
+thread calls ``stats()`` and ``get_all_jobs()`` every second, the way an
+admin page would, and counts the live child processes.
 
 The script fails, and exits non-zero, on any of these:
 
@@ -20,7 +22,9 @@ The script fails, and exits non-zero, on any of these:
 - the retained job history grows past what the retention window allows,
 - the "Quiv" logger records an ERROR that the failing task does not
   explain,
-- the scheduler thread dies.
+- the scheduler thread dies,
+- more child processes are alive at once than the process pool allows,
+- a child process is still alive after shutdown.
 
 Nothing is left behind. quiv deletes its temporary database at shutdown.
 """
@@ -30,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import multiprocessing
 import platform
 import sys
 import threading
@@ -98,6 +103,21 @@ def subsecond_task() -> None:
     """Return at once, on an interval shorter than a second."""
 
 
+def process_task() -> None:
+    """Burn about 100 ms of CPU in a process of its own."""
+
+    deadline = time.perf_counter() + 0.1
+    total = 0
+    while time.perf_counter() < deadline:
+        total += sum(i * i for i in range(1000))
+
+
+def process_timeout_task() -> None:
+    """Outlast the timeout and ignore the stop event, so quiv terminates it."""
+
+    time.sleep(30.0)
+
+
 # --------------------------------------------------------------------------
 # Watchers
 # --------------------------------------------------------------------------
@@ -139,7 +159,7 @@ def read_rss_kb() -> int | None:
 # --------------------------------------------------------------------------
 
 
-def build_workload(scheduler: Quiv) -> None:
+def build_workload(scheduler: Quiv, process_pool_size: int) -> None:
     """Register every task the soak runs."""
 
     scheduler.add_task("soak-sync", sync_task, interval=2.0)
@@ -154,6 +174,20 @@ def build_workload(scheduler: Quiv) -> None:
     scheduler.add_task("soak-cancelled", cancellable_task, interval=4.0)
     scheduler.add_task("soak-timeout", timing_out_task, interval=6.0, timeout=1.0)
     scheduler.add_task("soak-subsecond", subsecond_task, interval=0.5, jitter=0.1)
+    if process_pool_size > 0:
+        scheduler.add_task(
+            "soak-process", process_task, interval=3.0, executor="process"
+        )
+        # The kill path, hundreds of times in a long soak: the timeout sets
+        # the stop event, the handler ignores it, and the grace ends in a
+        # terminate.
+        scheduler.add_task(
+            "soak-process-timeout",
+            process_timeout_task,
+            interval=8.0,
+            timeout=2.0,
+            executor="process",
+        )
 
 
 def main() -> int:
@@ -163,6 +197,18 @@ def main() -> int:
         "--hours", type=float, default=None, help="overrides --minutes"
     )
     parser.add_argument("--pool-size", type=int, default=8)
+    parser.add_argument(
+        "--process-pool-size",
+        type=int,
+        default=2,
+        help="0 runs the soak without process jobs",
+    )
+    parser.add_argument(
+        "--process-kill-grace",
+        type=float,
+        default=1.0,
+        help="seconds a process job may ignore its stop event",
+    )
     parser.add_argument(
         "--retention-seconds",
         type=int,
@@ -193,6 +239,8 @@ def main() -> int:
     scheduler = Quiv(
         pool_size=args.pool_size,
         history_retention_seconds=args.retention_seconds,
+        process_pool_size=args.process_pool_size,
+        process_kill_grace=args.process_kill_grace,
     )
 
     terminal = {"completed": 0, "failed": 0, "cancelled": 0, "retrying": 0}
@@ -215,6 +263,8 @@ def main() -> int:
         "max_threads": 0,
         "max_history": 0,
         "max_rss_kb": 0,
+        "max_children": 0,
+        "children_after_shutdown": 0,
         "poll_errors": [],
         "scheduler_died": False,
     }
@@ -231,6 +281,10 @@ def main() -> int:
                 )
                 observed["max_history"] = max(
                     observed["max_history"], stats.job_history_count
+                )
+                observed["max_children"] = max(
+                    observed["max_children"],
+                    len(multiprocessing.active_children()),
                 )
                 rss = read_rss_kb()
                 if rss:
@@ -261,13 +315,14 @@ def main() -> int:
     print(f"  started      {started_at.isoformat(timespec='seconds')}")
     print(f"  duration     {duration / 3600:.2f} h")
     print(f"  pool_size    {args.pool_size}")
+    print(f"  process_pool {args.process_pool_size}")
     print(f"  retention    {args.retention_seconds} s")
     print(f"  python       {platform.python_version()} on {platform.system()}")
     print(f"  pid          {__import__('os').getpid()}", flush=True)
 
     baseline_threads = 0
     try:
-        build_workload(scheduler)
+        build_workload(scheduler, args.process_pool_size)
         scheduler.start()
 
         threading.Thread(target=admin_poller, daemon=True).start()
@@ -303,6 +358,11 @@ def main() -> int:
         stop.set()
         scheduler.shutdown(timeout=30)
         quiv_logger.removeHandler(watch)
+        # shutdown() terminates a process job that misses the deadline and
+        # waits for its waiter to reap it; a child alive here is a leak.
+        observed["children_after_shutdown"] = len(
+            multiprocessing.active_children()
+        )
 
     elapsed = time.monotonic() - began
     with counter_lock:
@@ -322,7 +382,10 @@ def main() -> int:
     # plus the four threads this script runs, or the settled baseline if that
     # is higher. A real leak grows without limit and clears this easily; a
     # bound drawn only from the baseline would fail a healthy 24-hour run.
-    thread_bound = max(baseline_threads, 4 + args.pool_size) + 5
+    # The process pool adds one waiter thread per process job.
+    thread_bound = (
+        max(baseline_threads, 4 + args.pool_size + args.process_pool_size) + 5
+    )
 
     failures = []
     if observed["scheduler_died"]:
@@ -347,6 +410,16 @@ def main() -> int:
             f"{len(observed['poll_errors'])} error(s) from the reader threads;"
             f" first: {observed['poll_errors'][0]}"
         )
+    if observed["max_children"] > args.process_pool_size:
+        failures.append(
+            f"child processes peaked at {observed['max_children']}, over the"
+            f" process pool size of {args.process_pool_size}"
+        )
+    if observed["children_after_shutdown"]:
+        failures.append(
+            f"{observed['children_after_shutdown']} child process(es) alive"
+            " after shutdown"
+        )
 
     print()
     print("  summary")
@@ -361,6 +434,9 @@ def main() -> int:
     print(f"    job history        {observed['max_history']} peak,"
           f" bound {history_bound}")
     print(f"    peak RSS           {observed['max_rss_kb'] // 1024} MB")
+    print(f"    child processes    {observed['max_children']} peak,"
+          f" bound {args.process_pool_size},"
+          f" {observed['children_after_shutdown']} after shutdown")
     print(f"    expected ERRORs    {watch.expected} (the failing task)")
     print(f"    unexpected ERRORs  {len(watch.unexpected)}")
     print()

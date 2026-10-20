@@ -7,6 +7,7 @@
 - The `persistence` layer (`quiv/persistence.py`) stores and reads the tasks and the jobs.
 - The `execution` layer (`quiv/execution.py`) prepares each invocation and calls sync and async handlers.
 - The `models` layer (`quiv/models.py`) holds the SQLModel entities and the status constants.
+- The `_worker` module (`quiv/_worker.py`) is the child side of a process job. It runs in the spawned interpreter only, and nothing else in quiv imports the scheduler through it.
 
 ## Runtime flow
 
@@ -71,7 +72,7 @@ sequenceDiagram
     - It marks the task `running`, which stops a second run of the same task.
     - It creates one `Job` row for each due task.
     - It prepares the arguments of the invocation, and injects the hooks that the handler accepts. quiv reads the signature of each handler once and keeps the result.
-    - It submits the job to the thread pool.
+    - It submits the job to the thread pool. A process job goes to a waiter thread instead, which spawns the process; see [Process job model](#process-job-model). Backpressure is per pool: a full thread pool does not hold back a due process task.
     - It emits the `JOB_STARTED` event.
     - It then sleeps until the earliest of four moments: the next due task, the next cleanup deadline, the nearest timeout deadline of a running job, and a ceiling of 60 seconds.
 
@@ -122,6 +123,17 @@ For the full dispatch flow, examples of both kinds, and error handling, see [Pro
 
 For the event types, their payloads, and examples, see [Event Listeners](event-listeners.md).
 
+## Process job model
+
+A task with `executor="process"` runs each job in a process that quiv spawns for that job alone, with the `spawn` start method on every platform. One thread in a second pool, the waiter pool of size `process_pool_size`, is the parent-side half of the job:
+
+- It resolves the handler to `(module, qualname)`, opens a pipe, and starts the process with those strings, the pickled arguments, the stop event, and one end of the pipe. The handler object itself never crosses, so the child imports nothing until its worker flag is set.
+- In the child, `quiv/_worker.py` sets the flag, imports the handler by name, prepares the invocation with the same `ExecutionLayer` the parent uses, and runs it. An async handler gets a fresh event loop there, as it would on a worker thread.
+- The child sends tuples back over the pipe: `("progress", args, kwargs)` for each `progress_hook` call, `("run_on_main", func, args, kwargs)` for each `run_on_main` call, then `("done",)` or `("error", message, traceback, cancelled)`. The waiter relays progress to the ordinary progress dispatch and runs `run_on_main` on the parent side.
+- The waiter polls the stop event every 50 ms. A stop that the child ignores for `process_kill_grace` seconds becomes `terminate()`. It reads the pipe until EOF, joins the process, and then finalizes the job through the same code as a thread job: status, `error_message`, events, retries, and the waiters.
+
+A `Quiv()` built inside the child, because the handler's module builds one at import time, is inert. The [Process Jobs](process-jobs.md) page describes the contract from the handler's side.
+
 ## Async execution model
 
 An async task handler does not run on the main event loop of your application. Each async invocation creates its own event loop on the worker thread, runs the coroutine to the end, and closes the loop. Async handlers therefore cannot disturb each other, and cannot disturb the main loop.
@@ -139,7 +151,7 @@ An async task handler does not run on the main event loop of your application. E
 ## Thread safety
 
 - The scheduler loop runs in one daemon thread.
-- The task handlers run in the thread pool, a `ThreadPoolExecutor`.
+- The task handlers run in the thread pool, a `ThreadPoolExecutor`. A process job's handler runs in its own process; a thread of the waiter pool, a second `ThreadPoolExecutor`, stands in for it in the parent.
 - Each invocation of a handler gets its own stop event and its own kwargs. Two handler runs share no mutable state.
 - The persistence operations use short `Session` scopes. A read needs no lock under SQLite WAL. An operation that reads, changes, and writes takes a dedicated write lock, one at a time.
 - quiv sends a progress callback to the main asyncio loop in a thread-safe way when a loop is available. Without a loop, the callback runs on the worker thread.
@@ -150,6 +162,6 @@ An async task handler does not run on the main event loop of your application. E
     - It asks the loop to stop.
     - It sets the stop event of every running job that it tracks.
     - It joins the scheduler thread.
-    - It shuts down the thread pool.
+    - It shuts down the thread pool, and the waiter pool of the process jobs. A process job that ignores its stop event is terminated after `process_kill_grace` seconds, or at the `timeout` of `shutdown()`.
     - It disposes the engine and deletes the temporary database file.
 - The temporary SQLite database does not survive a restart of the process.

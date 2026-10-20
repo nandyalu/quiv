@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta, datetime, timezone, tzinfo
+import importlib
 import logging
 import math
+from multiprocessing.connection import wait
 import pickle
 import threading
 import time
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+from . import _worker
 from .base import QuivBase
 from .config import QuivConfig
-from .context import _current_job_id, _current_quiv
+from .context import _current_job_id, _current_quiv, run_on_main
 from .exceptions import (
     ConfigurationError,
     HandlerRegistrationError,
@@ -21,6 +24,7 @@ from .exceptions import (
 )
 from .models import (
     Event,
+    Executor,
     Job,
     JobStatus,
     Task,
@@ -29,9 +33,38 @@ from .models import (
     seconds_after,
 )
 
+if TYPE_CHECKING:
+    # Annotations only; see the note on this import in base.py.
+    from multiprocessing.synchronize import Event as ProcessEvent
+
 _CLEANUP_INTERVAL_SECONDS = 60.0
 _MIN_SLEEP_SECONDS = 0.01  # floor: never busy-spin
 _MAX_SLEEP_SECONDS = 60.0  # ceiling: bounded staleness safety net
+# How often the parent-side waiter of a process job looks at the stop
+# event and the kill timer while it waits for the child.
+_PROCESS_POLL_SECONDS = 0.05
+
+
+class _ChildFailure(Exception):
+    """A process job's handler raised, or its process died.
+
+    ``str(e)`` is the child's ``str(exc)``, so ``error_message`` reads the
+    same for both pools: the exception's message, not its type. The type
+    is in ``traceback_text``, which goes to the log.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        traceback_text: str | None = None,
+        cancelled: bool = False,
+    ):
+        super().__init__(message)
+        self.traceback_text = traceback_text
+        # The handler raised JobCancelledError: a quiv helper unwound it
+        # because the stop event was set. The same clean stop as in a
+        # thread job, once the parent confirms the stop was requested.
+        self.cancelled = cancelled
 
 
 class _Unset:
@@ -168,6 +201,66 @@ def _pickle_or_raise(value: Any, label: str) -> bytes:
         ) from e
 
 
+def _resolve_executor(value: Executor | str) -> Executor:
+    try:
+        return Executor(value)
+    except ValueError:
+        raise ConfigurationError(
+            "executor must be 'thread' or 'process'"
+        ) from None
+
+
+def _validate_pool_available(
+    executor: Executor, pool_size: int, process_pool_size: int
+) -> None:
+    if executor is Executor.THREAD and pool_size == 0:
+        raise ConfigurationError("executor='thread' requires pool_size > 0")
+    if executor is Executor.PROCESS and process_pool_size == 0:
+        raise ConfigurationError(
+            "executor='process' requires process_pool_size > 0"
+        )
+
+
+_PROCESS_HANDLER_HELP = (
+    "executor='process' requires a handler that a new process can import"
+    " by name: a module-level function or a staticmethod. A lambda, an"
+    " inner function, a bound method, a functools.partial object, or a"
+    " callable instance cannot be sent to a process."
+)
+
+
+def _resolve_handler_reference(func: Callable[..., Any]) -> tuple[str, str]:
+    """Return ``(module, qualname)`` for a handler a child can import.
+
+    The ``is not func`` check is what rejects bound methods and
+    classmethods: the walk yields the plain function or a fresh
+    bound-method object, never the object the caller passed. A
+    staticmethod reached through its class yields the function itself and
+    passes.
+    """
+
+    module_name = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", None)
+    if (
+        not isinstance(module_name, str)
+        or not isinstance(qualname, str)
+        or "<" in qualname  # "<lambda>" and "<locals>"
+    ):
+        raise ConfigurationError(_PROCESS_HANDLER_HELP)
+    try:
+        target: Any = importlib.import_module(module_name)
+        for part in qualname.split("."):
+            target = getattr(target, part)
+    except (ImportError, AttributeError) as e:
+        raise ConfigurationError(
+            f"{_PROCESS_HANDLER_HELP} Cannot import"
+            f" '{module_name}:{qualname}': {e}"
+        ) from e
+    if target is not func:
+        raise ConfigurationError(_PROCESS_HANDLER_HELP)
+    return module_name, qualname
+
+
 class Quiv(QuivBase):
     """Public scheduler API and orchestration loop implementation."""
 
@@ -178,6 +271,8 @@ class Quiv(QuivBase):
         history_retention_seconds: int = 86400,
         timezone: str | tzinfo = "UTC",
         *,
+        process_pool_size: int = 0,
+        process_kill_grace: float = 5.0,
         logger: logging.Logger | logging.LoggerAdapter[Any] | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
     ):
@@ -189,6 +284,13 @@ class Quiv(QuivBase):
             history_retention_seconds (int, Optional=86400): Job retention period when ``config`` is not provided.
             timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
+            process_pool_size (int, Optional=0): Keyword-only. Maximum
+                process jobs at once when ``config`` is not provided; 0
+                means no process pool.
+            process_kill_grace (float, Optional=5.0): Keyword-only.
+                Seconds a process job may ignore its stop event before
+                quiv terminates the process, when ``config`` is not
+                provided.
             logger (logging.Logger | logging.LoggerAdapter[Any], Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None): Optional main event loop for progress callbacks.
         """
@@ -198,6 +300,8 @@ class Quiv(QuivBase):
             pool_size=pool_size,
             history_retention_seconds=history_retention_seconds,
             timezone=timezone,
+            process_pool_size=process_pool_size,
+            process_kill_grace=process_kill_grace,
             logger=logger,
             main_loop=main_loop,
         )
@@ -219,6 +323,7 @@ class Quiv(QuivBase):
         max_retries: int = 0,
         retry_backoff: float = 30.0,
         jitter: float = 0.0,
+        executor: Executor | str | None = None,
     ) -> str:
         """Schedule a callable to run at a fixed interval.
 
@@ -264,13 +369,23 @@ class Quiv(QuivBase):
                 ``uniform(0, jitter)`` seconds to each recurring next-run
                 time to de-synchronize tasks sharing interval boundaries.
                 Not applied to the initial ``delay`` nor to retry backoff.
+            executor (Executor | str, Optional=None): Keyword-only. Which
+                pool runs this task's jobs: ``"thread"`` or
+                ``"process"``. ``None`` picks thread when the thread pool
+                has a size above 0, else process. A process job runs in a
+                new process that quiv spawns for that job alone and can
+                terminate; its handler must be importable by name (a
+                module-level function or a staticmethod), and its
+                arguments are unpickled in that process.
 
         Raises:
             ConfigurationError: If scheduling parameters are invalid, if
                 ``func`` declares a pre-1.0 injected parameter
-                (``_job_id``, ``_stop_event``, ``_progress_hook``), or if
+                (``_job_id``, ``_stop_event``, ``_progress_hook``), if
                 a key in ``kwargs`` collides with a parameter that quiv
-                injects into ``func``.
+                injects into ``func``, if ``executor`` names a pool of
+                size 0, or if ``executor="process"`` and ``func`` cannot
+                be imported by name in a new process.
             HandlerRegistrationError: If ``func`` or ``progress_callback``
                 is not callable.
 
@@ -278,6 +393,7 @@ class Quiv(QuivBase):
             str: Task id string (UUID).
         """
 
+        self._ensure_live()
         _validate_task_name(task_name)
         if run_once:
             # A run-once task is deleted when it finishes, so its
@@ -305,6 +421,16 @@ class Quiv(QuivBase):
             raise HandlerRegistrationError(
                 "progress callback must be callable"
             )
+        resolved_executor = (
+            self._default_executor
+            if executor is None
+            else _resolve_executor(executor)
+        )
+        _validate_pool_available(
+            resolved_executor, self._pool_size, self._process_pool_size
+        )
+        if resolved_executor is Executor.PROCESS:
+            _resolve_handler_reference(func)
 
         resolved_args = args if args is not None else ()
         resolved_kwargs = kwargs if kwargs is not None else {}
@@ -337,6 +463,7 @@ class Quiv(QuivBase):
             max_retries=max_retries,
             retry_backoff=retry_backoff,
             jitter=jitter,
+            executor=resolved_executor.value,
         )
 
         self._register_handler(task_id, func)
@@ -346,8 +473,13 @@ class Quiv(QuivBase):
         schedule = (
             "as run-once" if run_once else f"with interval {interval}s"
         )
+        where = (
+            " in a new process"
+            if resolved_executor is Executor.PROCESS
+            else ""
+        )
         self._logger.info(
-            f"Task '{task_name}' added {schedule}"
+            f"Task '{task_name}' added {schedule}{where}"
             f" (next run at {next_run_user_tz})"
         )
         task = self.get_task(task_id)
@@ -370,6 +502,7 @@ class Quiv(QuivBase):
         jitter: float | _Unset = _UNSET,
         progress_callback: Callable[..., Any] | None | _Unset = _UNSET,
         run_at: datetime | _Unset = _UNSET,
+        executor: Executor | str | _Unset = _UNSET,
     ) -> Task:
         """Mutate a scheduled task in place, preserving its ``task_id``.
 
@@ -421,14 +554,19 @@ class Quiv(QuivBase):
                 timezone. A time already past runs at once, matching
                 ``add_task``. Mutually exclusive with ``interval``, and
                 discarded if the task is already RUNNING (see above).
+            executor (Executor | str, Optional): Which pool runs the
+                task's jobs from the next dispatch on; a running job
+                finishes where it started. ``"process"`` requires a
+                handler that a new process can import by name.
 
         Raises:
             TaskNotFoundError: If no task with that id exists.
             ConfigurationError: If a provided value is invalid (same
                 rules as ``add_task``), if a key in ``kwargs`` collides
                 with a parameter that quiv injects into the registered
-                handler, or if ``run_at`` and ``interval`` are both
-                passed.
+                handler, if ``run_at`` and ``interval`` are both
+                passed, or if ``executor`` names a pool of size 0 or a
+                process for a handler that cannot be imported by name.
             HandlerRegistrationError: If ``progress_callback`` is not
                 callable.
 
@@ -436,6 +574,7 @@ class Quiv(QuivBase):
             Task: The post-update task record.
         """
 
+        self._ensure_live()
         if not isinstance(run_at, _Unset) and not isinstance(interval, _Unset):
             # persistence.update_task recomputes next_run_at from the new
             # interval, so it would silently overwrite this run_at. Refuse
@@ -488,6 +627,19 @@ class Quiv(QuivBase):
         if not isinstance(jitter, _Unset):
             _validate_jitter(jitter)
             updates["jitter_seconds"] = jitter
+        if not isinstance(executor, _Unset):
+            resolved_executor = _resolve_executor(executor)
+            _validate_pool_available(
+                resolved_executor, self._pool_size, self._process_pool_size
+            )
+            if resolved_executor is Executor.PROCESS:
+                # Must fail here, not at dispatch: a lambda handler moved
+                # to the process pool would otherwise fail every job.
+                with self._registries_lock:
+                    handler = self.registry.get(task_id)
+                if handler is not None:
+                    _resolve_handler_reference(handler)
+            updates["executor"] = resolved_executor.value
         if (
             not isinstance(progress_callback, _Unset)
             and progress_callback is not None
@@ -543,6 +695,7 @@ class Quiv(QuivBase):
             TaskNotFoundError: If no task with that id exists.
         """
 
+        self._ensure_live()
         # Snapshot the task before deletion for the event listener
         task = self.get_task(task_id)
 
@@ -623,12 +776,16 @@ class Quiv(QuivBase):
                 self._enforce_timeouts()
 
                 now = self._now_utc()
-                if self._active_job_count < self._pool_size:
+                if self._pool_has_slot(Executor.THREAD) or self._pool_has_slot(
+                    Executor.PROCESS
+                ):
                     for task in self.persistence.get_due_tasks(now):
-                        if (
-                            self._active_job_count >= self._pool_size
-                        ):  # pragma: no cover
-                            break
+                        # Backpressure is per pool. A full thread pool
+                        # must not hold back a due process task, so a
+                        # task whose pool is full is skipped, not the
+                        # rest of the batch.
+                        if not self._pool_has_slot(task.executor):
+                            continue
                         self._dispatch_due_task(task, now)
 
                 # Compute the sleep last — dispatching above changes
@@ -680,19 +837,36 @@ class Quiv(QuivBase):
             )
         if soonest_deadline is not None:
             candidates.append(soonest_deadline - time.monotonic())
-        with self._job_count_lock:
-            pool_full = self._active_job_count >= self._pool_size
-        # When the pool is saturated, skip the next-due candidate: an
-        # overdue task cannot dispatch anyway, and clamping its negative
-        # delta to the sleep floor would busy-poll the DB at ~100 Hz for
-        # the whole saturation window. A finishing job wakes the loop.
-        if not pool_full:
+        # When a pool is saturated, skip its next-due candidate: an overdue
+        # task of that pool cannot dispatch anyway, and clamping its
+        # negative delta to the sleep floor would busy-poll the DB at
+        # ~100 Hz for the whole saturation window. A finishing job wakes
+        # the loop. Per pool, so a full thread pool with an overdue thread
+        # task does not busy-poll while the process pool is free.
+        open_pools = [
+            executor
+            for executor in (Executor.THREAD, Executor.PROCESS)
+            if self._pool_has_slot(executor)
+        ]
+        if len(open_pools) == 2:
             next_due = self.persistence.get_next_due_time()
-            if next_due is not None:
-                candidates.append(
-                    (next_due - self._now_utc()).total_seconds()
-                )
+        elif len(open_pools) == 1:
+            next_due = self.persistence.get_next_due_time(
+                executor=open_pools[0].value
+            )
+        else:
+            next_due = None
+        if next_due is not None:
+            candidates.append((next_due - self._now_utc()).total_seconds())
         return max(_MIN_SLEEP_SECONDS, min(min(candidates), _MAX_SLEEP_SECONDS))
+
+    def _pool_has_slot(self, executor: str) -> bool:
+        """Whether the pool named by ``executor`` can take one more job."""
+
+        with self._job_count_lock:
+            if executor == Executor.PROCESS:
+                return self._active_process_count < self._process_pool_size
+            return self._active_job_count < self._pool_size
 
     def _dispatch_due_task(self, task: TaskDB, now: datetime) -> None:
         """Create and dispatch execution for a due task.
@@ -726,7 +900,10 @@ class Quiv(QuivBase):
             # (run-once) or by remove_task() before _run_job emits its events.
             task_snapshot = self.get_task(task.id)
             job_id = self.persistence.create_job(
-                task.id, task.task_name, attempt=task.retry_attempt + 1
+                task.id,
+                task.task_name,
+                attempt=task.retry_attempt + 1,
+                executor=task.executor,
             )
         except TaskNotFoundError:
             with self._registries_lock:
@@ -763,13 +940,42 @@ class Quiv(QuivBase):
                     )
             raise
 
-        stop_event = threading.Event()
+        is_process = task.executor == Executor.PROCESS
+        stop_event: threading.Event | ProcessEvent = (
+            self._mp_context.Event() if is_process else threading.Event()
+        )
         with self._registries_lock:
             self.stop_events[job_id] = stop_event
             if task.timeout_seconds is not None:
                 self._job_deadlines[job_id] = (
                     time.monotonic() + task.timeout_seconds
                 )
+
+        if is_process:
+            # prepare_invocation is not called here. The child does it
+            # after its worker flag is set, so the argument classes are
+            # imported there, and a module-level Quiv() in the
+            # application is inert when that import runs.
+            self._logger.info(
+                f"Scheduling task '{task.task_name}' (Job ID: {job_id}) to"
+                " run now in a new process"
+            )
+            with self._job_count_lock:
+                self._active_process_count += 1
+            self._process_waiters.submit(
+                self._run_process_job,
+                job_id,
+                task.id,
+                task.task_name,
+                task.run_once,
+                now,
+                task_snapshot,
+                func,
+                task.args,
+                task.kwargs,
+                stop_event,
+            )
+            return
 
         f_args, f_kwargs = self.execution.prepare_invocation(
             task_id=task.id,
@@ -834,7 +1040,7 @@ class Quiv(QuivBase):
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> None:
-        """Execute a single job and persist terminal status.
+        """Execute a single thread job and persist terminal status.
 
         Args:
             job_id (str): Job identifier (UUID string).
@@ -848,12 +1054,96 @@ class Quiv(QuivBase):
             kwargs (dict): Keyword arguments for handler.
         """
 
+        def run() -> str | None:
+            self.execution.run_callable(func, args, kwargs)
+            return None
+
+        self._execute_job(
+            job_id,
+            task_id,
+            task_name,
+            run_once,
+            scheduled_at,
+            task_snapshot,
+            Executor.THREAD,
+            run,
+        )
+
+    def _run_process_job(
+        self,
+        job_id: str,
+        task_id: str,
+        task_name: str,
+        run_once: bool,
+        scheduled_at: datetime,
+        task_snapshot: Any,
+        func: Callable[..., Any],
+        args_pickled: bytes,
+        kwargs_pickled: bytes,
+        stop_event: Any,
+    ) -> None:
+        """Run a single job in a spawned process and persist terminal status.
+
+        Runs on a thread of ``_process_waiters``: the parent-side half of
+        the job. Same arguments as ``_run_job``, except that the handler
+        arguments stay pickled, because the child unpickles them.
+        """
+
+        def run() -> str | None:
+            return self._run_in_child(
+                job_id, task_id, func, args_pickled, kwargs_pickled, stop_event
+            )
+
+        self._execute_job(
+            job_id,
+            task_id,
+            task_name,
+            run_once,
+            scheduled_at,
+            task_snapshot,
+            Executor.PROCESS,
+            run,
+        )
+
+    def _execute_job(
+        self,
+        job_id: str,
+        task_id: str,
+        task_name: str,
+        run_once: bool,
+        scheduled_at: datetime,
+        task_snapshot: Any,
+        executor: Executor,
+        run: Callable[[], str | None],
+    ) -> None:
+        """Run one job through ``run`` and finalize job and task state.
+
+        Args:
+            job_id (str): Job identifier (UUID string).
+            task_id (str): Source task identifier.
+            task_name (str): Task name for logging.
+            run_once (bool): Whether the task is single-run.
+            scheduled_at (datetime): UTC time when the job was dispatched.
+            task_snapshot (Task): Pre-fetched task snapshot for event listeners.
+            executor (Executor): Which pool the job occupies.
+            run (Callable[[], str | None]): Does the work. Returns a note
+                for ``error_message``, or ``None``. Raises
+                ``_ChildFailure`` when a process job's handler raised or
+                its process died.
+        """
+
         start_time = self._now_utc()
         delay = start_time - scheduled_at
         if delay.total_seconds() > 2:
+            busy = (
+                "process pool was busy. Consider increasing"
+                " process_pool_size."
+                if executor is Executor.PROCESS
+                else "threadpool was busy. Consider increasing pool_size."
+            )
             self._logger.warning(
                 f"'{task_name}' (Job {job_id}) started {delay} after scheduled"
-                " time — threadpool was busy. Consider increasing pool_size."
+                f" time — {busy}"
             )
         self._logger.info(
             f"'{task_name}' (Job {job_id}) started at"
@@ -862,6 +1152,7 @@ class Quiv(QuivBase):
 
         status = JobStatus.COMPLETED
         job_error: BaseException | None = None
+        note: str | None = None
         duration = timedelta()
         handler_started = False
         ctx_token = _current_quiv.set(self)
@@ -876,14 +1167,46 @@ class Quiv(QuivBase):
             self._emit_event(Event.JOB_STARTED, task_snapshot, started_job)
 
             handler_started = True
-            self.execution.run_callable(func, args, kwargs)
+            note = run()
             end_time = self._now_utc()
             duration = end_time - start_time
-            self._logger.info(
-                f"'{task_name}' (Job {job_id}) completed successfully at"
-                f" {self._to_display_timezone(end_time)}"
-                f" (Duration: {duration})"
-            )
+            if note is None:
+                self._logger.info(
+                    f"'{task_name}' (Job {job_id}) completed successfully at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" (Duration: {duration})"
+                )
+            else:
+                # quiv terminated the process. The stop event is set, so
+                # the finally below finalizes as CANCELLED.
+                self._logger.info(
+                    f"'{task_name}' (Job {job_id}) stopped at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" (Duration: {duration}): {note}"
+                )
+        except _ChildFailure as e:
+            end_time = self._now_utc()
+            duration = end_time - start_time
+            if e.cancelled and self._stop_requested(job_id):
+                # The same clean stop as the JobCancelledError branch
+                # below, reported by the child instead of raised here.
+                self._logger.info(
+                    f"'{task_name}' (Job {job_id}) stopped at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" (Duration: {duration})"
+                )
+            else:
+                job_error = e
+                # Not logger.exception: the traceback on this side is the
+                # waiter's, not the handler's. The child's text is what
+                # the log needs.
+                detail = f"\n{e.traceback_text}" if e.traceback_text else ""
+                self._logger.error(
+                    f"'{task_name}' (Job {job_id}) failed in its process at"
+                    f" {self._to_display_timezone(end_time)}"
+                    f" [runtime: {duration}]: {e}{detail}"
+                )
+                status = JobStatus.FAILED
         except BaseException as e:
             # BaseException, not Exception: asyncio.run() raises
             # CancelledError when the handler's main task is cancelled, and
@@ -935,21 +1258,29 @@ class Quiv(QuivBase):
             # and was cancelled must not retry.
             job_failed = status == JobStatus.FAILED
 
+            # run() returns a note only when it did not raise, so at most
+            # one of the two is set.
             error_message = (
-                _error_text(job_error) if job_error is not None else None
+                _error_text(job_error) if job_error is not None else note
             )
             if timed_out and status == JobStatus.CANCELLED:
                 # The timeout message always leads so timed-out jobs stay
                 # distinguishable from manual cancellations and failures,
-                # even when the handler also raised.
+                # even when the handler also raised or the process was
+                # terminated.
                 timeout_message = (
                     "Job exceeded timeout of"
                     f" {task_snapshot.timeout_seconds}s"
                 )
+                timeout_detail = (
+                    f"handler raised: {error_message}"
+                    if job_error is not None
+                    else note
+                )
                 error_message = (
                     timeout_message
-                    if error_message is None
-                    else f"{timeout_message} (handler raised: {error_message})"
+                    if timeout_detail is None
+                    else f"{timeout_message} ({timeout_detail})"
                 )
             # Each write has its own guard, so one failing does not skip
             # the other or the slot release below. An exception from here
@@ -978,12 +1309,11 @@ class Quiv(QuivBase):
                     f"'{task_name}' (Job {job_id}) could not return task"
                     f" '{task_id}' to the schedule: {e}"
                 )
-            # After the task is finalized, so resume_task() never finds a
-            # task with a job in flight to be idle.
-            with self._registries_lock:
-                self._tasks_in_flight.discard(task_id)
             with self._job_count_lock:
-                self._active_job_count -= 1
+                if executor is Executor.PROCESS:
+                    self._active_process_count -= 1
+                else:
+                    self._active_job_count -= 1
             # A freed slot lets deferred-due tasks dispatch, and the task's
             # freshly computed next_run_at may precede the loop's sleep.
             self._wake_loop()
@@ -1018,6 +1348,7 @@ class Quiv(QuivBase):
                     duration_seconds=duration.total_seconds(),
                     error_message=error_message,
                     attempt=task_snapshot.retry_attempt + 1,
+                    executor=executor.value,
                 )
             event_map = {
                 JobStatus.COMPLETED: Event.JOB_COMPLETED,
@@ -1036,3 +1367,167 @@ class Quiv(QuivBase):
             # waiter wakes; the wait methods promise that order.
             self._resolve_waiters(self._job_waiters, job_id, finalized_job)
             self._resolve_waiters(self._task_waiters, task_id, finalized_job)
+            # Last: after the task is finalized, so resume_task() never
+            # finds a task with a job in flight to be idle, and after the
+            # waiters, so a waiter that found the row gone still sees the
+            # job in flight until the job has reached it.
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task_id)
+
+    def _run_in_child(
+        self,
+        job_id: str,
+        task_id: str,
+        func: Callable[..., Any],
+        args_pickled: bytes,
+        kwargs_pickled: bytes,
+        stop_event: Any,
+    ) -> str | None:
+        """Run the handler in a spawned process and relay its messages.
+
+        Spawns the child, relays its progress and ``run_on_main`` messages,
+        runs the kill timer, and reaps the process. The kill rule: a stop
+        signal the child ignores for ``process_kill_grace`` seconds becomes
+        ``terminate()``. Timeout, ``cancel_job()``, ``remove_task()``, and
+        ``shutdown()`` all set the same stop event, so one rule covers them.
+
+        Returns:
+            str | None: A note for ``error_message`` when quiv terminated
+                the process, else ``None``.
+
+        Raises:
+            _ChildFailure: When the handler raised or the process died on
+                its own.
+        """
+
+        module_name, qualname = _resolve_handler_reference(func)
+        parent_conn, child_conn = self._mp_context.Pipe(duplex=False)
+        process = self._mp_context.Process(
+            target=_worker.run_job,
+            args=(
+                child_conn,
+                stop_event,
+                job_id,
+                task_id,
+                module_name,
+                qualname,
+                args_pickled,
+                kwargs_pickled,
+            ),
+            name=f"quiv-job-{job_id}",
+            daemon=True,
+        )
+        try:
+            process.start()
+        except BaseException:
+            parent_conn.close()
+            child_conn.close()
+            raise
+        # Drop the parent's copy of the child's end, or EOF never arrives
+        # when the child exits.
+        child_conn.close()
+        with self._registries_lock:
+            self._job_processes[job_id] = process
+        if process.pid is not None:
+            self.persistence.set_job_pid(job_id, process.pid)
+
+        outcome: tuple[Any, ...] | None = None
+        kill_at: float | None = None
+        reason: str | None = None
+        try:
+            while True:
+                # The kill timer runs every iteration, before the wait, so
+                # a child that sends progress without pause cannot starve
+                # it, and a grace of 0 terminates on the next tick.
+                if outcome is None and stop_event.is_set():
+                    if kill_at is None:
+                        kill_at = time.monotonic() + self._process_kill_grace
+                    elif time.monotonic() >= kill_at:
+                        self._terminate_job_process(
+                            job_id,
+                            process,
+                            "ignored its stop event for"
+                            f" {self._process_kill_grace}s",
+                        )
+                        kill_at = None
+                ready = wait(
+                    [parent_conn, process.sentinel],
+                    timeout=_PROCESS_POLL_SECONDS,
+                )
+                if parent_conn in ready:
+                    # The pipe first, and again before the sentinel is
+                    # looked at, so nothing the child sent is left behind.
+                    # When the child closes its end, by returning or by
+                    # dying, the pipe reads EOF and the loop ends here.
+                    try:
+                        message = parent_conn.recv()
+                    except EOFError:
+                        break
+                    outcome = (
+                        self._handle_child_message(task_id, message)
+                        or outcome
+                    )
+                    if outcome is not None:
+                        kill_at = None  # the handler finished; exiting
+                    continue
+                if process.sentinel in ready:  # pragma: no cover
+                    # The process is gone and its pipe end is still open,
+                    # which only a grandchild that inherited the end can
+                    # cause. Nothing more can arrive on it.
+                    break
+        except BaseException:
+            # An error on this side, such as a message the parent cannot
+            # unpickle, must not leave the child running.
+            if process.is_alive():
+                process.terminate()
+            raise
+        finally:
+            process.join()
+            parent_conn.close()
+            with self._registries_lock:
+                self._job_processes.pop(job_id, None)
+                reason = self._terminated_jobs.pop(job_id, None)
+
+        if outcome is not None and outcome[0] == "error":
+            raise _ChildFailure(
+                outcome[1], outcome[2], cancelled=bool(outcome[3])
+            )
+        if outcome is not None:
+            return None
+        if reason is not None:
+            return f"process terminated: {reason}"
+        # Windows reports a large positive code after terminate(), so
+        # "terminated" is never read from the code; it came from
+        # _terminated_jobs above.
+        code = process.exitcode
+        if code is None or code >= 0:
+            raise _ChildFailure(
+                f"process ended with exit code {code} before reporting a"
+                " result"
+            )
+        raise _ChildFailure(f"process killed by signal {-code}")
+
+    def _handle_child_message(
+        self, task_id: str, message: tuple[Any, ...]
+    ) -> tuple[Any, ...] | None:
+        """Relay one child message. Returns the message when it is final."""
+
+        kind = message[0]
+        if kind == "progress":
+            # The same path a thread job's progress takes: the main-loop
+            # dispatch and its fallbacks.
+            self.run_progress_callback(task_id, *message[1], **message[2])
+            return None
+        if kind == "run_on_main":
+            # This runs inside _execute_job, where _current_quiv is set,
+            # so run_on_main finds this instance the ordinary way. The
+            # child cannot see an error here: its message is already sent.
+            try:
+                run_on_main(message[1], *message[2], **message[3])
+            except Exception as e:
+                self._logger.error(
+                    f"run_on_main() from a process job of task '{task_id}'"
+                    f" failed: {e}"
+                )
+            return None
+        return message

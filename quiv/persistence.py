@@ -17,6 +17,7 @@ from .exceptions import (
     TaskRunningError,
 )
 from .models import (
+    Executor,
     Job,
     JobStatus,
     QuivModelBase,
@@ -68,6 +69,7 @@ class PersistenceLayer:
         max_retries: int = 0,
         retry_backoff: float = 30.0,
         jitter: float = 0.0,
+        executor: str = Executor.THREAD,
     ) -> str:
         """Insert a new scheduled task.
 
@@ -84,6 +86,7 @@ class PersistenceLayer:
             max_retries (int, Optional=0): Maximum consecutive retries.
             retry_backoff (float, Optional=30.0): Base backoff delay.
             jitter (float, Optional=0.0): Random next-run offset bound.
+            executor (str, Optional="thread"): Where the task's jobs run.
         Returns:
             str: Task id string (UUID).
         """
@@ -101,6 +104,7 @@ class PersistenceLayer:
                 max_retries=max_retries,
                 retry_backoff_seconds=retry_backoff,
                 jitter_seconds=jitter,
+                executor=executor,
             )
             session.add(task)
             session.commit()
@@ -474,8 +478,14 @@ class PersistenceLayer:
             statement = statement.where(TaskDB.status == TaskStatus.ACTIVE)
             return list(session.exec(statement).all())
 
-    def get_next_due_time(self) -> datetime | None:
+    def get_next_due_time(
+        self, executor: str | None = None
+    ) -> datetime | None:
         """Return the earliest ``next_run_at`` among ACTIVE tasks.
+
+        Args:
+            executor (str, Optional=None): Only tasks of this executor.
+                The loop passes the one pool that has a free slot.
 
         Returns:
             datetime | None: Earliest UTC-aware due time, or ``None`` when
@@ -489,6 +499,8 @@ class PersistenceLayer:
                 .order_by(col(TaskDB.next_run_at).asc())
                 .limit(1)
             )
+            if executor is not None:
+                statement = statement.where(TaskDB.executor == executor)
             value = session.exec(statement).first()
             # Selecting a bare column bypasses the model reconstructor. On
             # sqlmodel before 0.0.45, SQLite returns a naive datetime here;
@@ -496,7 +508,11 @@ class PersistenceLayer:
             return QuivModelBase.set_timezone_to_utc(value)
 
     def create_job(
-        self, task_id: str, task_name: str, attempt: int = 1
+        self,
+        task_id: str,
+        task_name: str,
+        attempt: int = 1,
+        executor: str = Executor.THREAD,
     ) -> str:
         """Create a scheduled job record for a task.
 
@@ -505,6 +521,7 @@ class PersistenceLayer:
             task_name (str): Name of the task.
             attempt (int, Optional=1): Attempt number; 1 = first try,
                 2 = first retry, and so on.
+            executor (str, Optional="thread"): Where the job runs.
 
         Returns:
             str: Newly created job id (UUID string).
@@ -516,10 +533,29 @@ class PersistenceLayer:
                 task_name=task_name,
                 status=JobStatus.SCHEDULED,
                 attempt=attempt,
+                executor=executor,
             )
             session.add(job)
             session.commit()
             return job.id
+
+    def set_job_pid(self, job_id: str, pid: int) -> None:
+        """Record the process id of a process job's spawned process.
+
+        Args:
+            job_id (str): Job identifier (UUID string).
+            pid (int): Process id of the child.
+
+        Raises:
+            JobNotFoundError: If job does not exist.
+        """
+
+        with self._write_lock, Session(self._engine) as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job '{job_id}' should exist")
+            job.pid = pid
+            session.commit()
 
     def mark_task_running(self, task_id: str) -> None:
         """Mark a task as running when dispatched to the executor.

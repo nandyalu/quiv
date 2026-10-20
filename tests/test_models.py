@@ -270,3 +270,52 @@ def test_quiv_stats_loop_alive_defaults_to_false() -> None:
     stats = QuivStats(0, 10, 0.0, {}, None, 0)
     assert stats.loop_alive is False
     assert QuivStats(0, 10, 0.0, {}, None, 0, loop_alive=True).loop_alive
+
+
+def test_executor_defaults_to_thread_and_reaches_the_public_task() -> None:
+    from quiv.models import Executor
+
+    task_db = TaskDB(task_name="where", interval_seconds=60)
+    assert task_db.executor == Executor.THREAD
+    assert Task.model_validate(task_db).executor == "thread"
+
+    task_db.executor = Executor.PROCESS
+    assert Task.model_validate(task_db).executor == "process"
+
+
+def test_executor_and_pid_round_trip_through_sqlite() -> None:
+    from sqlmodel import Session, create_engine
+
+    from quiv.models import Executor, Job
+
+    engine = create_engine("sqlite:///:memory:")
+    QuivModelBase.metadata.create_all(engine)
+    task = TaskDB(task_name="where", interval_seconds=60, executor="process")
+    job = Job(task_id="t", task_name="where", executor="process", pid=4242)
+    with Session(engine) as session:
+        session.add(task)
+        session.add(job)
+        session.commit()
+        task_id, job_id = task.id, job.id
+
+    with Session(engine) as session:
+        loaded_task = session.get(TaskDB, task_id)
+        loaded_job = session.get(Job, job_id)
+        assert loaded_task is not None and loaded_job is not None
+        assert loaded_task.executor == Executor.PROCESS
+        assert Task.model_validate(loaded_task).executor == "process"
+        assert loaded_job.executor == "process"
+        assert loaded_job.pid == 4242
+
+    assert Job(task_id="t", task_name="n").executor == Executor.THREAD
+    assert Job(task_id="t", task_name="n").pid is None
+    engine.dispose()
+
+
+def test_quiv_stats_process_fields_default_to_an_empty_pool() -> None:
+    from quiv.models import QuivStats
+
+    stats = QuivStats(0, 10, 0.0, {}, None, 0, True)
+    assert stats.process_pool_size == 0
+    assert stats.active_process_jobs == 0
+    assert stats.process_pool_utilization == 0.0

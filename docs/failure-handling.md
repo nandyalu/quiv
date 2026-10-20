@@ -10,6 +10,7 @@ What happens next depends on the handler:
 
 - The handler checks `stop_event` and returns. The job finalizes as `cancelled`, and `error_message` reads `"Job exceeded timeout of {timeout}s"`.
 - The handler ignores `stop_event`. It keeps its thread in the pool until it returns, because quiv never kills a thread. The job still finalizes as `cancelled`.
+- The handler runs in a [process job](process-jobs.md) and ignores `stop_event`. After `process_kill_grace` seconds quiv terminates the process. The job finalizes as `cancelled`, and `error_message` reads `"Job exceeded timeout of {timeout}s (process terminated: ignored its stop event for {grace}s)"`.
 
 There is no separate job status for a timeout. A timeout is a cancellation that carries an error message.
 
@@ -30,7 +31,7 @@ The scheduler loop enforces timeouts. It wakes for the deadline that comes soone
 
 ## Retries
 
-quiv retries a job only when the job **fails**. A job fails when an exception left the handler, or when a database error stopped the job before the handler started (see [When the database fails](#when-the-database-fails)). A cancelled job never retries, because a cancellation is deliberate, and a timeout is a cancellation. A job that raises and is cancelled as well counts as cancelled.
+quiv retries a job only when the job **fails**. A job fails when an exception left the handler, when a database error stopped the job before the handler started (see [When the database fails](#when-the-database-fails)), or when the process of a [process job](process-jobs.md) died on its own, by a segfault or the OOM killer. A cancelled job never retries, because a cancellation is deliberate, and a timeout is a cancellation. A job that raises and is cancelled as well counts as cancelled, and so does a process that quiv terminated.
 
 When a job fails and retries remain, quiv schedules the next run at `now + retry_backoff * 2**(failures_so_far - 1)`. The delay doubles every time: `retry_backoff` seconds before the first retry, twice that before the second, and four times that before the third.
 

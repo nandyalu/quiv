@@ -17,6 +17,7 @@ Every exception that quiv raises inherits from `QuivError`.
 	- `JobCancelledError`
 	- `SchedulerStoppedError`
 	- `MainLoopUnavailableError` (also inherits `RuntimeError`)
+	- `WorkerProcessError`
 
 ## Exception reference
 
@@ -24,8 +25,10 @@ Every exception that quiv raises inherits from `QuivError`.
 
 quiv raises this when a configuration value or a scheduling value is invalid. The causes are:
 
-- `pool_size` is 0 or less.
+- `pool_size` or `process_pool_size` is less than 0, or both are 0.
+- `process_kill_grace` is less than 0.
 - `history_retention_seconds` is less than 0.
+- `executor` is not `"thread"` or `"process"`, names a pool of size 0, or is `"process"` for a handler that a new process cannot import by name: a lambda, an inner function, a bound method, a `functools.partial` object, or a callable instance.
 - An input to `add_task()` is invalid, such as `task_name`, `interval`, or `delay`.
 - The call passes `config=` together with a separate configuration argument.
 - The handler declares a parameter that quiv renamed in v1.0.0: `_job_id`, `_stop_event`, or `_progress_hook`. Rename it to `job_id`, `stop_event`, or `progress_hook`.
@@ -86,6 +89,10 @@ The wait methods raise this: `wait_for_job()`, `await_job()`, `wait_for_task()`,
 quiv raises this from `run_on_main()` and `call_on_main()` when it cannot reach a main event loop. There are two causes: no active Quiv instance is registered, or the active Quiv has no main loop that it can resolve. Pass `main_loop=` to `Quiv()`, or call `start()` from the thread that runs the main loop. `call_on_main()` raises it for one more cause: an async target passed from the main loop's own thread, where waiting would block the loop that must run it.
 
 This exception inherits `RuntimeError` as well as `QuivError`. quiv raised a bare `RuntimeError` here before v1.0.0, so an existing `except RuntimeError` clause keeps working. `except QuivError` now catches it too.
+
+### `WorkerProcessError`
+
+quiv raises this when a scheduler method is called on a `Quiv` instance that was created inside a quiv worker process. A [process job](process-jobs.md) runs in a process that quiv spawned for that job, and spawn imports the handler's module there. In the documented FastAPI layout that module builds the scheduler at import time, so a second instance exists in the new process. That instance is inert: it has no database, no pools, and no loop. `add_listener()` and `remove_listener()` work on it; every other method raises this error. Create and start the scheduler in the parent process only, for example in the FastAPI lifespan.
 
 ## Handling pattern
 

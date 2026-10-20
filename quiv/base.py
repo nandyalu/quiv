@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import multiprocessing
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Coroutine
 from datetime import datetime, timezone, tzinfo
@@ -14,10 +15,12 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable, cast
+from multiprocessing.process import BaseProcess
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from sqlmodel import Session, create_engine, select
 
+from . import _worker
 from .config import QuivConfig, resolve_timezone
 from .exceptions import (
     ConfigurationError,
@@ -25,10 +28,13 @@ from .exceptions import (
     HandlerNotRegisteredError,
     HandlerRegistrationError,
     SchedulerStoppedError,
+    TaskNotFoundError,
+    WorkerProcessError,
 )
-from .execution import ExecutionLayer
+from .execution import ExecutionLayer, run_in_fresh_loop
 from .models import (
     Event,
+    Executor,
     Job,
     JobStatus,
     QuivModelBase,
@@ -37,6 +43,18 @@ from .models import (
     TaskDB,
 )
 from .persistence import PersistenceLayer
+
+if TYPE_CHECKING:
+    # Only for annotations. Importing multiprocessing.synchronize at run
+    # time raises ImportError on a platform without a working sem_open,
+    # and quiv must import there for a user who never asks for a process.
+    from multiprocessing.synchronize import Event as ProcessEvent
+
+# After shutdown(timeout=...) terminates the process jobs that missed the
+# deadline, how long it waits for their waiters to record the outcome
+# before the database goes away. The remaining work is a join, two writes,
+# and the events.
+_PROCESS_FINALIZE_SECONDS = 1.0
 
 
 class QuivBase(ABC):
@@ -55,8 +73,16 @@ class QuivBase(ABC):
             Mapping of task ids to handler callables.
         progress_callbacks (dict[str, Callable[..., Any]]):
             Mapping of task ids to progress callbacks.
-        stop_events (dict[str, threading.Event]):
-            Mapping of job ids (UUID strings) to cancellation events.
+        stop_events (dict[str, threading.Event | ProcessEvent]):
+            Mapping of job ids (UUID strings) to cancellation events; a
+            ``multiprocessing`` event for a process job.
+        _process_waiters (ThreadPoolExecutor): One thread per process
+            job: it spawns the child, relays its messages, runs the kill
+            timer, and finalizes the job.
+        _job_processes (dict[str, BaseProcess]): Running child processes
+            by job id.
+        _inert (bool): ``True`` inside a quiv worker process, where the
+            instance has no engine, no pools, and no loop.
         persistence (PersistenceLayer): Persistence layer facade.
         execution (ExecutionLayer): Execution layer facade.
         _event_listeners (dict[Event, list[Callable[..., Any]]]):
@@ -74,6 +100,8 @@ class QuivBase(ABC):
         history_retention_seconds: int = 86400,
         timezone: str | tzinfo = "UTC",
         *,
+        process_pool_size: int = 0,
+        process_kill_grace: float = 5.0,
         logger: logging.Logger | logging.LoggerAdapter[Any] | None = None,
         main_loop: asyncio.AbstractEventLoop | None = None,
     ):
@@ -87,6 +115,13 @@ class QuivBase(ABC):
                 Job retention period when ``config`` is not provided.
             timezone (str | tzinfo, Optional="UTC"):
                 Display timezone when ``config`` is not provided.
+            process_pool_size (int, Optional=0): Keyword-only. Maximum
+                process jobs at once when ``config`` is not provided; 0
+                means no process pool.
+            process_kill_grace (float, Optional=5.0): Keyword-only.
+                Seconds a process job may ignore its stop event before
+                quiv terminates the process, when ``config`` is not
+                provided.
             logger (logging.Logger | logging.LoggerAdapter[Any], Optional=None): Optional logger instance.
             main_loop (asyncio.AbstractEventLoop, Optional=None):
                 Optional main event loop for progress callbacks.
@@ -96,23 +131,55 @@ class QuivBase(ABC):
             DatabaseInitializationError: If database initialization fails.
         """
 
+        # Inside a process that quiv spawned for one job, the handler's
+        # module is imported again, and in the documented FastAPI layout
+        # that module builds the scheduler at import time. That instance
+        # must not create a second database and a second set of pools.
+        # Listeners still register, so the module still imports.
+        self._inert = _worker.in_worker_process()
+        if self._inert:
+            self._logger = logger or logging.getLogger("Quiv")
+            self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
+            self._event_listeners_lock = threading.Lock()
+            self._started = False
+            self._shutdown = False
+            return
+
         if config is not None:
             if (
                 pool_size != 10
                 or history_retention_seconds != 86400
                 or timezone != "UTC"
+                or process_pool_size != 0
+                or process_kill_grace != 5.0
             ):
                 raise ConfigurationError(
                     "When 'config' is provided, do not pass"
-                    " pool_size/history_retention_seconds/timezone"
-                    " explicitly."
+                    " pool_size/history_retention_seconds/timezone/"
+                    "process_pool_size/process_kill_grace explicitly."
                 )
             pool_size = config.pool_size
             history_retention_seconds = config.history_retention_seconds
             timezone = config.timezone
+            process_pool_size = config.process_pool_size
+            process_kill_grace = config.process_kill_grace
 
-        if pool_size <= 0:
-            raise ConfigurationError("pool_size must be greater than 0")
+        if pool_size < 0:
+            raise ConfigurationError(
+                "pool_size must be greater than or equal to 0"
+            )
+        if process_pool_size < 0:
+            raise ConfigurationError(
+                "process_pool_size must be greater than or equal to 0"
+            )
+        if pool_size == 0 and process_pool_size == 0:
+            raise ConfigurationError(
+                "pool_size and process_pool_size cannot both be 0"
+            )
+        if process_kill_grace < 0:
+            raise ConfigurationError(
+                "process_kill_grace must be greater than or equal to 0"
+            )
         if history_retention_seconds < 0:
             raise ConfigurationError(
                 "history_retention_seconds must be greater than or equal to 0"
@@ -161,22 +228,42 @@ class QuivBase(ABC):
             ) from e
 
         self._pool_size = pool_size
-        self.executor = ThreadPoolExecutor(max_workers=pool_size)
+        self._process_pool_size = process_pool_size
+        self._process_kill_grace = process_kill_grace
+        self._default_executor = (
+            Executor.THREAD if pool_size > 0 else Executor.PROCESS
+        )
+        # ThreadPoolExecutor rejects max_workers=0. A pool of size 0
+        # accepts no task (add_task refuses the executor), so an unused
+        # pool creates no thread.
+        self.executor = ThreadPoolExecutor(max_workers=max(pool_size, 1))
+        self._process_waiters = ThreadPoolExecutor(
+            max_workers=max(process_pool_size, 1),
+            thread_name_prefix="quiv-process-waiter",
+        )
+        # spawn on every platform. Forking a parent that already runs
+        # threads and holds SQLite connections can deadlock.
+        self._mp_context = multiprocessing.get_context("spawn")
         self.history_limit = history_retention_seconds
         self.registry: dict[str, Callable[..., Any]] = {}
         self.progress_callbacks: dict[str, Callable[..., Any]] = {}
-        self.stop_events: dict[str, threading.Event] = {}
+        self.stop_events: dict[str, threading.Event | ProcessEvent] = {}
         self._job_deadlines: dict[str, float] = {}  # job_id -> monotonic
         self._timed_out_jobs: set[str] = set()
+        # Child processes of running process jobs, and the reason quiv
+        # terminated one, both by job id. Guarded by _registries_lock.
+        self._job_processes: dict[str, BaseProcess] = {}
+        self._terminated_jobs: dict[str, str] = {}
         # Task ids with a job between dispatch and finalize. The row of a
         # task paused during its run says PAUSED, so only this shows that
         # its job still runs.
         self._tasks_in_flight: set[str] = set()
         self._registries_lock = threading.Lock()
         self._wake_event = threading.Event()
-        self._event_listeners: dict[Event, list[Callable[..., Any]]] = {}
+        self._event_listeners = {}
         self._event_listeners_lock = threading.Lock()
         self._active_job_count = 0
+        self._active_process_count = 0
         self._job_count_lock = threading.Lock()
         # Work that run_on_main handed to the main loop and that has not
         # finished yet. Holds an asyncio.Task, a concurrent.futures.Future,
@@ -200,6 +287,21 @@ class QuivBase(ABC):
         self._started = False
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self._initialized = True
+
+    def _ensure_live(self) -> None:
+        """Refuse scheduler work on an instance built in a worker process.
+
+        Raises:
+            WorkerProcessError: If this instance is inert.
+        """
+
+        if self._inert:
+            raise WorkerProcessError(
+                "This Quiv instance was created inside a quiv worker process,"
+                " where it is inert: the process runs one job and has no"
+                " scheduler. Create and start the scheduler in the parent"
+                " process only, for example in the FastAPI lifespan."
+            )
 
     def _now_utc(self) -> datetime:
         """Return current UTC timestamp.
@@ -254,10 +356,7 @@ class QuivBase(ABC):
             kwargs (dict, Optional=None): Keyword arguments for the callable.
         """
 
-        async def invoke() -> Any:
-            return await task(*(args or ()), **(kwargs or {}))
-
-        asyncio.run(invoke())
+        run_in_fresh_loop(task, args, kwargs)
 
     def _register_handler(self, task_id: str, func: Callable[..., Any]) -> None:
         """Register a task handler callable.
@@ -594,6 +693,7 @@ class QuivBase(ABC):
                 ``resume_task()``.
         """
 
+        self._ensure_live()
         if task_id not in self.registry:
             # A finishing run-once task deletes its row before it drops its
             # handler, so a missing handler usually means a missing task.
@@ -622,7 +722,14 @@ class QuivBase(ABC):
         return 1
 
     def start(self) -> None:
-        """Start the scheduler background thread."""
+        """Start the scheduler background thread.
+
+        Raises:
+            WorkerProcessError: Inside a quiv worker process, where the
+                instance is inert.
+        """
+
+        self._ensure_live()
         if self._main_loop is None:
             self._resolve_main_loop()  # pragma: no cover
         from .context import _register_active
@@ -642,6 +749,8 @@ class QuivBase(ABC):
         call it every few seconds.
         """
 
+        if self._inert:
+            return False
         return self._started and not self._shutdown and self.thread.is_alive()
 
     def startup(self) -> None:  # pragma: no cover
@@ -677,8 +786,17 @@ class QuivBase(ABC):
                 recreates the temporary database file, because SQLite
                 creates the file again when it writes. Delete it yourself
                 if a stray file matters to you.
+
+                A process job that misses the deadline is terminated: its
+                waiter thread records the outcome and the job finalizes as
+                ``cancelled``.
+
+        Raises:
+            WorkerProcessError: Inside a quiv worker process, where the
+                instance is inert.
         """
 
+        self._ensure_live()
         from .context import _unregister_active
 
         _unregister_active(self)
@@ -702,29 +820,59 @@ class QuivBase(ABC):
 
         if timeout is None:
             self.executor.shutdown(wait=True)
+            # Every waiter terminates its child process_kill_grace seconds
+            # after the stop signal above, so this wait is bounded for
+            # process jobs.
+            self._process_waiters.shutdown(wait=True)
         else:
             # Wait up to `timeout` for in-flight jobs to drain
             # cooperatively.
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 with self._job_count_lock:
-                    remaining = self._active_job_count
+                    remaining = (
+                        self._active_job_count + self._active_process_count
+                    )
                 if remaining <= 0:
                     break
                 time.sleep(0.05)
+            with self._registries_lock:
+                processes = dict(self._job_processes)
+            for job_id, process in processes.items():
+                self._terminate_job_process(
+                    job_id, process, "shutdown timeout"
+                )
+            if processes:
+                # Termination is immediate. Give the waiters a moment to
+                # record the outcome before the database goes away.
+                finalize_deadline = time.monotonic() + _PROCESS_FINALIZE_SECONDS
+                while time.monotonic() < finalize_deadline:
+                    with self._job_count_lock:
+                        if self._active_process_count <= 0:
+                            break
+                    time.sleep(0.05)
             with self._job_count_lock:
                 remaining = self._active_job_count
+                remaining_processes = self._active_process_count
             if remaining > 0:
                 undrained = [
                     j.id
                     for j in self.get_all_jobs(status=JobStatus.RUNNING)
+                    if j.executor != Executor.PROCESS
                 ]
                 self._logger.warning(
                     f"{remaining} job(s) still running after"
                     f" {timeout}s shutdown timeout: {undrained}."
                     " Abandoning them (threads are daemonic)."
                 )
+            if remaining_processes > 0:
+                self._logger.warning(
+                    f"{remaining_processes} process job(s) were terminated"
+                    f" at the {timeout}s shutdown timeout and have not"
+                    " finished recording the outcome. Abandoning them."
+                )
             self.executor.shutdown(wait=False, cancel_futures=True)
+            self._process_waiters.shutdown(wait=False, cancel_futures=True)
 
         # With timeout=None the pool drained and both waiter tables are
         # empty already. With a timeout, an abandoned job's waiter would
@@ -757,6 +905,33 @@ class QuivBase(ABC):
                 " it or cancels what is queued on it. Check"
                 " pending_main_loop_work() before closing the loop."
             )
+
+    def _terminate_job_process(
+        self, job_id: str, process: BaseProcess, reason: str
+    ) -> None:
+        """Terminate a process job's child and record why.
+
+        The job's stop event is set too, so the job finalizes as
+        ``cancelled`` whatever the child was doing. ``_run_in_child`` reads
+        the reason after the child has gone and writes it into
+        ``error_message``.
+
+        Args:
+            job_id (str): The job whose child is terminated.
+            process (BaseProcess): The child.
+            reason (str): Why; part of the job's ``error_message``.
+        """
+
+        with self._registries_lock:
+            self._terminated_jobs[job_id] = reason
+            stop_event = self.stop_events.get(job_id)
+        if stop_event is not None:
+            stop_event.set()  # a terminated job always finalizes as cancelled
+        if process.is_alive():
+            process.terminate()
+        self._logger.warning(
+            f"Job {job_id}: {reason}; process {process.pid} terminated."
+        )
 
     def _track_main_loop_work(self, item: Any) -> None:
         """Record work that ``run_on_main`` handed to the main loop."""
@@ -813,6 +988,7 @@ class QuivBase(ABC):
             int: Callables handed over that have not finished.
         """
 
+        self._ensure_live()
         with self._main_loop_work_lock:
             return len(self._main_loop_work)
 
@@ -943,6 +1119,7 @@ class QuivBase(ABC):
                 job finished, or was called before this method.
         """
 
+        self._ensure_live()
         fut = self._add_waiter(self._job_waiters, job_id)
         try:
             # Register first, then read. _run_job writes the terminal
@@ -966,6 +1143,7 @@ class QuivBase(ABC):
         ``TimeoutError`` here too.
         """
 
+        self._ensure_live()
         fut = self._add_waiter(self._job_waiters, job_id)
         try:
             job = self.get_job(job_id)
@@ -1008,12 +1186,33 @@ class QuivBase(ABC):
                 job finished, or was called before this method.
         """
 
+        self._ensure_live()
         fut = self._add_waiter(self._task_waiters, task_id)
         try:
-            self.get_task(task_id)  # TaskNotFoundError propagates
+            self._check_task_for_waiter(task_id, fut)
             return self._wait(fut, f"Task '{task_id}'", timeout)
         finally:
             self._remove_waiter(self._task_waiters, task_id, fut)
+
+    def _check_task_for_waiter(self, task_id: str, fut: Future[Job]) -> None:
+        """Raise ``TaskNotFoundError`` unless a job of the task will resolve ``fut``.
+
+        The waiter registers first and reads the row second. The row can go
+        between the two: ``remove_task()`` on a task whose job is running
+        deletes the row and leaves the waiters for that job, as the wait
+        methods promise. The job is still in flight then, and its finalize
+        resolves the future, so the read must not raise. With nothing in
+        flight, nothing will come, and the error stands; a ``remove_task()``
+        that ran after the registration has already failed the future.
+        """
+
+        try:
+            self.get_task(task_id)
+        except TaskNotFoundError:
+            with self._registries_lock:
+                in_flight = task_id in self._tasks_in_flight
+            if not in_flight and not fut.done():
+                raise
 
     async def await_task(
         self, task_id: str, timeout: float | None = None
@@ -1024,9 +1223,10 @@ class QuivBase(ABC):
         result, same exceptions.
         """
 
+        self._ensure_live()
         fut = self._add_waiter(self._task_waiters, task_id)
         try:
-            self.get_task(task_id)
+            self._check_task_for_waiter(task_id, fut)
             try:
                 return await asyncio.wait_for(
                     asyncio.wrap_future(fut), timeout
@@ -1062,6 +1262,7 @@ class QuivBase(ABC):
             TaskNotFoundError: If no task with that id exists.
         """
 
+        self._ensure_live()
         self.persistence.pause_task(task_id)
         task = Task.model_validate(self.persistence.get_task(task_id))
         self._emit_event(Event.TASK_PAUSED, task)
@@ -1080,6 +1281,7 @@ class QuivBase(ABC):
                 it after the job ends.
         """
 
+        self._ensure_live()
         # Read before the write, not under it: the dispatch adds the id
         # before it marks the row RUNNING, so a job that starts after
         # this read is refused by the row's RUNNING status instead.
@@ -1103,6 +1305,7 @@ class QuivBase(ABC):
                 otherwise ``False``.
         """
 
+        self._ensure_live()
         with self._registries_lock:
             stop_event = self.stop_events.get(job_id)
         if stop_event is not None:
@@ -1123,6 +1326,7 @@ class QuivBase(ABC):
             TaskNotFoundError: If no task with that ID exists.
         """
 
+        self._ensure_live()
         task = self.persistence.get_task(task_id)
         return Task.model_validate(task)
 
@@ -1139,6 +1343,7 @@ class QuivBase(ABC):
             JobNotFoundError: If no job with that ID exists.
         """
 
+        self._ensure_live()
         return self.persistence.get_job(job_id)
 
     def get_all_tasks(
@@ -1166,6 +1371,7 @@ class QuivBase(ABC):
             list[Task]: List of tasks with unpickled args/kwargs.
         """
 
+        self._ensure_live()
         tasks = self.persistence.get_all_tasks(
             include_run_once=include_run_once,
             status=status,
@@ -1209,6 +1415,7 @@ class QuivBase(ABC):
             ConfigurationError: If ``order_by`` is not a supported column.
         """
 
+        self._ensure_live()
         return self.persistence.get_all_jobs(
             status=status,
             task_id=task_id,
@@ -1228,18 +1435,31 @@ class QuivBase(ABC):
 
         Returns:
             QuivStats: Active-job count, pool utilization, task counts
-                by status, earliest upcoming run, retained job rows, and
-                whether the loop is alive.
+                by status, earliest upcoming run, retained job rows,
+                whether the loop is alive, and the same figures for the
+                process pool.
         """
 
+        self._ensure_live()
         with self._job_count_lock:
             active = self._active_job_count
+            active_processes = self._active_process_count
         return QuivStats(
             active_jobs=active,
             pool_size=self._pool_size,
-            pool_utilization=active / self._pool_size,
+            # Either pool may have size 0 now.
+            pool_utilization=(
+                active / self._pool_size if self._pool_size else 0.0
+            ),
             tasks_by_status=self.persistence.count_tasks_by_status(),
             next_run_at=self.persistence.get_next_due_time(),
             job_history_count=self.persistence.count_jobs(),
             loop_alive=self.is_running,
+            process_pool_size=self._process_pool_size,
+            active_process_jobs=active_processes,
+            process_pool_utilization=(
+                active_processes / self._process_pool_size
+                if self._process_pool_size
+                else 0.0
+            ),
         )

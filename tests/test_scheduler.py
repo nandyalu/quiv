@@ -19,7 +19,7 @@ from quiv.exceptions import (
     TaskNotFoundError,
     TaskRunningError,
 )
-from quiv.models import JobStatus, TaskStatus
+from quiv.models import Executor, JobStatus, TaskStatus
 
 
 def test_quiv_config_conflict_raises(
@@ -1798,7 +1798,10 @@ def test_shutdown_returns_promptly_when_loop_idle(
     begin = time.monotonic()
     scheduler.shutdown()
     elapsed = time.monotonic() - begin
-    assert elapsed < 1.0, f"shutdown took {elapsed:.3f}s while loop was idle"
+    # The point is that shutdown does not wait out the 60 s sleep ceiling.
+    # A loaded Windows runner has taken just over a second here, so the
+    # bound leaves room without losing the point.
+    assert elapsed < 3.0, f"shutdown took {elapsed:.3f}s while loop was idle"
 
 
 def test_fast_interval_throughput_and_prompt_shutdown(
@@ -2834,5 +2837,177 @@ def test_get_all_tasks_filters_by_task_name_with_include_run_once(
         assert scheduler.get_all_tasks(task_name="alarm") == []
         tasks = scheduler.get_all_tasks(task_name="alarm", include_run_once=True)
         assert [task.id for task in tasks] == [alarm]
+    finally:
+        scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: the executor switch and its validation
+# ---------------------------------------------------------------------------
+
+
+def _importable_handler() -> None:
+    """A module-level function: a child can import it by name."""
+
+
+class _HandlerHolder:
+    @staticmethod
+    def static() -> None:
+        pass
+
+    def method(self) -> None:
+        pass
+
+    @classmethod
+    def cls_method(cls) -> None:
+        pass
+
+
+class _CallableInstance:
+    def __call__(self) -> None:
+        pass
+
+
+def test_process_executor_rejects_handlers_a_child_cannot_import(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    import functools
+
+    def inner() -> None:
+        pass
+
+    renamed_module = lambda: None  # noqa: E731
+    renamed_module.__module__ = "quiv_no_such_module"
+    renamed_module.__qualname__ = "handler"
+
+    def wrong_name() -> None:
+        pass
+
+    wrong_name.__qualname__ = "not_here_either"
+
+    scheduler = Quiv(process_pool_size=1, main_loop=running_main_loop)
+    try:
+        for bad in (
+            lambda: None,
+            inner,
+            _HandlerHolder().method,
+            _HandlerHolder.cls_method,
+            functools.partial(_importable_handler),
+            _CallableInstance(),
+            renamed_module,
+            wrong_name,
+        ):
+            with pytest.raises(ConfigurationError, match="import"):
+                scheduler.add_task(
+                    "p", bad, run_once=True, executor="process"
+                )
+        # Nothing was written for any of them.
+        assert scheduler.get_all_tasks(include_run_once=True) == []
+
+        static_id = scheduler.add_task(
+            "static", _HandlerHolder.static, interval=60, executor="process"
+        )
+        assert scheduler.get_task(static_id).executor == Executor.PROCESS
+        plain_id = scheduler.add_task(
+            "plain", _importable_handler, interval=60,
+            executor=Executor.PROCESS,
+        )
+        assert scheduler.get_task(plain_id).executor == "process"
+    finally:
+        scheduler.shutdown()
+
+
+def test_executor_must_name_a_pool_with_a_size(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    only_threads = Quiv(main_loop=running_main_loop)
+    try:
+        with pytest.raises(ConfigurationError, match="process_pool_size"):
+            only_threads.add_task(
+                "p", _importable_handler, interval=60, executor="process"
+            )
+        with pytest.raises(ConfigurationError, match="'thread' or 'process'"):
+            only_threads.add_task(
+                "p", _importable_handler, interval=60, executor="bogus"
+            )
+        task_id = only_threads.add_task("t", lambda: None, interval=60)
+        assert only_threads.get_task(task_id).executor == Executor.THREAD
+    finally:
+        only_threads.shutdown()
+
+    only_processes = Quiv(
+        pool_size=0, process_pool_size=1, main_loop=running_main_loop
+    )
+    try:
+        with pytest.raises(ConfigurationError, match="pool_size > 0"):
+            only_processes.add_task(
+                "t", _importable_handler, interval=60, executor="thread"
+            )
+        # The default follows the pools: no thread pool, so process.
+        task_id = only_processes.add_task(
+            "p", _importable_handler, interval=60
+        )
+        assert only_processes.get_task(task_id).executor == Executor.PROCESS
+        with pytest.raises(ConfigurationError, match="import"):
+            only_processes.add_task("l", lambda: None, interval=60)
+        assert only_processes.stats().pool_utilization == 0.0
+    finally:
+        only_processes.shutdown()
+
+
+def test_update_task_executor_validates_and_takes_effect(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    scheduler = Quiv(process_pool_size=1, main_loop=running_main_loop)
+    try:
+        lambda_id = scheduler.add_task("l", lambda: None, interval=60)
+        with pytest.raises(ConfigurationError, match="import"):
+            scheduler.update_task(lambda_id, executor="process")
+        assert scheduler.get_task(lambda_id).executor == "thread"
+        with pytest.raises(ConfigurationError, match="'thread' or 'process'"):
+            scheduler.update_task(lambda_id, executor="bogus")
+
+        task_id = scheduler.add_task("p", _importable_handler, interval=60)
+        updated = scheduler.update_task(task_id, executor="process")
+        assert updated.executor == Executor.PROCESS
+        assert scheduler.get_task(task_id).executor == "process"
+        assert scheduler.update_task(
+            task_id, executor=Executor.THREAD
+        ).executor == "thread"
+    finally:
+        scheduler.shutdown()
+
+    only_threads = Quiv(main_loop=running_main_loop)
+    try:
+        task_id = only_threads.add_task("p", _importable_handler, interval=60)
+        with pytest.raises(ConfigurationError, match="process_pool_size"):
+            only_threads.update_task(task_id, executor="process")
+    finally:
+        only_threads.shutdown()
+
+
+def test_process_pool_config_and_kwargs_are_exclusive(
+    running_main_loop: asyncio.AbstractEventLoop,
+) -> None:
+    with pytest.raises(ConfigurationError):
+        Quiv(
+            config=QuivConfig(process_pool_size=1),
+            process_pool_size=1,
+            main_loop=running_main_loop,
+        )
+    with pytest.raises(ConfigurationError):
+        Quiv(
+            config=QuivConfig(),
+            process_kill_grace=1.0,
+            main_loop=running_main_loop,
+        )
+    scheduler = Quiv(
+        config=QuivConfig(process_pool_size=2, process_kill_grace=1.5),
+        main_loop=running_main_loop,
+    )
+    try:
+        assert scheduler._process_pool_size == 2
+        assert scheduler._process_kill_grace == 1.5
+        assert scheduler.stats().process_pool_size == 2
     finally:
         scheduler.shutdown()

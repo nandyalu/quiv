@@ -4,9 +4,9 @@ This file ships inside the `quiv` package so AI tools can learn the library with
 
 ## What quiv is (and is not)
 
-quiv is a single-process, threadpool-backed background scheduler for Python apps — "more than FastAPI `BackgroundTasks`, less than Celery". Recurring or one-shot tasks, sync **and** async handlers, cooperative cancellation, progress callbacks dispatched to the main asyncio loop, per-job trace IDs. Python 3.10–3.14.
+quiv is a one-machine, threadpool-backed background scheduler for Python apps — "more than FastAPI `BackgroundTasks`, less than Celery". Recurring or one-shot tasks, sync **and** async handlers, cooperative cancellation, progress callbacks dispatched to the main asyncio loop, per-job trace IDs, and since v1.5.0 an optional process pool: a task with `executor="process"` runs each job in a process quiv spawns for it and can terminate. Python 3.10–3.14.
 
-Do NOT reach for quiv when the app needs: multi-process/distributed workers, durable queues that survive restarts, or cron/calendar scheduling — use Celery/arq/APScheduler for those. Task state lives in a **temporary SQLite file that is deleted on `shutdown()`**; nothing persists across restarts.
+Do NOT reach for quiv when the app needs: workers on other machines, durable queues that survive restarts, or cron/calendar scheduling — use Celery/arq/APScheduler for those. Task state lives in a **temporary SQLite file that is deleted on `shutdown()`**; nothing persists across restarts.
 
 ## Install
 
@@ -18,9 +18,12 @@ Do NOT reach for quiv when the app needs: multi-process/distributed workers, dur
 from quiv import Quiv
 
 scheduler = Quiv(
-    pool_size=10,                    # max concurrent jobs (threads, not processes)
+    pool_size=10,                    # max concurrent thread jobs; may be 0 with a process pool
     history_retention_seconds=86400, # how long finished job rows are kept
     timezone="UTC",                  # DISPLAY ONLY (log formatting); internals are always UTC
+    process_pool_size=0,             # keyword-only; max concurrent process jobs, 0 = no process pool
+    process_kill_grace=5.0,          # keyword-only; seconds a process job may ignore its stop
+                                     # event before quiv terminates the process
 )
 # Alternative: Quiv(config=QuivConfig(...)) — never mix config= with the kwargs above.
 
@@ -47,6 +50,9 @@ task_id = scheduler.add_task(
     max_retries=0,             # retries for FAILED jobs only (cancelled never retries)
     retry_backoff=30.0,        # base seconds; exponential: 1x, 2x, 4x, ...
     jitter=0.0,                # adds uniform(0, jitter)s to recurring next-run times
+    executor=None,             # "thread" | "process" | None (thread when pool_size > 0, else
+                               # process). "process" needs a module-level function or a
+                               # staticmethod; a lambda/inner function/bound method raises
 )
 
 scheduler.start()      # alias: startup(). Safe to call multiple times.
@@ -69,14 +75,14 @@ scheduler.shutdown()   # alias: stop(). ALWAYS call on app exit — cancels jobs
 | `is_running -> bool` | property: `start()` was called, `shutdown()` was not, and the loop thread is alive; no DB read, use it for health checks |
 | `add_listener(event, cb)` / `remove_listener(event, cb)` | lifecycle events, see below |
 
-`Task` and `Job` are SQLModel objects safe to return directly from FastAPI endpoints (datetimes are UTC-aware). Task statuses: `active`, `running`, `paused`. Job statuses: `scheduled`, `running`, `completed`, `cancelled`, `failed`. `Job` carries `duration_seconds` and `error_message`.
+`Task` and `Job` are SQLModel objects safe to return directly from FastAPI endpoints (datetimes are UTC-aware). Task statuses: `active`, `running`, `paused`. Job statuses: `scheduled`, `running`, `completed`, `cancelled`, `failed`. `Job` carries `duration_seconds`, `error_message`, `executor`, and `pid` (the spawned process of a process job; `None` for a thread job and in `JOB_STARTED`). `Task.executor` names the pool.
 
 ## Handler injection (signature-based)
 
 quiv inspects the handler signature and injects these kwargs **only if the handler declares them** (or takes `**kwargs`):
 
 - `job_id: str` — UUID of this run; stamp it into a `LoggerAdapter`/`ContextVar` for per-job log tracing.
-- `stop_event: threading.Event` — check `stop_event.is_set()` at natural breakpoints and `return` early. This is the ONLY way cancellation/shutdown stops a handler; threads are never killed.
+- `stop_event: threading.Event` — check `stop_event.is_set()` at natural breakpoints and `return` early. This is the ONLY way cancellation/shutdown stops a thread handler; threads are never killed. In a process job it is a `multiprocessing` event with the same methods, and a handler that ignores it for `process_kill_grace` seconds has its process terminated.
 - `progress_hook: Callable` — call `progress_hook(**payload)` from the worker; quiv forwards the payload to the registered `progress_callback` on the main loop.
 
 Renamed in v1.0.0: these were `_job_id`, `_stop_event`, `_progress_hook` in 0.x. `add_task()` raises `ConfigurationError` if a handler still declares an old name, and again if a key in `kwargs` collides with an injected name (the injected value would overwrite the caller's).
@@ -115,6 +121,24 @@ Works from anywhere in a task's call stack (no parameter threading) and also fro
 
 **Waiting for a job.** `wait_for_job(job_id, timeout)` / `await_job(...)` and `wait_for_task(task_id, timeout)` / `await_task(...)` return the finalized `Job` (`status`, `duration_seconds`, `error_message`). `wait_for_task` returns the next job of the task to finish — the way to wait on a one-off you just added from an endpoint. Timeouts raise the builtin `TimeoutError`; after `shutdown()` they raise `SchedulerStoppedError`; `remove_task` on a task with nothing running fails its waiters with `TaskNotFoundError`. This is how to test handlers against a real `Quiv()` instead of stubbing `add_task`.
 
+## Process jobs (v1.5.0)
+
+```python
+scheduler = Quiv(pool_size=10, process_pool_size=2)          # second pool; spawn on every platform
+
+def transcode(path: str, stop_event=None, progress_hook=None): ...   # module-level, importable by name
+
+scheduler.add_task("transcode", transcode, run_once=True, args=(path,), executor="process")
+```
+
+- **Use it for** CPU-bound work (runs on another core) and for work that cannot be stopped from the inside (a C extension, a library call with no timeout). Everything else stays a thread job: a process job costs ~200 ms to start (a new interpreter imports quiv and the handler's module) and shares no memory with the app.
+- **One kill rule.** `timeout`, `cancel_job()`, `remove_task()`, and `shutdown()` all set the stop event; a process job that ignores it for `process_kill_grace` seconds is terminated (`shutdown(timeout=T)` terminates at `T` if sooner). A terminated job is `cancelled` with `process terminated: ...` in `error_message` (after the timeout text when a timeout caused it). A process that dies on its own is `failed` with the exit code or signal, so retries apply.
+- **The same contract.** `job_id`, `stop_event`, `progress_hook` (payload pickled to the parent; unpicklable → `QuivError` in the handler, job fails), `run_on_main` (function + args pickled to the parent; must be importable by name; a missing main loop is logged in the parent, not raised), and `run_subprocess` all work. `call_on_main` does not (no main loop in the child → `MainLoopUnavailableError`). An async handler gets a fresh loop in the child. Return values are ignored; an exception's message becomes `error_message` and its traceback goes to the parent's log.
+- **The handler must be importable by name:** a module-level function or a staticmethod. `add_task()` and `update_task(executor="process")` raise `ConfigurationError` for a lambda, an inner function, a bound method, a classmethod, a `functools.partial`, or a callable instance. A handler in a script's `__main__` needs the `if __name__ == "__main__":` guard. Arguments are unpickled in the child, so their classes must import there under the same path.
+- **A `Quiv()` built at import time in the handler's module is inert in the child** (the FastAPI layout): no DB, no pools, no loop; `add_listener`/`remove_listener` work, every other method raises `WorkerProcessError`. Start the scheduler in the parent only (the lifespan). A module that calls `start()` at import time fails to import in the child, and the job fails with that message.
+- **Cannot do:** start `multiprocessing` children of its own (the child is a daemon process; use `subprocess`/`run_subprocess`), or see the app's memory. Child log records are not forwarded; configure logging in the handler's module if they matter.
+- Backpressure is per pool; `stats()` reports `process_pool_size`, `active_process_jobs`, `process_pool_utilization`. `pool_size=0` is allowed with a process pool (then `executor` defaults to process); both at 0 raises. `Executor.THREAD`/`Executor.PROCESS` is the enum; plain strings work.
+
 ## Event listeners
 
 ```python
@@ -130,9 +154,9 @@ Events: `TASK_ADDED`, `TASK_REMOVED`, `TASK_PAUSED`, `TASK_RESUMED`, `TASK_UPDAT
 
 ## Management & observability
 
-- `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=..., run_at=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. `run_at` names the next run's absolute time instead — naive is UTC, a past time runs at once, and it is mutually exclusive with `interval`. It moves the next scheduled run of any task, run before or not: a recurring task keeps its interval and just runs next at that time. Use it to move a pending one-off rather than `remove_task` + `add_task`, which changes the `task_id` and leaves a gap with nothing scheduled. **It does not survive a task that is already `running`**: finalization deletes a run-once row and recomputes `next_run_at` for a recurring one, so the new time is discarded when the job ends (quiv logs a warning, best-effort). Move a recurring task after its job finishes, or change `interval`, which finalization honours. Not updatable: `run_once`, `delay`, `func`.
+- `update_task(task_id, *, task_name=..., interval=..., fixed_interval=..., args=..., kwargs=..., timeout=..., max_retries=..., retry_backoff=..., jitter=..., progress_callback=..., run_at=..., executor=...)` mutates a task in place (keyword-only; omit what you don't change; `timeout=None` disables, `progress_callback=None` clears). Changing `interval` reschedules to `now + interval`. `run_at` names the next run's absolute time instead — naive is UTC, a past time runs at once, and it is mutually exclusive with `interval`. It moves the next scheduled run of any task, run before or not: a recurring task keeps its interval and just runs next at that time. Use it to move a pending one-off rather than `remove_task` + `add_task`, which changes the `task_id` and leaves a gap with nothing scheduled. **It does not survive a task that is already `running`**: finalization deletes a run-once row and recomputes `next_run_at` for a recurring one, so the new time is discarded when the job ends (quiv logs a warning, best-effort). Move a recurring task after its job finishes, or change `interval`, which finalization honours. `executor` moves the task to the other pool from its next dispatch (a running job finishes where it started) and runs the importable-handler check for `"process"`. Not updatable: `run_once`, `delay`, `func`.
 - `get_all_jobs(status=None, task_id=None, since=None, until=None, order_by="started_at", descending=True, limit=None, offset=0)` — filters + pagination; `order_by` is `"started_at"` or `"ended_at"` only; a naive `since`/`until` is UTC. `get_all_tasks(include_run_once=False, status=None, limit=None, offset=0, task_name=None)` orders by `next_run_at`; `task_name` is an exact match.
-- `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, `loop_alive` (same as `is_running`). Serialize with `dataclasses.asdict()`. `stats()` reads the DB; a health probe should use `is_running`.
+- `stats() -> QuivStats` (frozen dataclass, exported from `quiv`): `active_jobs`, `pool_size`, `pool_utilization`, `tasks_by_status`, `next_run_at`, `job_history_count`, `loop_alive` (same as `is_running`), `process_pool_size`, `active_process_jobs`, `process_pool_utilization`. Serialize with `dataclasses.asdict()`. `stats()` reads the DB; a health probe should use `is_running`.
 
 ## Canonical FastAPI wiring
 
@@ -167,17 +191,17 @@ app = FastAPI(lifespan=lifespan)
 1. **Forgetting `shutdown()`** — leaks the loop thread and the temp SQLite file. In tests, call it in a `finally:` block.
 2. **Expecting persistence** — the DB is temporary by design; re-`add_task` on every startup.
 3. **Unpicklable `args`/`kwargs`** — lambdas, inner functions, open handles fail pickle serialization. Pass plain data; make `func` a module-level callable.
-4. **Expecting hard kills** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A handler that never checks `stop_event` runs to completion. A child process needs `run_subprocess()` to be stopped; `subprocess.run` never sees the event.
+4. **Expecting hard kills of a thread** — `cancel_job()`/`remove_task()`/`shutdown()` only set the stop event. A thread handler that never checks `stop_event` runs to completion. A child process needs `run_subprocess()` to be stopped; `subprocess.run` never sees the event. Work that must be stoppable by force belongs in a process job (`executor="process"`), which quiv terminates after `process_kill_grace`.
 5. **Blocking the main loop from a handler** — handlers run on worker threads with their own event loops. Use `progress_hook`/`run_on_main` to hop back, or `call_on_main` when the job should span the work.
 6. **Catching `Exception` around `call_on_main`/`run_subprocess`** — that swallows `JobCancelledError` and the job keeps running after a cancel. Let it propagate.
 7. **`config=` plus kwargs** — passing both to `Quiv()` raises `ConfigurationError`.
 8. **Treating `task_name` as a key** — it is a label; duplicates are allowed. Only `task_id` identifies a task.
-9. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work use a process pool inside the handler.
+9. **Pool exhaustion** — when `pool_size` jobs are running, due tasks are deferred; they dispatch as soon as a job finishes and frees a slot (a warning logs the delay). Raise `pool_size` for I/O-bound overlap; for CPU-bound work give the task `executor="process"` and a `process_pool_size`, which has its own backpressure.
 10. **No log output** — quiv never configures logging. Configure the `"Quiv"` logger (or pass `logger=`) to see scheduler logs.
 11. **Stubbing `add_task` in tests** — a stub proves nothing about the schedule, cancellation, or the events. Use a real `Quiv()` and `wait_for_task(task_id, timeout=...)`.
 
 ## Exceptions
 
-All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError` (subclass `TaskRunningError`), `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
+All inherit `QuivError`: `ConfigurationError`, `InvalidTimezoneError`, `DatabaseInitializationError`, `HandlerRegistrationError`, `HandlerNotRegisteredError`, `TaskNotActiveError` (subclass `TaskRunningError`), `TaskNotFoundError`, `JobNotFoundError`, `JobCancelledError` (raised by `call_on_main()`/`run_subprocess()` when the job's stop event fires while they wait — let it propagate), `SchedulerStoppedError` (the wait methods, after or during `shutdown()`), `MainLoopUnavailableError` (raised by `run_on_main()`/`call_on_main()`; also inherits `RuntimeError`), `WorkerProcessError` (a scheduler method on the inert `Quiv()` inside a worker process). `TaskNotScheduledError` was removed in v1.0.0 — catch `TaskNotFoundError`.
 
 `run_task_immediately()` raises `TaskRunningError` for `running` tasks (no concurrent second run; pass `after_current=True` to run a recurring task again when its job ends) and `TaskNotActiveError` for `paused` tasks (use `resume_task()` instead). `resume_task()` raises `TaskRunningError` while a job of the task still runs, also for a task paused during that job — call `wait_for_task()` first. `TaskRunningError` subclasses `TaskNotActiveError`, so catch it first to tell the two apart.
