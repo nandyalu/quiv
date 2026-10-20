@@ -96,7 +96,7 @@ quiv never waits for that work and never cancels it, because the loop belongs to
 
 ## Phase 7 — Process jobs (`v1.5.0`)
 
-**Status: 📋 planned** — decisions settled 2026-09-17; the plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md).
+**Status: ✅ complete** — decisions settled 2026-09-17, implemented 2026-10-19, ships as `v1.5.0`. The plan is [`plans/phase-7-process-jobs.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-7-process-jobs.md); its implementation notes record the few places where the code differs from the plan, each because Phases 8, 9, and v1.3.0 changed the scheduler after the plan was written.
 
 quiv keeps its thread pool and gains a pool of processes. A process job runs in a process that quiv spawns for that job alone, and quiv can terminate it. That is the one thing a thread can never offer.
 
@@ -107,7 +107,7 @@ quiv keeps its thread pool and gains a pool of processes. A process job runs in 
 5. **An inert scheduler in the child** — spawn imports the handler's module, and in a FastAPI app that module builds the scheduler. Inside a worker process `Quiv()` is inert, and its lifecycle methods raise `WorkerProcessError`.
 6. **CI on three platforms** — the test suite runs on Linux, macOS, and Windows from this phase on.
 
-**Exit criteria:** every test in the plan passes on all three platforms with coverage at the gate; a 10-minute soak with process jobs leaves no child process behind; the start cost of a process job is measured and published in the release notes; a "Process Jobs" page in the docs.
+**Exit criteria:** every test in the plan passes on all three platforms with coverage at the gate; a 10-minute soak with process jobs leaves no child process behind; the start cost of a process job is measured and published in the release notes; a "Process Jobs" page in the docs. **Met:** 376 tests at 100% coverage, the child measured too; the soak passed with two children at the peak and none after shutdown; a no-op process job costs about 220 ms against 1 ms for a thread on the reference machine; the page is in the nav.
 
 `forkserver` would cut the start cost of each job on Linux and macOS. It is documented as a later option and not implemented in this phase.
 

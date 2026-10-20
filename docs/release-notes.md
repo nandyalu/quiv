@@ -1,3 +1,52 @@
+<a id="v1.5.0"></a>
+## [v1.5.0 - Process jobs (Phase 7)](https://github.com/nandyalu/quiv/releases/tag/v1.5.0) - 2026-10-19
+
+Phase 7. quiv keeps its thread pool and gains a second pool: processes. A task chooses one with `executor="process"`. A process job runs in a process that quiv spawns for that job alone, and quiv can terminate that process. That is the one thing a thread can never offer. Everything else stays in the parent: the job state, the temporary database, the events, the retries, and the progress callback. Everything is additive. Nothing in the 1.0 API changed, and an application that sets nothing new runs as before, with no process pool.
+
+### What's new
+
+- **A process pool.** `Quiv(process_pool_size=2)` allows two process jobs at once; the default is 0, no process pool. `pool_size` may now be 0 when the process pool has a size, for an application that runs process jobs only; the two cannot both be 0. Backpressure is per pool: a full thread pool holds back no process task, and the other way round. `QuivConfig` has the same two new fields.
+
+    ```python
+    scheduler = Quiv(pool_size=10, process_pool_size=2)
+
+    def transcode(path: str, stop_event=None, progress_hook=None) -> None:
+        ...  # CPU work, or a library that cannot be stopped from the outside
+
+    scheduler.add_task("transcode", transcode, run_once=True, args=(path,), executor="process")
+    ```
+
+- **`executor` on `add_task()` and `update_task()`.** `"thread"` or `"process"`, or the new `Executor` enum. The default is thread when `pool_size` is above 0, else process. A process handler must be a function that a new process can import by name: a module-level function or a staticmethod. A lambda, an inner function, a bound method, a classmethod, a `functools.partial` object, or a callable instance raises `ConfigurationError` at the call, before a job exists. `update_task(executor="process")` runs the same check, and the change takes effect at the next dispatch.
+
+- **One kill rule.** `process_kill_grace`, default 5 seconds. A stop signal that a process job ignores for that long becomes a terminate. The signal comes from a `timeout`, from `cancel_job()`, from `remove_task()`, and from `shutdown()`, and the rule is the same for each; `shutdown(timeout=T)` terminates at `T` if that comes first. A handler that honors its stop event exits before the grace ends, and quiv terminates nothing. A terminated job is `cancelled`, with `process terminated: ignored its stop event for 5.0s` in `error_message`, after the timeout text when a timeout caused it. A process that dies on its own, by a segfault, `os._exit()`, or the OOM killer, is a `failed` job with the exit code or the signal in `error_message`, so `max_retries` applies. Thread jobs are unchanged: quiv never kills a thread.
+
+- **The same handler contract.** `job_id`, `stop_event`, `progress_hook`, `run_on_main()`, and `run_subprocess()` all work in a process job. The stop event is a `multiprocessing` event with the same `is_set()` and `wait()`, so a handler written for threads runs unchanged. A progress payload crosses a pipe to the parent, which runs the progress callback as it does for a thread job; a payload that cannot be pickled raises `QuivError` in the handler. `run_on_main()` sends its function and arguments to the parent, so the function must be importable by name too, and a missing main loop is logged in the parent instead of raised in the handler. `run_subprocess()` finds the job's stop event inside the new process, so a cancel stops the child of the child. An async handler runs in a fresh event loop in the new process. `call_on_main()` does not work from a process job, because there is no main loop in it.
+
+- **An inert scheduler in the new process.** Spawn imports the handler's module in the new process, and in the documented FastAPI layout that module runs `scheduler = Quiv()` at import time. Inside a process that quiv spawned, that instance is inert: no database, no pools, no loop thread. `add_listener()` and `remove_listener()` work, so the module still imports; every other method raises the new `WorkerProcessError`, which names the fix. Start the scheduler in the parent only, in the lifespan.
+
+- **What the records show.** `Task.executor` and `Job.executor` name the pool. `Job.pid` holds the process id of a process job; it is `None` in `JOB_STARTED`, because the process starts after that event. `stats()` gains `process_pool_size`, `active_process_jobs`, and `process_pool_utilization`. A process job that starts late names `process_pool_size` in its warning.
+
+- **A [Process Jobs](https://nandyalu.github.io/quiv/process-jobs/) page.** When a process job is the right choice and when a thread is; the configuration; what a handler may be; what crosses the boundary; the kill rule; the outcomes; the inert scheduler; logging in the new process; the cost; the platforms.
+
+### The cost of a process job
+
+quiv uses the `spawn` start method on every platform, because forking a parent that runs threads and holds SQLite connections can deadlock. A process job therefore starts a new interpreter, which imports quiv and the handler's module, and `duration_seconds` includes that start. `benchmarks/bench_process_overhead.py` measures it with 50 no-op jobs, one at a time. On an Intel Core i5-11600 with Python 3.10.12 on Linux:
+
+| Executor | p50 | p95 |
+| --- | --- | --- |
+| thread | 1.1 ms | 1.2 ms |
+| process | 220.8 ms | 231.6 ms |
+
+A process job costs about 220 ms more than a thread job on that machine. Windows and macOS spawn more slowly. Use a process job for work that needs a core of its own or a way to be ended by force, and a thread job for everything else. `forkserver` would cut the cost on Linux and macOS; it is a possible later option, not implemented.
+
+### Housekeeping
+
+- A 10-minute soak with two process jobs, one of which ignores its stop event and is terminated on every run, finished 2,324 jobs with no child process left behind, two children at the peak, the thread count flat at 10, and no unexpected error. `scripts/soak.py` gains `--process-pool-size`, default 2, and fails when more children are alive than the pool allows or when one is alive after shutdown.
+- Coverage now measures the spawned process: `concurrency = ["thread", "multiprocessing"]` and `sigterm = true` in `pyproject.toml`. The suite has 376 tests, and coverage sits at 100%.
+- The test suite runs on Linux, macOS, and Windows since v1.2.0, and the process-job tests run on all three.
+
+**Full Changelog**: https://github.com/nandyalu/quiv/compare/v1.4.0...v1.5.0
+
 <a id="v1.4.0"></a>
 ## [v1.4.0 - Operations (Phase 9)](https://github.com/nandyalu/quiv/releases/tag/v1.4.0) - 2026-10-19
 
