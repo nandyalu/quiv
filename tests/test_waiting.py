@@ -536,3 +536,48 @@ def test_delete_task_returns_the_status_the_row_had(
         assert scheduler.persistence.delete_task(b) == "running"
     finally:
         scheduler.shutdown()
+
+
+def test_wait_for_task_survives_a_removal_between_registration_and_read(
+    running_main_loop: asyncio.AbstractEventLoop,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row goes after the waiter registers and before it reads the task.
+
+    ``remove_task()`` on a task whose job is running keeps the waiters for
+    that job. The read must therefore not raise; the job resolves the wait.
+    """
+
+    scheduler = Quiv(main_loop=running_main_loop)
+    running = threading.Event()
+
+    def handler(stop_event: threading.Event) -> None:
+        running.set()
+        stop_event.wait(timeout=5)
+
+    try:
+        task_id = scheduler.add_task("busy", handler, interval=60)
+        scheduler.start()
+        assert running.wait(timeout=5)
+
+        real_get_task = scheduler.persistence.get_task
+        removed = threading.Event()
+
+        def remove_then_read(tid: str) -> Any:
+            # The first read from wait_for_task: the task is removed under
+            # its feet, and the real read then finds the row gone.
+            if tid == task_id and not removed.is_set():
+                removed.set()
+                scheduler.remove_task(task_id)
+            return real_get_task(tid)
+
+        monkeypatch.setattr(scheduler.persistence, "get_task", remove_then_read)
+        job = scheduler.wait_for_task(task_id, timeout=5)
+        assert removed.is_set()
+        assert job.status == JobStatus.CANCELLED
+
+        # With nothing in flight, the error still stands.
+        with pytest.raises(TaskNotFoundError):
+            scheduler.wait_for_task(task_id, timeout=5)
+    finally:
+        scheduler.shutdown()

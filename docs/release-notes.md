@@ -39,6 +39,10 @@ quiv uses the `spawn` start method on every platform, because forking a parent t
 
 A process job costs about 220 ms more than a thread job on that machine. Windows and macOS spawn more slowly. Use a process job for work that needs a core of its own or a way to be ended by force, and a thread job for everything else. `forkserver` would cut the cost on Linux and macOS; it is a possible later option, not implemented.
 
+### Fixes
+
+- **`wait_for_task()` and `await_task()` no longer raise when the task is removed under their feet.** The wait methods register their waiter and then read the task row. When `remove_task()` ran between the two on a task whose job was running, the read found the row gone and raised `TaskNotFoundError`, although the running job was about to resolve the wait, as the methods promise. Now the read raises only when no job of the task is in flight. The race showed once in CI, on macOS.
+
 ### Housekeeping
 
 - A 10-minute soak with two process jobs, one of which ignores its stop event and is terminated on every run, finished 2,324 jobs with no child process left behind, two children at the peak, the thread count flat at 10, and no unexpected error. `scripts/soak.py` gains `--process-pool-size`, default 2, and fails when more children are alive than the pool allows or when one is alive after shutdown.

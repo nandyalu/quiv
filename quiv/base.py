@@ -28,6 +28,7 @@ from .exceptions import (
     HandlerNotRegisteredError,
     HandlerRegistrationError,
     SchedulerStoppedError,
+    TaskNotFoundError,
     WorkerProcessError,
 )
 from .execution import ExecutionLayer, run_in_fresh_loop
@@ -1188,10 +1189,30 @@ class QuivBase(ABC):
         self._ensure_live()
         fut = self._add_waiter(self._task_waiters, task_id)
         try:
-            self.get_task(task_id)  # TaskNotFoundError propagates
+            self._check_task_for_waiter(task_id, fut)
             return self._wait(fut, f"Task '{task_id}'", timeout)
         finally:
             self._remove_waiter(self._task_waiters, task_id, fut)
+
+    def _check_task_for_waiter(self, task_id: str, fut: Future[Job]) -> None:
+        """Raise ``TaskNotFoundError`` unless a job of the task will resolve ``fut``.
+
+        The waiter registers first and reads the row second. The row can go
+        between the two: ``remove_task()`` on a task whose job is running
+        deletes the row and leaves the waiters for that job, as the wait
+        methods promise. The job is still in flight then, and its finalize
+        resolves the future, so the read must not raise. With nothing in
+        flight, nothing will come, and the error stands; a ``remove_task()``
+        that ran after the registration has already failed the future.
+        """
+
+        try:
+            self.get_task(task_id)
+        except TaskNotFoundError:
+            with self._registries_lock:
+                in_flight = task_id in self._tasks_in_flight
+            if not in_flight and not fut.done():
+                raise
 
     async def await_task(
         self, task_id: str, timeout: float | None = None
@@ -1205,7 +1226,7 @@ class QuivBase(ABC):
         self._ensure_live()
         fut = self._add_waiter(self._task_waiters, task_id)
         try:
-            self.get_task(task_id)
+            self._check_task_for_waiter(task_id, fut)
             try:
                 return await asyncio.wait_for(
                     asyncio.wrap_future(fut), timeout

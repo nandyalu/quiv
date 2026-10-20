@@ -1798,7 +1798,10 @@ def test_shutdown_returns_promptly_when_loop_idle(
     begin = time.monotonic()
     scheduler.shutdown()
     elapsed = time.monotonic() - begin
-    assert elapsed < 1.0, f"shutdown took {elapsed:.3f}s while loop was idle"
+    # The point is that shutdown does not wait out the 60 s sleep ceiling.
+    # A loaded Windows runner has taken just over a second here, so the
+    # bound leaves room without losing the point.
+    assert elapsed < 3.0, f"shutdown took {elapsed:.3f}s while loop was idle"
 
 
 def test_fast_interval_throughput_and_prompt_shutdown(

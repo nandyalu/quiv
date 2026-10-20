@@ -112,7 +112,7 @@ The process-job tests spawn real processes. Their handlers live in `tests/quiv_p
 
 - `cancel_job()` returns `True` when stop event exists, `False` otherwise
 - Handler that sets `stop_event` results in `cancelled` status
-- `remove_task()` on a running task cancels its active job
+- `remove_task()` on a running task cancels its active job, and a waiter that registered just before the removal still gets that job
 - `shutdown()` cancels all tracked running jobs
 
 ### Process jobs

@@ -1309,10 +1309,6 @@ class Quiv(QuivBase):
                     f"'{task_name}' (Job {job_id}) could not return task"
                     f" '{task_id}' to the schedule: {e}"
                 )
-            # After the task is finalized, so resume_task() never finds a
-            # task with a job in flight to be idle.
-            with self._registries_lock:
-                self._tasks_in_flight.discard(task_id)
             with self._job_count_lock:
                 if executor is Executor.PROCESS:
                     self._active_process_count -= 1
@@ -1371,6 +1367,12 @@ class Quiv(QuivBase):
             # waiter wakes; the wait methods promise that order.
             self._resolve_waiters(self._job_waiters, job_id, finalized_job)
             self._resolve_waiters(self._task_waiters, task_id, finalized_job)
+            # Last: after the task is finalized, so resume_task() never
+            # finds a task with a job in flight to be idle, and after the
+            # waiters, so a waiter that found the row gone still sees the
+            # job in flight until the job has reached it.
+            with self._registries_lock:
+                self._tasks_in_flight.discard(task_id)
 
     def _run_in_child(
         self,
