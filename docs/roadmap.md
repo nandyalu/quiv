@@ -164,6 +164,19 @@ Not a roadmap phase. This release fixes [#86](https://github.com/nandyalu/quiv/i
 
 The release also carries one fix outside the plan. `get_all_jobs()` reads a naive `since` or `until` as UTC. sqlmodel 0.0.45 had turned a naive value there into an error, and an earlier sqlmodel dropped the offset of an aware value. quiv keeps its minimum of sqlmodel 0.0.23, because the application shares the sqlmodel install.
 
+## Phase 10 — No leftover temporary database (`v1.6.0`)
+
+**Status: planned** — plan written 2026-10-21, [`plans/phase-10-temporary-files.md`](https://github.com/nandyalu/quiv/blob/main/plans/phase-10-temporary-files.md). It depends on nothing after Phase 7.
+
+On 2026-10-21 the temp directory of the development machine held 160 `quiv_*.db` files of 20 KB each: the tables, no rows. Each came from a `Quiv()` that was constructed and never shut down. The source was the test suite of trailarr, which builds its scheduler at import time, as the documented FastAPI layout tells it to, and calls `shutdown()` only in the lifespan. A test process imports the module and never enters the lifespan. Every application that follows the layout will meet the same case, because an import-only process is normal: a test, a script that imports the app, a child interpreter. quiv owns the file, so quiv removes it.
+
+1. **A scheduler never shut down removes its database** when the object is collected or when the interpreter exits, through `weakref.finalize`. A scheduler that was never started goes quietly. A scheduler that was started and never shut down is stopped at exit, with a bound of one second and one warning that names the fix. A failed `__init__` removes the file too.
+2. **A job that ends after `shutdown()` closed the database skips its writes.** Those writes recorded nothing in a deleted file; their only effect was to create the file again. The `JOB_*` event and the waiters still get the finished job, through the in-memory path that v1.3.0 built. A write that began an instant before the close can still land once; that race is accepted.
+
+Not in the phase: no signal handling, because `SIGKILL`, `os._exit()`, and the OOM killer run no cleanup; and no removal of files quiv did not create, because another process may own them.
+
+**Exit criteria:** the tests in the plan pass on the three platforms; a run of the suite leaves no new `quiv_*.db`; the container page describes the behavior at exit.
+
 ## Out of scope for v1.0.0
 
 The following were reviewed and explicitly deferred:
